@@ -48,6 +48,40 @@ fs::path make_repo_with_changes()
     git_libgit2_shutdown();
     return dir;
 }
+
+// A repo with a single commit on HEAD (built with libgit2).
+fs::path make_repo_with_commit(const char *message)
+{
+    auto dir = make_temp_dir();
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_init(&repo, dir.string().c_str(), 0) == 0);
+
+    std::ofstream(dir / "a.txt") << "content";
+    git_index *idx = nullptr;
+    REQUIRE(git_repository_index(&idx, repo) == 0);
+    REQUIRE(git_index_add_bypath(idx, "a.txt") == 0);
+    REQUIRE(git_index_write(idx) == 0);
+
+    git_oid tree_oid;
+    REQUIRE(git_index_write_tree(&tree_oid, idx) == 0);
+    git_tree *tree = nullptr;
+    REQUIRE(git_tree_lookup(&tree, repo, &tree_oid) == 0);
+
+    git_signature *sig = nullptr;
+    REQUIRE(git_signature_now(&sig, "Test", "t@example.com") == 0);
+
+    git_oid commit_oid;
+    REQUIRE(git_commit_create(&commit_oid, repo, "HEAD", sig, sig, nullptr,
+                              message, tree, 0, nullptr) == 0);
+
+    git_signature_free(sig);
+    git_tree_free(tree);
+    git_index_free(idx);
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+    return dir;
+}
 } // namespace
 
 TEST_CASE("repo_status reports a staged and an untracked entry")
@@ -79,5 +113,42 @@ TEST_CASE("repo_status fails on a path that is not a git repository")
     auto dir = make_temp_dir(); // empty dir, no .git
     auto st = mg::git::repo_status(dir.string());
     CHECK_FALSE(st.has_value());
+    fs::remove_all(dir);
+}
+
+TEST_CASE("read_head returns the branch and HEAD commit")
+{
+    auto dir = make_repo_with_commit("first commit\n\nbody text");
+    auto h = mg::git::read_head(dir.string());
+    REQUIRE(h.has_value());
+    CHECK_FALSE(h->branch.empty());     // e.g. "master"
+    CHECK(h->short_oid.size() == 8);
+    CHECK(h->summary == "first commit"); // summary is the first line
+    fs::remove_all(dir);
+}
+
+TEST_CASE("recent_commits returns commits, newest first")
+{
+    auto dir = make_repo_with_commit("only commit");
+    auto c = mg::git::recent_commits(dir.string(), 5);
+    REQUIRE(c.has_value());
+    REQUIRE(c->size() == 1);
+    CHECK((*c)[0].summary == "only commit");
+    CHECK((*c)[0].short_oid.size() == 8);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("recent_commits on an unborn repo is empty (not an error)")
+{
+    auto dir = make_temp_dir();
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_init(&repo, dir.string().c_str(), 0) == 0);
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+
+    auto c = mg::git::recent_commits(dir.string(), 5);
+    REQUIRE(c.has_value());
+    CHECK(c->empty());
     fs::remove_all(dir);
 }
