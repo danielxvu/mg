@@ -28,18 +28,23 @@ int mg_magit_take_dirty(void);
 int mg_magit_modeline(char *buf, size_t buflen);
 
 /* Line kinds passed to the emit callback, so the caller can map a buffer line
- * back to a file for staging. `path` is NULL for non-file lines. */
+ * back to a file (and hunk) for staging. `path` is NULL for non-file lines;
+ * `hunk` is the 0-based hunk index for HUNK/DIFF lines, else -1. */
 #define MG_LINE_OTHER     0
 #define MG_LINE_UNTRACKED 1
 #define MG_LINE_UNSTAGED  2
 #define MG_LINE_STAGED    3
+#define MG_LINE_HUNK      4   /* a hunk header under an expanded file */
+#define MG_LINE_DIFF      5   /* a +/-/context diff line within a hunk */
 
 /* Compose the *magit-status* buffer for the repo at `repo_path`, calling
- * `emit(ctx, line, kind, path)` once per line. Returns the number of lines
- * emitted. A one-shot read (independent of the background monitor). */
+ * `emit(ctx, line, kind, path, hunk)` once per line. Files whose path is in
+ * `expanded[0..n_expanded)` have their diff hunks emitted inline. Returns the
+ * number of lines emitted. A one-shot read (independent of the monitor). */
 typedef void (*mg_magit_emit_fn)(void *ctx, const char *line, int kind,
-                                 const char *path);
-int mg_magit_status_buffer(const char *repo_path, mg_magit_emit_fn emit, void *ctx);
+                                 const char *path, int hunk);
+int mg_magit_status_buffer(const char *repo_path, const char *const *expanded,
+                           int n_expanded, mg_magit_emit_fn emit, void *ctx);
 
 /* Stage / unstage / discard a single file (path relative to the repo root).
  * Returns 1 on success, 0 on failure. Discard deletes an untracked file or

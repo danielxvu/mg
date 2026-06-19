@@ -135,16 +135,41 @@ extern "C" int mg_magit_modeline(char *buf, size_t buflen)
 }
 
 extern "C" int mg_magit_status_buffer(const char *repo_path,
-                                      mg_magit_emit_fn emit, void *ctx)
+                                      const char *const *expanded,
+                                      int n_expanded, mg_magit_emit_fn emit,
+                                      void *ctx)
 {
     if (repo_path == nullptr || emit == nullptr)
         return 0;
 
     int n = 0;
     auto out = [&](const std::string &line, int kind = MG_LINE_OTHER,
-                   const char *path = nullptr) {
-        emit(ctx, line.c_str(), kind, path);
+                   const char *path = nullptr, int hunk = -1) {
+        emit(ctx, line.c_str(), kind, path, hunk);
         ++n;
+    };
+
+    auto is_expanded = [&](const std::string &p) {
+        for (int i = 0; i < n_expanded; ++i)
+            if (expanded != nullptr && expanded[i] != nullptr && p == expanded[i])
+                return true;
+        return false;
+    };
+    auto chomp = [](std::string s) {
+        if (!s.empty() && s.back() == '\n')
+            s.pop_back();
+        return s;
+    };
+    auto emit_diff = [&](const std::string &path, bool staged) {
+        auto hunks = mg::git::file_diff(repo_path, path, staged);
+        if (!hunks)
+            return;
+        for (int hi = 0; hi < static_cast<int>(hunks->size()); ++hi) {
+            out(chomp((*hunks)[hi].header), MG_LINE_HUNK, path.c_str(), hi);
+            for (const auto &l : (*hunks)[hi].lines)
+                out(std::string(1, l.origin) + chomp(l.content), MG_LINE_DIFF,
+                    path.c_str(), hi);
+        }
     };
 
     if (auto head = mg::git::read_head(repo_path)) {
@@ -170,7 +195,7 @@ extern "C" int mg_magit_status_buffer(const char *repo_path,
 
         auto section = [&](const char *title,
                            const std::vector<const mg::magit::file_status *> &v,
-                           bool labeled, bool use_index, int kind) {
+                           bool labeled, bool use_index, int kind, bool diffable) {
             if (v.empty())
                 return;
             out("");
@@ -182,11 +207,13 @@ extern "C" int mg_magit_status_buffer(const char *repo_path,
                                   "  " + e->path
                             : "  " + e->path;
                 out(text, kind, e->path.c_str());
+                if (diffable && is_expanded(e->path))
+                    emit_diff(e->path, use_index);
             }
         };
-        section("Untracked files", untracked, false, false, MG_LINE_UNTRACKED);
-        section("Unstaged changes", unstaged, true, false, MG_LINE_UNSTAGED);
-        section("Staged changes", staged, true, true, MG_LINE_STAGED);
+        section("Untracked files", untracked, false, false, MG_LINE_UNTRACKED, false);
+        section("Unstaged changes", unstaged, true, false, MG_LINE_UNSTAGED, true);
+        section("Staged changes", staged, true, true, MG_LINE_STAGED, true);
     }
 
     if (auto commits = mg::git::recent_commits(repo_path, 10);

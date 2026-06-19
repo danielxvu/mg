@@ -24,6 +24,8 @@
 
 #define MAGIT_MAX_LINES 1024
 
+#define MAGIT_MAX_EXPANDED 64
+
 static int	magit_refresh(int, int);
 static int	magit_stage(int, int);
 static int	magit_unstage(int, int);
@@ -31,18 +33,25 @@ static int	magit_discard(int, int);
 static int	magit_commit(int, int);
 static int	magit_commit_finish(int, int);
 static int	magit_commit_abort(int, int);
+static int	magit_toggle_expand(int, int);
 
 /*
- * line -> {kind, path} map for the most recent render of *magit-status*. There
- * is a single such buffer, so a single static map suffices. Lines past the cap
- * are still shown but are not stageable.
+ * line -> {kind, hunk, path} map for the most recent render of *magit-status*.
+ * One such buffer, so a single static map suffices. Lines past the cap are
+ * still shown but not interactive.
  */
 static struct {
 	int	kind;
+	int	hunk;
 	char	path[PATH_MAX];
 } magit_meta[MAGIT_MAX_LINES];
 static int	magit_meta_count;
 
+/* Paths whose diffs are currently expanded inline. */
+static char	magit_expanded[MAGIT_MAX_EXPANDED][PATH_MAX];
+static int	magit_expanded_count;
+
+static PF magit_tab[] = { magit_toggle_expand };
 static PF magit_c[] = { magit_commit };
 static PF magit_g[] = { magit_refresh };
 static PF magit_k[] = { magit_discard };
@@ -50,11 +59,12 @@ static PF magit_q[] = { delwind };
 static PF magit_s[] = { magit_stage };
 static PF magit_u[] = { magit_unstage };
 
-static struct KEYMAPE (6) magitmap = {
-	6,
-	6,
+static struct KEYMAPE (7) magitmap = {
+	7,
+	7,
 	rescan,
 	{
+		{ CCHR('I'), CCHR('I'), magit_tab, NULL },	/* TAB: expand/collapse */
 		{ 'c', 'c', magit_c, NULL },
 		{ 'g', 'g', magit_g, NULL },
 		{ 'k', 'k', magit_k, NULL },
@@ -95,10 +105,11 @@ static struct KEYMAPE (1) commitmap = {
 
 /* emit callback: record the line's kind/path, then append it to the buffer. */
 static void
-magit_emit(void *ctx, const char *line, int kind, const char *path)
+magit_emit(void *ctx, const char *line, int kind, const char *path, int hunk)
 {
 	if (magit_meta_count < MAGIT_MAX_LINES) {
 		magit_meta[magit_meta_count].kind = kind;
+		magit_meta[magit_meta_count].hunk = hunk;
 		if (path != NULL)
 			(void)strlcpy(magit_meta[magit_meta_count].path, path,
 			    sizeof(magit_meta[magit_meta_count].path));
@@ -125,7 +136,15 @@ magit_build(struct buffer *bp)
 	bp->b_flag |= BFREADONLY;
 
 	magit_meta_count = 0;
-	(void)mg_magit_status_buffer(cwd, magit_emit, bp);
+	{
+		const char	*exp[MAGIT_MAX_EXPANDED];
+		int		 i;
+
+		for (i = 0; i < magit_expanded_count; i++)
+			exp[i] = magit_expanded[i];
+		(void)mg_magit_status_buffer(cwd, exp, magit_expanded_count,
+		    magit_emit, bp);
+	}
 
 	bp->b_dotp = bfirstlp(bp);
 	bp->b_doto = 0;
@@ -185,9 +204,9 @@ magit_refresh(int f, int n)
 	return (magit_build(bp));
 }
 
-/* Resolve the kind/path of the file row under the cursor. */
+/* Resolve the kind/path/hunk of the row under the cursor. */
 static int
-magit_at_point(char **path_out)
+magit_at_point(char **path_out, int *hunk_out)
 {
 	struct line	*lp;
 	int		 idx = 0;
@@ -195,10 +214,40 @@ magit_at_point(char **path_out)
 	for (lp = bfirstlp(curbp);
 	    lp != curwp->w_dotp && lp != curbp->b_headp; lp = lforw(lp))
 		idx++;
-	if (idx >= magit_meta_count)
+	if (idx >= magit_meta_count) {
+		*hunk_out = -1;
 		return (MG_LINE_OTHER);
+	}
 	*path_out = magit_meta[idx].path;
+	*hunk_out = magit_meta[idx].hunk;
 	return (magit_meta[idx].kind);
+}
+
+/* TAB: expand/collapse the inline diff for the file at point. */
+static int
+magit_toggle_expand(int f, int n)
+{
+	char	*path = NULL;
+	int	 hunk, kind, i;
+
+	kind = magit_at_point(&path, &hunk);
+	if (kind != MG_LINE_UNSTAGED && kind != MG_LINE_STAGED &&
+	    kind != MG_LINE_HUNK && kind != MG_LINE_DIFF) {
+		ewprintf("Nothing to expand here");
+		return (FALSE);
+	}
+	for (i = 0; i < magit_expanded_count; i++) {
+		if (strcmp(magit_expanded[i], path) == 0) {	/* collapse */
+			(void)strlcpy(magit_expanded[i],
+			    magit_expanded[magit_expanded_count - 1], PATH_MAX);
+			magit_expanded_count--;
+			return (magit_refresh(f, n));
+		}
+	}
+	if (magit_expanded_count < MAGIT_MAX_EXPANDED)		/* expand */
+		(void)strlcpy(magit_expanded[magit_expanded_count++], path,
+		    PATH_MAX);
+	return (magit_refresh(f, n));
 }
 
 static int
@@ -206,9 +255,9 @@ magit_stage(int f, int n)
 {
 	char	*path = NULL;
 	char	 cwd[PATH_MAX];
-	int	 kind;
+	int	 kind, hunk;
 
-	kind = magit_at_point(&path);
+	kind = magit_at_point(&path, &hunk);
 	if (kind != MG_LINE_UNTRACKED && kind != MG_LINE_UNSTAGED) {
 		ewprintf("Nothing to stage on this line");
 		return (FALSE);
@@ -227,9 +276,9 @@ magit_unstage(int f, int n)
 {
 	char	*path = NULL;
 	char	 cwd[PATH_MAX];
-	int	 kind;
+	int	 kind, hunk;
 
-	kind = magit_at_point(&path);
+	kind = magit_at_point(&path, &hunk);
 	if (kind != MG_LINE_STAGED) {
 		ewprintf("Nothing to unstage on this line");
 		return (FALSE);
@@ -249,9 +298,9 @@ magit_discard(int f, int n)
 	char	*path = NULL;
 	char	 cwd[PATH_MAX];
 	char	 prompt[PATH_MAX + 32];
-	int	 kind;
+	int	 kind, hunk;
 
-	kind = magit_at_point(&path);
+	kind = magit_at_point(&path, &hunk);
 	if (kind != MG_LINE_UNTRACKED && kind != MG_LINE_UNSTAGED &&
 	    kind != MG_LINE_STAGED) {
 		ewprintf("Nothing to discard on this line");

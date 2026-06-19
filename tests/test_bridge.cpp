@@ -92,6 +92,36 @@ bool any_line_has(const std::vector<std::string> &lines, const std::string &need
         return l.find(needle) != std::string::npos;
     });
 }
+
+// a.txt committed, then modified in the worktree (an unstaged change).
+fs::path make_repo_unstaged()
+{
+    auto dir = make_temp_dir();
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_init(&repo, dir.string().c_str(), 0) == 0);
+    std::ofstream(dir / "a.txt") << "line one\n";
+    git_index *idx = nullptr;
+    REQUIRE(git_repository_index(&idx, repo) == 0);
+    REQUIRE(git_index_add_bypath(idx, "a.txt") == 0);
+    REQUIRE(git_index_write(idx) == 0);
+    git_oid toid;
+    REQUIRE(git_index_write_tree(&toid, idx) == 0);
+    git_tree *tree = nullptr;
+    REQUIRE(git_tree_lookup(&tree, repo, &toid) == 0);
+    git_signature *sig = nullptr;
+    REQUIRE(git_signature_now(&sig, "T", "t@t") == 0);
+    git_oid coid;
+    REQUIRE(git_commit_create(&coid, repo, "HEAD", sig, sig, nullptr, "c1", tree,
+                              0, nullptr) == 0);
+    git_signature_free(sig);
+    git_tree_free(tree);
+    git_index_free(idx);
+    std::ofstream(dir / "a.txt") << "line one\nmore line\n"; // unstaged edit
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+    return dir;
+}
 } // namespace
 
 TEST_CASE("bridge publishes a summarized modeline for a repo")
@@ -132,8 +162,8 @@ TEST_CASE("mg_magit_status_buffer composes branch, sections, and commits")
     struct row { std::string line; int kind; std::string path; };
     std::vector<row> rows;
     int count = mg_magit_status_buffer(
-        dir.string().c_str(),
-        [](void *ctx, const char *line, int kind, const char *path) {
+        dir.string().c_str(), nullptr, 0,
+        [](void *ctx, const char *line, int kind, const char *path, int) {
             static_cast<std::vector<row> *>(ctx)->push_back(
                 {line, kind, path ? path : ""});
         },
@@ -171,14 +201,42 @@ TEST_CASE("mg_magit_stage stages the file at a path")
 
     std::vector<std::string> lines;
     mg_magit_status_buffer(
-        dir.string().c_str(),
-        [](void *ctx, const char *line, int, const char *) {
+        dir.string().c_str(), nullptr, 0,
+        [](void *ctx, const char *line, int, const char *, int) {
             static_cast<std::vector<std::string> *>(ctx)->emplace_back(line);
         },
         &lines);
     CHECK(any_line_has(lines, "Staged changes (2)")); // staged.txt + untracked.txt
     CHECK(!any_line_has(lines, "Untracked files"));   // none left
 
+    fs::remove_all(dir);
+}
+
+TEST_CASE("mg_magit_status_buffer emits diff lines for an expanded file")
+{
+    auto dir = make_repo_unstaged();
+    const char *expanded[1] = {"a.txt"};
+
+    struct row { std::string line; int kind; std::string path; int hunk; };
+    std::vector<row> rows;
+    mg_magit_status_buffer(
+        dir.string().c_str(), expanded, 1,
+        [](void *ctx, const char *line, int kind, const char *path, int hunk) {
+            static_cast<std::vector<row> *>(ctx)->push_back(
+                {line, kind, path ? path : "", hunk});
+        },
+        &rows);
+
+    bool hunk_hdr = false, diff_add = false;
+    for (const auto &r : rows) {
+        if (r.kind == MG_LINE_HUNK && r.path == "a.txt" && r.hunk == 0)
+            hunk_hdr = true;
+        if (r.kind == MG_LINE_DIFF && r.path == "a.txt" &&
+            r.line.find("more line") != std::string::npos)
+            diff_add = true;
+    }
+    CHECK(hunk_hdr);
+    CHECK(diff_add);
     fs::remove_all(dir);
 }
 
@@ -214,8 +272,8 @@ TEST_CASE("mg_magit_commit commits the staged tree")
 
     std::vector<std::string> lines;
     mg_magit_status_buffer(
-        dir.string().c_str(),
-        [](void *ctx, const char *line, int, const char *) {
+        dir.string().c_str(), nullptr, 0,
+        [](void *ctx, const char *line, int, const char *, int) {
             static_cast<std::vector<std::string> *>(ctx)->emplace_back(line);
         },
         &lines);
