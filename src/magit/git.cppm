@@ -44,6 +44,10 @@ using index_ptr = std::unique_ptr<
     git_index, decltype([](git_index *i) { git_index_free(i); })>;
 using object_ptr = std::unique_ptr<
     git_object, decltype([](git_object *o) { git_object_free(o); })>;
+using tree_ptr = std::unique_ptr<
+    git_tree, decltype([](git_tree *t) { git_tree_free(t); })>;
+using sig_ptr = std::unique_ptr<
+    git_signature, decltype([](git_signature *s) { git_signature_free(s); })>;
 
 // 8-char abbreviated oid, like git's default short form.
 inline std::string short_oid(const git_oid *oid)
@@ -127,6 +131,9 @@ std::expected<void, error> unstage(std::string repo, std::string file);
 
 // Discard `file`'s changes: delete it if untracked, else revert it to HEAD.
 std::expected<void, error> discard(std::string repo, std::string file);
+
+// Commit the staged tree with `message`; returns the new commit's short oid.
+std::expected<std::string, error> commit(std::string repo, std::string message);
 
 } // namespace mg::git
 
@@ -335,6 +342,49 @@ std::expected<void, error> discard(std::string repo, std::string file)
     if (git_checkout_head(r.get(), &opts) != 0)
         return std::unexpected(last_error());
     return {};
+}
+
+std::expected<std::string, error> commit(std::string repo, std::string message)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    git_signature *raw_sig = nullptr;
+    if (git_signature_default(&raw_sig, r.get()) != 0)
+        return std::unexpected(last_error()); // user.name/user.email unset
+    detail::sig_ptr sig(raw_sig);
+
+    git_index *raw_idx = nullptr;
+    if (git_repository_index(&raw_idx, r.get()) != 0)
+        return std::unexpected(last_error());
+    detail::index_ptr idx(raw_idx);
+
+    git_oid tree_oid;
+    if (git_index_write_tree(&tree_oid, idx.get()) != 0)
+        return std::unexpected(last_error());
+    git_tree *raw_tree = nullptr;
+    if (git_tree_lookup(&raw_tree, r.get(), &tree_oid) != 0)
+        return std::unexpected(last_error());
+    detail::tree_ptr tree(raw_tree);
+
+    // Parent = current HEAD commit, if the branch is born.
+    git_commit *raw_parent = nullptr;
+    git_oid head_oid;
+    bool has_parent = git_reference_name_to_id(&head_oid, r.get(), "HEAD") == 0 &&
+                      git_commit_lookup(&raw_parent, r.get(), &head_oid) == 0;
+    detail::commit_ptr parent(raw_parent);
+    const git_commit *parents[1] = {parent.get()};
+
+    git_oid commit_oid;
+    if (git_commit_create(&commit_oid, r.get(), "HEAD", sig.get(), sig.get(),
+                          nullptr, message.c_str(), tree.get(),
+                          has_parent ? 1 : 0, has_parent ? parents : nullptr) != 0)
+        return std::unexpected(last_error());
+
+    return detail::short_oid(&commit_oid);
 }
 
 } // namespace mg::git

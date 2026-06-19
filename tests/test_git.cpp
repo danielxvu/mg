@@ -225,6 +225,43 @@ TEST_CASE("discard() deletes an untracked file")
     fs::remove_all(dir);
 }
 
+TEST_CASE("commit() creates a commit from the staged tree")
+{
+    auto dir = make_temp_dir();
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_init(&repo, dir.string().c_str(), 0) == 0);
+
+    git_config *cfg = nullptr;
+    REQUIRE(git_repository_config(&cfg, repo) == 0);
+    git_config_set_string(cfg, "user.name", "Test");
+    git_config_set_string(cfg, "user.email", "t@example.com");
+    git_config_free(cfg);
+
+    std::ofstream(dir / "f.txt") << "hello";
+    git_index *idx = nullptr;
+    REQUIRE(git_repository_index(&idx, repo) == 0);
+    REQUIRE(git_index_add_bypath(idx, "f.txt") == 0);
+    REQUIRE(git_index_write(idx) == 0);
+    git_index_free(idx);
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+
+    auto r = mg::git::commit(dir.string(), "my first commit");
+    REQUIRE(r.has_value());
+    CHECK(r->size() == 8); // short oid
+
+    auto h = mg::git::read_head(dir.string());
+    REQUIRE(h.has_value());
+    CHECK(h->summary == "my first commit");
+
+    auto st = mg::git::repo_status(dir.string());
+    REQUIRE(st.has_value());
+    for (const auto &e : *st)
+        CHECK(e.path != "f.txt"); // committed, no longer staged
+    fs::remove_all(dir);
+}
+
 TEST_CASE("discard() reverts a modified tracked file to HEAD")
 {
     auto dir = make_repo_with_commit("v1"); // a.txt committed as "content"
