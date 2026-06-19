@@ -190,10 +190,13 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
       `mg_magit_status_buffer` (callback-emit composition); M3-3 the C command +
       funmap/keymap glue, all `#ifdef ENABLE_NATIVE_MAGIT`.
 - **🎉 Branch name in the modeline** — `main git *1 ?2`.
-- **In progress: M4 — interactive staging** (`s`/`u`/`g`/`q` in the status
-  buffer). Spec: `docs/superpowers/specs/2026-06-19-m4-interactive-staging-design.md`.
-    - M4-1 `mg.git` stage()/unstage(); M4-2 enriched emit + stage/unstage bridge;
-      M4-3 magit-status-mode keymap + point→file map + refresh.
+- **🎉 M4 COMPLETE — interactive staging.** In the `*magit-status*` buffer:
+  `s` stage / `u` unstage the file at point, `g` refresh, `q` close. Verified
+  end-to-end via pty (s moves a file Untracked→Staged, buffer refreshes in
+  place). Spec: `docs/superpowers/specs/2026-06-19-m4-interactive-staging-design.md`.
+    - M4-1 `mg.git` stage()/unstage(); M4-2 enriched emit (kind+path) +
+      stage/unstage bridge; M4-3 magit-status-mode keymap + point→file map +
+      refresh (re-points windows after bclear).
 - **Magit roadmap (approved, planned):** M5 discard (`k`) · M6 commit (`c`) ·
   M7 inline diffs + hunk/line staging (`TAB`/`s` on a hunk — the big one) ·
   M8 breadth (extra sections, log/stash/remotes/branches, `?` help, `RET` visit).
