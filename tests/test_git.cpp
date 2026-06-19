@@ -152,3 +152,62 @@ TEST_CASE("recent_commits on an unborn repo is empty (not an error)")
     CHECK(c->empty());
     fs::remove_all(dir);
 }
+
+TEST_CASE("stage() moves an untracked file into the index")
+{
+    auto dir = make_repo_with_changes(); // untracked.txt is untracked
+    REQUIRE(mg::git::stage(dir.string(), "untracked.txt").has_value());
+
+    auto st = mg::git::repo_status(dir.string());
+    REQUIRE(st.has_value());
+    bool staged = false;
+    for (const auto &e : *st)
+        if (e.path == "untracked.txt")
+            staged = (e.index == status::added);
+    CHECK(staged);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("unstage() drops a staged-new file back to untracked")
+{
+    auto dir = make_repo_with_changes(); // staged.txt is a staged new file (unborn)
+    REQUIRE(mg::git::unstage(dir.string(), "staged.txt").has_value());
+
+    auto st = mg::git::repo_status(dir.string());
+    REQUIRE(st.has_value());
+    bool untracked = false;
+    for (const auto &e : *st)
+        if (e.path == "staged.txt")
+            untracked = (e.worktree == status::untracked);
+    CHECK(untracked);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("unstage() resets a staged modification to HEAD")
+{
+    auto dir = make_repo_with_commit("base"); // a.txt committed with "content"
+
+    // Modify a.txt and stage the modification.
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_open(&repo, dir.string().c_str()) == 0);
+    std::ofstream(dir / "a.txt") << "changed";
+    git_index *idx = nullptr;
+    REQUIRE(git_repository_index(&idx, repo) == 0);
+    REQUIRE(git_index_add_bypath(idx, "a.txt") == 0);
+    REQUIRE(git_index_write(idx) == 0);
+    git_index_free(idx);
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+
+    REQUIRE(mg::git::unstage(dir.string(), "a.txt").has_value());
+
+    auto st = mg::git::repo_status(dir.string());
+    REQUIRE(st.has_value());
+    for (const auto &e : *st)
+        if (e.path == "a.txt") {
+            CHECK(e.index == status::unmodified);  // unstaged from the index
+            CHECK(e.worktree == status::modified);  // still changed on disk
+        }
+    fs::remove_all(dir);
+}

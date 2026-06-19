@@ -38,6 +38,10 @@ using commit_ptr = std::unique_ptr<
     git_commit, decltype([](git_commit *c) { git_commit_free(c); })>;
 using revwalk_ptr = std::unique_ptr<
     git_revwalk, decltype([](git_revwalk *w) { git_revwalk_free(w); })>;
+using index_ptr = std::unique_ptr<
+    git_index, decltype([](git_index *i) { git_index_free(i); })>;
+using object_ptr = std::unique_ptr<
+    git_object, decltype([](git_object *o) { git_object_free(o); })>;
 
 // 8-char abbreviated oid, like git's default short form.
 inline std::string short_oid(const git_oid *oid)
@@ -112,6 +116,12 @@ std::expected<head_info, error> read_head(std::string path);
 
 std::expected<std::vector<commit_brief>, error>
 recent_commits(std::string path, std::size_t n);
+
+// Stage `file` (relative to the repo root) into the index.
+std::expected<void, error> stage(std::string repo, std::string file);
+
+// Unstage `file`: reset its index entry to HEAD (or drop it if unborn).
+std::expected<void, error> unstage(std::string repo, std::string file);
 
 } // namespace mg::git
 
@@ -232,6 +242,59 @@ recent_commits(std::string path, std::size_t n)
         out.push_back(std::move(cb));
     }
     return out;
+}
+
+std::expected<void, error> stage(std::string repo, std::string file)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    git_index *raw_idx = nullptr;
+    if (git_repository_index(&raw_idx, r.get()) != 0)
+        return std::unexpected(last_error());
+    detail::index_ptr idx(raw_idx);
+
+    unsigned int flags = 0;
+    const bool deleted = git_status_file(&flags, r.get(), file.c_str()) == 0 &&
+                         (flags & GIT_STATUS_WT_DELETED);
+
+    const int rc = deleted ? git_index_remove_bypath(idx.get(), file.c_str())
+                           : git_index_add_bypath(idx.get(), file.c_str());
+    if (rc != 0 || git_index_write(idx.get()) != 0)
+        return std::unexpected(last_error());
+    return {};
+}
+
+std::expected<void, error> unstage(std::string repo, std::string file)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    git_object *raw_head = nullptr;
+    if (git_revparse_single(&raw_head, r.get(), "HEAD") == 0) {
+        detail::object_ptr head(raw_head);
+        char *paths[1] = {const_cast<char *>(file.c_str())};
+        git_strarray pathspec = {paths, 1};
+        if (git_reset_default(r.get(), head.get(), &pathspec) != 0)
+            return std::unexpected(last_error());
+        return {};
+    }
+
+    // Unborn branch (no HEAD): just remove the staged entry from the index.
+    git_index *raw_idx = nullptr;
+    if (git_repository_index(&raw_idx, r.get()) != 0)
+        return std::unexpected(last_error());
+    detail::index_ptr idx(raw_idx);
+    if (git_index_remove_bypath(idx.get(), file.c_str()) != 0 ||
+        git_index_write(idx.get()) != 0)
+        return std::unexpected(last_error());
+    return {};
 }
 
 } // namespace mg::git
