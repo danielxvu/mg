@@ -117,8 +117,12 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
   (F1–F3) complete; next is the first real feature module, **M1 (mg.magit)**.
 
 ## Notes for the next iteration
-- **Branch:** all refactor work lives on `cpp-refactor` (NOT `master`). Stay on
-  the checked-out branch; commit atomically per iteration. PR at milestones.
+- **Branch / PR workflow:** ongoing work rides the rolling `cpp-refactor` tip
+  (NOT `master`); commit atomically per iteration. At each milestone, freeze a
+  named branch at that tip and open a **stacked** PR (base = the previous
+  milestone's branch, so each PR shows only its own diff). Done so far:
+  `foundation`→master (#1), `m1-magit`→foundation (#2), `m2a-fswatch`→m1-magit
+  (#3). Next milestone (M2b…) freezes a branch based on `m2a-fswatch`.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
