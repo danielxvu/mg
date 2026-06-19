@@ -99,11 +99,18 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
           file_status>, mg::git::error>` via `git_status_list`. libgit2 linked
           to `mg_magit` via pkg-config. Integration-tested with a libgit2-built
           fixture (no shell git). _(commit: M2c-2)_
-  - [ ] **M2d** — `extern "C"` bridge + minimal C-core hook: a `std::thread`
-        (+ `mg::stop_flag` & RAII join — not `std::jthread`, see M2b) runs
-        `for (auto ev : watch_stream(...))`, on each event sets a dirty flag
-        (checked by `winch_flag` in `main.c`) and publishes the summary a
-        modeline getter returns (`display.c`/`modes.c`). First real C↔C++ bridge.
+  - [ ] **M2d** — background monitor + `extern "C"` modeline bridge. Spec:
+        `docs/superpowers/specs/2026-06-19-m2d-bridge-design.md`.
+    - [x] **M2d-1** — `monitor` (owns watcher + `std::thread` + `stop_flag` +
+          mutex/atomic published state) runs `watch_stream → repo_status →
+          summarize`; `extern "C"` bridge (`bridge.h`/`bridge.cpp`):
+          `mg_magit_start`/`stop`/`take_dirty`/`modeline(buf,n)`. Cancellation =
+          `request_stop()` + `watcher.wake()` + `join`. Tested end-to-end on a
+          libgit2 fixture, no C-core edits. _(commit: M2d-1)_
+    - [ ] **M2d-2** — wire into the C core: `main.c` checks `mg_magit_take_dirty()`
+          near `winch_flag` + lifecycle; `display.c` `modeline()` appends
+          `mg_magit_modeline()`. **Decide live-while-idle** (signal-interrupt
+          `read()` in `ttgetc`'s EINTR handler, à la winch) vs update-on-keypress.
 
 ### Core engine (later — honestly scoped after review)
 - [ ] **C1 — `mg.text` pure leaf utilities.** Only genuinely free-standing
@@ -168,9 +175,9 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
 - **M2c done** — git access is now libgit2 (structured, no subprocess). `mg.git`
   RAII-wraps the C handles; pattern for wrapping other C libs. libgit2 sets up
   the future commit-DAG (`git_revwalk`) work too.
-- **Next up: M2d** — the `extern "C"` bridge + C-core hook: a `std::thread`
-  (+ `mg::stop_flag`/RAII join) runs `for (ev : watch_stream(...)) { repo_status
-  → summarize → publish }`; sets a dirty flag (à la `winch_flag` in `main.c`)
-  and exposes a modeline getter (`display.c`/`modes.c`). First real C↔C++ bridge.
-- M1 follow-ups (when needed): C-quoted/special-char paths, `-z` NUL format,
-  commit-DAG (`git log`) and refs parsing.
+- **M2d-1 done** — the full native-magit pipeline runs end-to-end behind the
+  `extern "C"` bridge (`bridge.h`), tested with no mg-core edits.
+- **Next up: M2d-2** — wire the bridge into `main.c`/`display.c` (first edits to
+  the legacy C core) + decide live-while-idle. Makes the feature user-visible.
+- Follow-ups (when needed): C-quoted/special-char paths, `-z` NUL format,
+  commit-DAG (`git log`) and refs parsing, recursive worktree watching.

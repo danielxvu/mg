@@ -13,4 +13,10 @@ pkg_check_modules(GIT2 REQUIRED IMPORTED_TARGET libgit2)
 add_library(mg_magit)
 target_sources(mg_magit
     PUBLIC FILE_SET CXX_MODULES FILES coro.cppm magit.cppm fswatch.cppm git.cppm)
+# bridge.cpp is a regular TU (imports the modules above) exposing the extern "C"
+# API in bridge.h to the legacy C core.
+target_sources(mg_magit PRIVATE bridge.cpp)
+target_include_directories(mg_magit PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}) # bridge.h
 target_link_libraries(mg_magit PUBLIC PkgConfig::GIT2)
+find_package(Threads REQUIRED)
+target_link_libraries(mg_magit PUBLIC Threads::Threads)

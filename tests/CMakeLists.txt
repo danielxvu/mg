@@ -58,4 +58,8 @@ if(ENABLE_NATIVE_MAGIT)
     add_executable(test_git test_git.cpp)
     target_link_libraries(test_git PRIVATE doctest::doctest mg_magit)
     doctest_discover_tests(test_git)
+
+    add_executable(test_bridge test_bridge.cpp)
+    target_link_libraries(test_bridge PRIVATE doctest::doctest mg_magit)
+    doctest_discover_tests(test_bridge)
 endif()
