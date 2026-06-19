@@ -14,11 +14,29 @@ FetchContent_MakeAvailable(doctest)
 # `doctest_discover_tests` registers each TEST_CASE with CTest individually.
 include(${doctest_SOURCE_DIR}/scripts/cmake/doctest.cmake)
 
-# Helper so every future module's test binary is wired up the same way.
+# Helper for a plain (header-only) test binary.
 function(mg_add_test name)
     add_executable(${name} ${ARGN})
     target_link_libraries(${name} PRIVATE doctest::doctest)
     doctest_discover_tests(${name})
 endfunction()
 
+# Helper for a test binary that imports C++20 named modules.
+#   mg_add_module_test(<name> SOURCES <.cpp…> MODULES <.cppm…>)
+# Module interface units go in a FILE_SET of type CXX_MODULES so CMake scans
+# their import graph (P1689) and builds BMIs in dependency order.
+function(mg_add_module_test name)
+    cmake_parse_arguments(ARG "" "" "SOURCES;MODULES" ${ARGN})
+    add_executable(${name} ${ARG_SOURCES})
+    target_sources(${name} PRIVATE FILE_SET CXX_MODULES FILES ${ARG_MODULES})
+    target_link_libraries(${name} PRIVATE doctest::doctest)
+    doctest_discover_tests(${name})
+endfunction()
+
 mg_add_test(test_sanity test_sanity.cpp)
+
+# Module toolchain verification (F3): only meaningful with a scan-capable
+# compiler (MacPorts clang-21). The `cpp` CMake preset selects it.
+mg_add_module_test(test_modules
+    SOURCES test_modules.cpp
+    MODULES mg.probe.cppm)

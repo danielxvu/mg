@@ -1,0 +1,42 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 28, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "c-legacy",
+      "displayName": "Legacy plain-C build (upstream-faithful, Apple Clang)",
+      "description": "ENABLE_CPP_UPGRADES=OFF. Builds mg exactly like upstream with the system Apple Clang. No C++ / modules involved.",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build-c",
+      "cacheVariables": {
+        "ENABLE_CPP_UPGRADES": "OFF",
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+    {
+      "name": "cpp",
+      "displayName": "Modern C++23 + modules (MacPorts clang-21)",
+      "description": "ENABLE_CPP_UPGRADES=ON. Drives BOTH C and C++ with MacPorts clang-21 so the extern \"C\" bridge links one consistent toolchain, and points CMake at the (suffix-free) clang-scan-deps it needs for C++20 module scanning.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "ENABLE_CPP_UPGRADES": "ON",
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_C_COMPILER": "/opt/local/bin/clang-mp-21",
+        "CMAKE_CXX_COMPILER": "/opt/local/bin/clang++-mp-21",
+        "CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS": "/opt/local/libexec/llvm-21/bin/clang-scan-deps"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "c-legacy", "configurePreset": "c-legacy" },
+    { "name": "cpp",       "configurePreset": "cpp" }
+  ],
+  "testPresets": [
+    {
+      "name": "cpp",
+      "configurePreset": "cpp",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}

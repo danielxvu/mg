@@ -23,18 +23,19 @@ Refactor), verify, then make an **atomic commit** and check the task off here.
   libc++ ABI when the MacPorts-built C++ objects link the Apple-built C objects.
 - **Install (privileged, user-run):** `sudo port install clang-21`
   → driver `clang++-mp-21`, scanner `clang-scan-deps-mp-21`.
-- **Status:** ⏳ install pending. F2 is toolchain-independent and proceeds now;
-  F3 onward (anything with `import`/`export module`) needs clang-21 present.
+- **Status:** ✅ clang-21 (21.1.8) installed; C++20 named-module build verified
+  end-to-end (F3). ⚠ **scan-deps gotcha:** CMake auto-probes a *suffix-free*
+  `clang-scan-deps` but MacPorts ships `clang-scan-deps-mp-21`. Point CMake at
+  the real one: `/opt/local/libexec/llvm-21/bin/clang-scan-deps` (baked into the
+  `cpp` preset — just use the preset).
 
-## Build / test quickref
+## Build / test quickref  (use the CMake presets — they encode the toolchains)
 
 ```sh
-# Faithful legacy C build (default, Apple Clang):
-cmake -B build-c && cmake --build build-c
-# Modern C++ modules + tests (needs MacPorts clang-21):
-cmake -B build -DENABLE_CPP_UPGRADES=ON \
-      -DCMAKE_CXX_COMPILER=/opt/local/bin/clang++-mp-21 -G Ninja
-cmake --build build && ctest --test-dir build
+# Modern C++23 + modules + tests (MacPorts clang-21, Ninja):
+cmake --preset cpp && cmake --build --preset cpp && ctest --preset cpp
+# Faithful legacy plain-C build (Apple Clang, ENABLE_CPP_UPGRADES=OFF):
+cmake --preset c-legacy && cmake --build --preset c-legacy
 ```
 
 ## Tasks
@@ -50,11 +51,11 @@ cmake --build build && ctest --test-dir build
       with upstream `-W -Wall -Wextra -Wno-unused-parameter` when
       `ENABLE_CPP_UPGRADES=OFF`. **Smoke test:** `mg -h` exits 0 and prints
       `usage:` (NOT `--version` — mg has no version flag; getopt = `hnRb:f:u:`).
-- [ ] **F3 — MacPorts clang-21 toolchain + verify C++20 modules.** _(needs
-      `sudo port install clang-21`.)_ Drive the C++ side with `clang++-mp-21` +
-      Ninja + `CMAKE_CXX_SCAN_FOR_MODULES`. Compile a trivial `export module
-      mg.probe;` and unit-test importing it. Gate the module path so the C-only
-      OFF build still works under Apple Clang.
+- [x] **F3 — MacPorts clang-21 toolchain + verify C++20 modules.** Added
+      `CMakePresets.json` (`cpp` = clang-21+Ninja+scan-deps; `c-legacy` = Apple
+      Clang). `tests/mg.probe.cppm` (`export module mg.probe;`) + `test_modules`
+      import it green; `mg_add_module_test()` helper added for future modules.
+      OFF path still configures under Apple Clang with no modules. _(commit: F3)_
 
 ### Native Magit — FIRST real module (gated by ENABLE_NATIVE_MAGIT)
 > Promoted ahead of the core-buffer work: it is **greenfield** (zero coupling to
@@ -88,11 +89,19 @@ cmake --build build && ctest --test-dir build
   (B) C2 piece-table "display.c untouched" was false (24 files touch line guts) →
   re-scoped as an epic; (C) F2 `--version` smoke test invalid → use `mg -h`;
   (D) C1 over-claimed purity → narrowed. Reordered to put greenfield magit first.
+- **2026-06-19 (F3):** did F3 before F2 — clang-21 had just been installed, so
+  verifying the module pipeline was the highest-value de-risk and it unblocks
+  M1. F2 (faithful C build) is independent and remains the open foundation task.
+  Module build order confirmed working: dyndep scan → mg.probe.cppm.o → importer.
 
 ## Notes for the next iteration
 - **Branch:** all refactor work lives on `cpp-refactor` (NOT `master`). Stay on
   the checked-out branch; commit atomically per iteration. PR at milestones.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
-- `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)`; reuse it per module.
-- **Next up: F2** (faithful C build via generated `config.h`) — unblocked now.
+- `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
+  `mg_add_module_test(name SOURCES … MODULES …)`. Reuse per module.
+- **Module pipeline is live** — real modules (M1 `mg.magit`) can be built now.
+- **Open foundation task: F2** (faithful C build via generated `config.h`).
+  Next up is either **F2** (finish the OFF-path contract) or **M1** (start the
+  greenfield magit module on the now-verified pipeline) — both unblocked.
