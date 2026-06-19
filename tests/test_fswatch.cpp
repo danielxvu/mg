@@ -6,11 +6,11 @@
 #include <doctest/doctest.h>
 
 #include <array>
-#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 
 import mg.coro;
 import mg.fswatch;
@@ -48,9 +48,10 @@ TEST_CASE("watcher::wait reports an event when a watched directory changes")
     REQUIRE(w.has_value());
 
     // Mutate the watched directory by adding a file (fires NOTE_WRITE/IN_CREATE).
+    // The event is queued before wait(), so wait() returns without blocking.
     { std::ofstream(dir / "newfile.txt") << "x"; }
 
-    auto evs = w->wait(std::chrono::seconds(2));
+    auto evs = w->wait();
     REQUIRE(evs.has_value());
     REQUIRE(evs->size() >= 1);
     CHECK((*evs)[0].path == dir.string());
@@ -58,16 +59,19 @@ TEST_CASE("watcher::wait reports an event when a watched directory changes")
     fs::remove_all(dir);
 }
 
-TEST_CASE("watcher::wait times out to an empty list when nothing changes")
+TEST_CASE("watcher::wake unblocks a blocked wait")
 {
     auto dir = make_temp_dir();
     std::array<std::string, 1> paths{dir.string()};
     auto w = watcher::create(paths);
     REQUIRE(w.has_value());
 
-    auto evs = w->wait(std::chrono::milliseconds(50));
-    REQUIRE(evs.has_value());       // timeout is success, not error
-    CHECK(evs->empty());
+    // wait() on another thread blocks indefinitely (no change, no timeout);
+    // wake() from this thread must release it, so join() returns.
+    std::thread blocked([&] { (void)w->wait(); });
+    w->wake();
+    blocked.join();        // only returns if wait() unblocked
+    CHECK(true);
 
     fs::remove_all(dir);
 }
@@ -89,8 +93,7 @@ TEST_CASE("watch_stream over a pre-stopped token is an empty stream")
 
     mg::stop_flag stop;
     stop.request_stop(); // stop before any iteration
-    auto stream = watch_stream(std::move(*w), stop,
-                               std::chrono::milliseconds(500));
+    auto stream = watch_stream(*w, stop); // watcher passed by reference
     CHECK(stream.begin() == stream.end()); // zero iterations
 
     fs::remove_all(dir);
@@ -104,8 +107,7 @@ TEST_CASE("watch_stream yields an event when the watched dir changes")
     REQUIRE(w.has_value());
 
     mg::stop_flag stop;
-    auto stream = watch_stream(std::move(*w), stop,
-                               std::chrono::seconds(2));
+    auto stream = watch_stream(*w, stop); // watcher passed by reference
 
     { std::ofstream(dir / "f.txt") << "x"; }
 

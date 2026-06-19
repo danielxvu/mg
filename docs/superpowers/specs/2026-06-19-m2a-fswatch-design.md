@@ -20,6 +20,16 @@ into four sub-tasks, built in order:
   mg's existing `winch_flag`/SIGWINCH idiom (tty.c:48, main.c:251). Concurrency
   stays inside C++; the C core gets only a flag check + a status getter.
 
+## Amendment (wakeable watcher, 2026-06-19)
+
+`wait(timeout)` was replaced by a **blocking `wait()`** (no timeout) plus a
+thread-safe **`wake()`**, so the watcher is fully event-driven with zero idle
+wake-ups. `wake()` uses the OS-native primitive — kqueue `EVFILT_USER` (no extra
+fd) / inotify `eventfd`. A blocked `wait()` returns on a real fs change *or* a
+`wake()` (empty vector). Cancellation = `stop_flag` + `wake()`. The
+slice-3 "times out to empty" test became the "`wake()` unblocks a blocked
+`wait()`" test (a thread blocks in `wait()`, the main thread `wake()`s it).
+
 ## Goal (M2a)
 
 Event-driven, *not* periodic-polling, watching of a set of paths, behind one

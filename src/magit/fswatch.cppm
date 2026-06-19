@@ -1,15 +1,16 @@
-// mg.fswatch -- OS-abstracted, event-driven filesystem watcher (task M2a).
+// mg.fswatch -- OS-abstracted, event-driven filesystem watcher (task M2a,
+// wakeable enhancement).
 //
 // One interface over two backends, selected at compile time:
 //   * kqueue  on macOS / FreeBSD / OpenBSD / NetBSD
 //   * inotify on Linux
-// Synchronous resource: blocking wait(timeout). The coroutine layer (M2b) and
-// the background-thread bridge (M2d) build on top of this. Greenfield -- no
-// coupling to mg's C core.
+// wait() blocks *indefinitely* until a watched path changes OR wake() is called
+// from another thread -- no polling, no idle wake-ups. The wake primitive is the
+// OS-native one (kqueue EVFILT_USER / inotify eventfd). The coroutine layer
+// (M2b) and the background-thread bridge (M2d) build on top of this.
 
 module;
 #include <cerrno>
-#include <chrono>
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
@@ -24,11 +25,11 @@ module;
 
 #if defined(__linux__)
 #  include <poll.h>
+#  include <sys/eventfd.h>
 #  include <sys/inotify.h>
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
 #  include <array>
 #  include <sys/event.h>
-#  include <sys/time.h>
 #  include <sys/types.h>
 #else
 #  error "mg.fswatch: unsupported platform (needs kqueue or inotify)"
@@ -62,6 +63,7 @@ public:
         if (this != &other) {
             close_all();
             queue_fd_  = std::exchange(other.queue_fd_, -1);
+            wake_fd_   = std::exchange(other.wake_fd_, -1);
             watch_fds_ = std::move(other.watch_fds_);
             paths_     = std::move(other.paths_);
         }
@@ -73,14 +75,22 @@ public:
     static std::expected<watcher, watch_error>
     create(std::span<const std::string> paths);
 
-    // Block up to `timeout`; return the paths that fired (empty on timeout).
-    std::expected<std::vector<fs_event>, watch_error>
-    wait(std::chrono::milliseconds timeout);
+    // Block until a watched path changes or wake() is called. The returned
+    // vector is empty when woken (no filesystem change).
+    std::expected<std::vector<fs_event>, watch_error> wait();
+
+    // Unblock a wait() running on another thread. Thread-safe; a wake issued
+    // while no one is waiting is remembered and consumed by the next wait().
+    void wake() noexcept;
 
     int fd() const noexcept { return queue_fd_; }
 
 private:
     watcher() = default;
+
+    // EVFILT_USER ident for wake() (kqueue). Its own filter space, so it never
+    // collides with the per-path EVFILT_VNODE registrations. Unused on inotify.
+    static constexpr std::uintptr_t kWakeIdent = 0;
 
     void close_all() noexcept
     {
@@ -88,6 +98,10 @@ private:
             if (f >= 0)
                 ::close(f);
         watch_fds_.clear();
+        if (wake_fd_ >= 0) {
+            ::close(wake_fd_);
+            wake_fd_ = -1;
+        }
         if (queue_fd_ >= 0) {
             ::close(queue_fd_);
             queue_fd_ = -1;
@@ -95,18 +109,18 @@ private:
     }
 
     int queue_fd_ = -1;               // kqueue fd, or inotify fd
+    int wake_fd_  = -1;               // inotify: eventfd; kqueue: unused (-1)
     std::vector<int> watch_fds_;      // kqueue: per-path open fds; inotify: wds
     std::vector<std::string> paths_;  // parallel to watch_fds_
 };
 
-// Coroutine adapter: a lazy stream of fs_events driven by the watcher. Loops
-// until the stop_token is requested; the watcher's `timeout` bounds how quickly
-// a stop is noticed. A watcher error ends the stream.
-mg::generator<fs_event>
-watch_stream(watcher w, mg::stop_flag stop, std::chrono::milliseconds timeout)
+// Coroutine adapter: a lazy stream of fs_events. Loops until the stop_flag is
+// requested; the owner cancels a *blocked* stream by request_stop() + w.wake().
+// Takes the watcher by reference -- the owner (monitor) must outlive the stream.
+mg::generator<fs_event> watch_stream(watcher &w, mg::stop_flag stop)
 {
     while (!stop.stop_requested()) {
-        auto events = w.wait(timeout);
+        auto events = w.wait();
         if (!events)
             co_return;
         for (auto &e : *events)
@@ -124,6 +138,9 @@ watcher::create(std::span<const std::string> paths)
     w.queue_fd_ = ::inotify_init1(IN_NONBLOCK);
     if (w.queue_fd_ < 0)
         return std::unexpected(watch_error{"inotify_init1", errno});
+    w.wake_fd_ = ::eventfd(0, EFD_NONBLOCK);
+    if (w.wake_fd_ < 0)
+        return std::unexpected(watch_error{"eventfd", errno});
 
     for (const auto &p : paths) {
         int wd = ::inotify_add_watch(w.queue_fd_, p.c_str(),
@@ -136,17 +153,29 @@ watcher::create(std::span<const std::string> paths)
     return w;
 }
 
-std::expected<std::vector<fs_event>, watch_error>
-watcher::wait(std::chrono::milliseconds timeout)
+void watcher::wake() noexcept
 {
-    pollfd pfd{queue_fd_, POLLIN, 0};
-    int pr = ::poll(&pfd, 1, static_cast<int>(timeout.count()));
+    uint64_t one = 1;
+    [[maybe_unused]] ssize_t r = ::write(wake_fd_, &one, sizeof one);
+}
+
+std::expected<std::vector<fs_event>, watch_error>
+watcher::wait()
+{
+    pollfd pfds[2] = {{queue_fd_, POLLIN, 0}, {wake_fd_, POLLIN, 0}};
+    int pr = ::poll(pfds, 2, -1); // block indefinitely
     if (pr < 0)
         return errno == EINTR ? std::expected<std::vector<fs_event>, watch_error>{}
                               : std::unexpected(watch_error{"poll", errno});
+
     std::vector<fs_event> out;
-    if (pr == 0)
-        return out; // timeout
+    if (pfds[1].revents & POLLIN) { // woken
+        uint64_t drain;
+        [[maybe_unused]] ssize_t r = ::read(wake_fd_, &drain, sizeof drain);
+        return out;
+    }
+    if (!(pfds[0].revents & POLLIN))
+        return out;
 
     alignas(inotify_event) char buf[4096];
     ssize_t len = ::read(queue_fd_, buf, sizeof buf);
@@ -178,6 +207,12 @@ watcher::create(std::span<const std::string> paths)
     if (w.queue_fd_ < 0)
         return std::unexpected(watch_error{"kqueue", errno});
 
+    // A user-triggerable event so wake() can unblock a blocked wait().
+    struct kevent uev;
+    EV_SET(&uev, kWakeIdent, EVFILT_USER, EV_ADD | EV_CLEAR, 0, 0, nullptr);
+    if (::kevent(w.queue_fd_, &uev, 1, nullptr, 0, nullptr) < 0)
+        return std::unexpected(watch_error{"kevent EVFILT_USER", errno});
+
     for (const auto &p : paths) {
         int fd = ::open(p.c_str(), O_RDONLY);
         if (fd < 0)
@@ -197,16 +232,19 @@ watcher::create(std::span<const std::string> paths)
     return w;
 }
 
-std::expected<std::vector<fs_event>, watch_error>
-watcher::wait(std::chrono::milliseconds timeout)
+void watcher::wake() noexcept
 {
-    timespec ts;
-    ts.tv_sec  = timeout.count() / 1000;
-    ts.tv_nsec = (timeout.count() % 1000) * 1'000'000;
+    struct kevent uev;
+    EV_SET(&uev, kWakeIdent, EVFILT_USER, 0, NOTE_TRIGGER, 0, nullptr);
+    ::kevent(queue_fd_, &uev, 1, nullptr, 0, nullptr);
+}
 
+std::expected<std::vector<fs_event>, watch_error>
+watcher::wait()
+{
     std::array<struct kevent, 16> evs;
     int n = ::kevent(queue_fd_, nullptr, 0, evs.data(),
-                     static_cast<int>(evs.size()), &ts);
+                     static_cast<int>(evs.size()), nullptr); // block indefinitely
     if (n < 0)
         return errno == EINTR ? std::expected<std::vector<fs_event>, watch_error>{}
                               : std::unexpected(watch_error{"kevent wait", errno});
@@ -214,6 +252,8 @@ watcher::wait(std::chrono::milliseconds timeout)
     std::vector<fs_event> out;
     std::vector<bool> seen(paths_.size(), false);
     for (int i = 0; i < n; ++i) {
+        if (evs[i].filter == EVFILT_USER)
+            continue; // woken via wake(), not a filesystem change
         auto idx = static_cast<std::size_t>(
             reinterpret_cast<std::intptr_t>(evs[i].udata));
         if (idx < paths_.size() && !seen[idx]) {

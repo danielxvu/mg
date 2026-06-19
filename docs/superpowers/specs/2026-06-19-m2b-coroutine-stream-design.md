@@ -86,6 +86,15 @@ object; M2d decides whether to re-create the watcher. (Simplification — noted.
 4. a change in the watched dir → the stream yields an `fs_event` whose `path`
    is that dir.
 
+## Amendment (wakeable watcher, 2026-06-19)
+
+`watch_stream` now takes the watcher **by reference** and drops the timeout:
+`watch_stream(watcher &w, stop_flag stop)`. It loops on the watcher's blocking
+`wait()` (M2a wakeable enhancement); the owner (M2d's monitor) cancels a blocked
+stream with `stop.request_stop()` + `w.wake()`. By-reference means the owner must
+outlive the stream — the monitor owns the watcher and joins its thread before
+the watcher is destroyed.
+
 ## Out of scope
 
 Git invocation (M2c) and the thread + `extern "C"` bridge (M2d). M2b is pure

@@ -160,6 +160,11 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
   standard headers with libc++ runtime symbols (e.g. `<stop_token>`) can
   mis-link through a module's global fragment on clang-21 — prefer header-only
   primitives across module boundaries (`<atomic>`, `<expected>`, ranges are safe).
+- **Wakeable watcher (2026-06-19)** — replaced the 250ms cancellation heartbeat:
+  `mg.fswatch::watcher` now has a blocking `wait()` (no timeout) + thread-safe
+  `wake()` (kqueue `EVFILT_USER` / inotify `eventfd`); `watch_stream(watcher&,
+  stop_flag)` cancels via `request_stop()` + `wake()`. Fully event-driven, zero
+  idle wake-ups. (Forward-evolves M2a/M2b; specs amended.)
 - **M2c done** — git access is now libgit2 (structured, no subprocess). `mg.git`
   RAII-wraps the C handles; pattern for wrapping other C libs. libgit2 sets up
   the future commit-DAG (`git_revwalk`) work too.
