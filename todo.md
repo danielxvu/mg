@@ -146,11 +146,17 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
 
 ## ▶ RESUME HERE (next session)
 
-**M8 — magit breadth.** M7 is complete (inline diffs + hunk staging, PR #13).
-Next is M8: extra sections + navigation — stash/remotes/branches sections, a
-log view, `?` help, `RET` to visit the file at point. Decompose into slices and
-spec it first (see `docs/superpowers/specs/`). Build: `cmake --preset cpp &&
-ctest --preset cpp`. Freeze a `m8-*` branch on `m7-hunks` and PR per the stack.
+**M8-3 — stash + branches sections.** M8-1 (`RET` visit) and M8-2 (`?` help)
+are done & PR'd (#14, branch `m8-nav`). Next is the engine slice (spec:
+`docs/superpowers/specs/2026-06-19-m8-magit-breadth-design.md`):
+- Add `mg.git` read-only listers: `stashes(repo)` (`git_stash_foreach`) and
+  `branches(repo)` (`git_branch_iterator`, local + current flag), each
+  `std::expected`/RAII. Tests in `test_git` (fixture with one stash / two
+  branches). TDD: Red first.
+- Bridge: `mg_magit_status_buffer` emits "Stashes (N)" / "Branches (N)"
+  sections (new `MG_LINE_*` kinds). Render-only — acting on them is later.
+- Then M8-4 (section nav `M-n`/`M-p`) if time. Build: `cmake --preset cpp &&
+  ctest --preset cpp`. Freeze `m8-sections` on `m8-nav`; PR per the stack.
 
 ## Notes for the next iteration
 - **Branch / PR workflow:** ongoing work rides the rolling `cpp-refactor` tip
@@ -162,8 +168,9 @@ ctest --preset cpp`. Freeze a `m8-*` branch on `m7-hunks` and PR per the stack.
   `m2d1-bridge`→m2c-libgit2 (#6), `m2d2-modeline`→m2d1-bridge (#7),
   `m3-status-buffer`→m2d2-modeline (#8), `m4-staging`→m3-status-buffer (#9), `m5-discard`→m4-staging (#10),
   `m6-commit`→m5-discard (#11),
-  `m7-diffs`→m6-commit (#12), `m7-hunks`→m7-diffs (#13).
-  Next milestone (M8) freezes a branch on `m7-hunks`.
+  `m7-diffs`→m6-commit (#12), `m7-hunks`→m7-diffs (#13),
+  `m8-nav`→m7-hunks (#14).
+  Next slice (M8-3) freezes `m8-sections` on `m8-nav`.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
@@ -216,9 +223,15 @@ ctest --preset cpp`. Freeze a `m8-*` branch on `m7-hunks` and PR per the stack.
   `unstage_hunk`; `magit_cmd.c` routes `s`/`u` on `MG_LINE_HUNK`/`MG_LINE_DIFF`
   to the hunk ops. Verified end-to-end via pty (staged b→B, left k→K unstaged).
   Spec: `docs/superpowers/specs/2026-06-19-m7-diffs-hunks-design.md`.
+- **M8 (breadth) in progress** — ✅ M8-1 `RET` visits the file at point (other
+  window; pure C, non-prompting twin of poptofile) · ✅ M8-2 `?` pops a
+  read-only `*magit-help*` key legend · ⏳ M8-3 stash/branches sections
+  (libgit2 listers) · M8-4 section nav. Spec:
+  `docs/superpowers/specs/2026-06-19-m8-magit-breadth-design.md`.
+  ⚠ magit keymap entries MUST stay in ascending key order (`doscan` scan).
 - **Magit roadmap:** ✅ M5 discard (`k`) · ✅ M6 commit (`c`) · ✅ M7 inline
-  diffs + hunk staging (`TAB`/`s`/`u` on a hunk) ·
-  M8 breadth (extra sections, log/stash/remotes/branches, `?` help, `RET` visit).
+  diffs + hunk staging (`TAB`/`s`/`u` on a hunk) · ⏳ M8 breadth (M8-1/M8-2
+  done; M8-3 stash/branches + M8-4 nav remain).
 - **Other:** live-while-idle modeline; auto-refresh the status buffer on fs
   events; merge the PR stack (#1–#8).
 - Follow-ups (when needed): C-quoted/special-char paths, `-z` NUL format,
