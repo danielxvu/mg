@@ -10,8 +10,15 @@ M2a spec). M2b is the **coroutine layer** that turns the pull-based `mg.fswatch`
 watcher into a lazy event *stream* the thread can iterate.
 
 **Toolchain finding:** clang-21's libc++ has `<coroutine>` but **not** C++23
-`<generator>`, so we hand-roll a small `generator<T>`. `std::jthread` /
-`std::stop_token` are available and drive cancellation.
+`<generator>`, so we hand-roll a small `generator<T>`.
+
+**Amendment (during impl):** `std::stop_token` was the planned cancellation
+type, but `<stop_token>` **fails to link through a module's global module
+fragment** on clang-21's libc++ (the inline `__atomic_unique_lock::__set_locked_bit`
+symbol isn't emitted — reproduced minimally; a toolchain bug, not our code). So
+cancellation uses a tiny header-only `mg::stop_flag` (a shared `atomic<bool>`)
+with the same `request_stop()`/`stop_requested()` contract. M2d will pair it
+with a plain `std::thread` + RAII join wrapper instead of `std::jthread`.
 
 ## Components
 
@@ -41,7 +48,7 @@ template <class T> class generator {       // owns a std::coroutine_handle
 
 ```cpp
 mg::generator<fs_event>
-watch_stream(watcher w, std::stop_token stop, std::chrono::milliseconds timeout);
+watch_stream(watcher w, mg::stop_flag stop, std::chrono::milliseconds timeout);
 ```
 
 ```cpp

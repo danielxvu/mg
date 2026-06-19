@@ -50,4 +50,8 @@ if(ENABLE_NATIVE_MAGIT)
     add_executable(test_fswatch test_fswatch.cpp)
     target_link_libraries(test_fswatch PRIVATE doctest::doctest mg_magit)
     doctest_discover_tests(test_fswatch)
+
+    add_executable(test_coro test_coro.cpp)
+    target_link_libraries(test_coro PRIVATE doctest::doctest mg_magit)
+    doctest_discover_tests(test_coro)
 endif()

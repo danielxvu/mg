@@ -10,6 +10,7 @@
 module;
 #include <cerrno>
 #include <chrono>
+#include <coroutine>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -34,6 +35,8 @@ module;
 #endif
 
 export module mg.fswatch;
+
+import mg.coro;
 
 export namespace mg::fswatch {
 
@@ -95,6 +98,21 @@ private:
     std::vector<int> watch_fds_;      // kqueue: per-path open fds; inotify: wds
     std::vector<std::string> paths_;  // parallel to watch_fds_
 };
+
+// Coroutine adapter: a lazy stream of fs_events driven by the watcher. Loops
+// until the stop_token is requested; the watcher's `timeout` bounds how quickly
+// a stop is noticed. A watcher error ends the stream.
+mg::generator<fs_event>
+watch_stream(watcher w, mg::stop_flag stop, std::chrono::milliseconds timeout)
+{
+    while (!stop.stop_requested()) {
+        auto events = w.wait(timeout);
+        if (!events)
+            co_return;
+        for (auto &e : *events)
+            co_yield e;
+    }
+}
 
 #if defined(__linux__) // ---------------------------------------- inotify ----
 // NOTE: written to mirror the kqueue backend; exercised only on Linux CI.

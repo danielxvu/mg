@@ -12,6 +12,7 @@
 #include <fstream>
 #include <string>
 
+import mg.coro;
 import mg.fswatch;
 
 using namespace mg::fswatch;
@@ -77,4 +78,40 @@ TEST_CASE("watcher::create fails on a nonexistent path")
     auto w = watcher::create(paths);
     REQUIRE_FALSE(w.has_value());
     CHECK(w.error().err == ENOENT);
+}
+
+TEST_CASE("watch_stream over a pre-stopped token is an empty stream")
+{
+    auto dir = make_temp_dir();
+    std::array<std::string, 1> paths{dir.string()};
+    auto w = watcher::create(paths);
+    REQUIRE(w.has_value());
+
+    mg::stop_flag stop;
+    stop.request_stop(); // stop before any iteration
+    auto stream = watch_stream(std::move(*w), stop,
+                               std::chrono::milliseconds(500));
+    CHECK(stream.begin() == stream.end()); // zero iterations
+
+    fs::remove_all(dir);
+}
+
+TEST_CASE("watch_stream yields an event when the watched dir changes")
+{
+    auto dir = make_temp_dir();
+    std::array<std::string, 1> paths{dir.string()};
+    auto w = watcher::create(paths);
+    REQUIRE(w.has_value());
+
+    mg::stop_flag stop;
+    auto stream = watch_stream(std::move(*w), stop,
+                               std::chrono::seconds(2));
+
+    { std::ofstream(dir / "f.txt") << "x"; }
+
+    auto it = stream.begin();
+    REQUIRE(it != stream.end());
+    CHECK((*it).path == dir.string());
+
+    fs::remove_all(dir);
 }

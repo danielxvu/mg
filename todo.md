@@ -79,13 +79,21 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
         4 doctest slices on the kqueue backend (create, event, timeout, ENOENT).
         ⚠ inotify backend written but **untested on this host** — Linux CI only.
         _(commit: M2a)_
-  - [ ] **M2b** — coroutine layer: `co_await` awaitables over the watcher fd
-        (and later the git subprocess) driving a `git_monitor` pipeline.
+  - [x] **M2b** — coroutine layer. Hand-rolled `mg::generator<T>` (clang-21
+        libc++ lacks C++23 `<generator>`) + `watch_stream(watcher, stop_flag,
+        timeout)` in `mg.fswatch` turning the watcher into a lazy `co_yield`
+        event stream. ⚠ Pivoted cancellation from `std::stop_token` to a
+        header-only `mg::stop_flag` (shared `atomic<bool>`): `<stop_token>`
+        mis-links through a module's global fragment on clang-21 (toolchain bug,
+        reproduced). 4 slices (generator finite/infinite, watch_stream
+        stopped/event) + stop_flag. _(commit: M2b)_
   - [ ] **M2c** — run `git status --porcelain` on a fired event, summarize via
         M1's `parse_status` into a modeline string.
-  - [ ] **M2d** — `extern "C"` bridge + minimal C-core hook: watcher thread sets
-        a dirty flag (checked by `winch_flag` in `main.c`) and a modeline getter
-        (`display.c`/`modes.c`). First real C↔C++ bridge.
+  - [ ] **M2d** — `extern "C"` bridge + minimal C-core hook: a `std::thread`
+        (+ `mg::stop_flag` & RAII join — not `std::jthread`, see M2b) runs
+        `for (auto ev : watch_stream(...))`, on each event sets a dirty flag
+        (checked by `winch_flag` in `main.c`) and publishes the summary a
+        modeline getter returns (`display.c`/`modes.c`). First real C↔C++ bridge.
 
 ### Core engine (later — honestly scoped after review)
 - [ ] **C1 — `mg.text` pure leaf utilities.** Only genuinely free-standing
@@ -137,7 +145,11 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
   platform code: compile-time `#if` backend selection inside the module's global
   fragment, one public interface. ⚠ The **inotify** backend is unverified on
   this Mac (no Linux headers) — do not assume it compiles until Linux CI runs.
-- **Next up: M2b** — coroutine layer wrapping `mg.fswatch` (`co_await` the
-  watcher fd). First use of C++20 coroutines.
+- **M2b done** — `mg::generator<T>` + `watch_stream`. ⚠ **Toolchain landmine:**
+  standard headers with libc++ runtime symbols (e.g. `<stop_token>`) can
+  mis-link through a module's global fragment on clang-21 — prefer header-only
+  primitives across module boundaries (`<atomic>`, `<expected>`, ranges are safe).
+- **Next up: M2c** — run `git status --porcelain` on a watch event and summarize
+  via M1's `parse_status` into a modeline string.
 - M1 follow-ups (when needed): C-quoted/special-char paths, `-z` NUL format,
   commit-DAG (`git log`) and refs parsing.

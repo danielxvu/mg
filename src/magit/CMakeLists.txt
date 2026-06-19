@@ -6,4 +6,4 @@
 # CXX_MODULES file set so linking targets (e.g. test_magit) can `import mg.magit`.
 add_library(mg_magit)
 target_sources(mg_magit
-    PUBLIC FILE_SET CXX_MODULES FILES magit.cppm fswatch.cppm)
+    PUBLIC FILE_SET CXX_MODULES FILES coro.cppm magit.cppm fswatch.cppm)
