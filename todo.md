@@ -146,17 +146,19 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
 
 ## ▶ RESUME HERE (next session)
 
-**M8-3 — stash + branches sections.** M8-1 (`RET` visit) and M8-2 (`?` help)
-are done & PR'd (#14, branch `m8-nav`). Next is the engine slice (spec:
-`docs/superpowers/specs/2026-06-19-m8-magit-breadth-design.md`):
-- Add `mg.git` read-only listers: `stashes(repo)` (`git_stash_foreach`) and
-  `branches(repo)` (`git_branch_iterator`, local + current flag), each
-  `std::expected`/RAII. Tests in `test_git` (fixture with one stash / two
-  branches). TDD: Red first.
-- Bridge: `mg_magit_status_buffer` emits "Stashes (N)" / "Branches (N)"
-  sections (new `MG_LINE_*` kinds). Render-only — acting on them is later.
-- Then M8-4 (section nav `M-n`/`M-p`) if time. Build: `cmake --preset cpp &&
-  ctest --preset cpp`. Freeze `m8-sections` on `m8-nav`; PR per the stack.
+**M8-4 — section navigation (`M-n`/`M-p`).** M8-1/M8-2 (PR #14) and M8-3
+(stash/branches sections, PR #15, branch `m8-sections`) are done. Last M8
+slice (spec: `docs/superpowers/specs/2026-06-19-m8-magit-breadth-design.md`):
+- In `magit_cmd.c`, bind `M-n`/`M-p` to jump to the next/previous **section
+  header** line. Section headers are the lines like "Unstaged changes (N)" /
+  "Stashes (N)" / "Branches (N)": emitted with kind `MG_LINE_OTHER` and an
+  empty path, NOT blank, and followed by content. Simplest robust approach:
+  tag headers with a new `MG_LINE_SECTION` kind in the bridge emit, then the C
+  side walks `magit_meta[]` for the next/prev row of that kind and moves point.
+- `M-n` is `ESC n` / `CCHR('[')` prefix in mg — check how other meta-bindings
+  are registered (metamap / `ESC` prefix). Pure C, no engine. Build:
+  `cmake --preset cpp && ctest --preset cpp`. Freeze `m8-nav2` on `m8-sections`.
+  After M8-4, **M8 is complete** — pick the next milestone (M9?) and spec it.
 
 ## Notes for the next iteration
 - **Branch / PR workflow:** ongoing work rides the rolling `cpp-refactor` tip
@@ -169,8 +171,8 @@ are done & PR'd (#14, branch `m8-nav`). Next is the engine slice (spec:
   `m3-status-buffer`→m2d2-modeline (#8), `m4-staging`→m3-status-buffer (#9), `m5-discard`→m4-staging (#10),
   `m6-commit`→m5-discard (#11),
   `m7-diffs`→m6-commit (#12), `m7-hunks`→m7-diffs (#13),
-  `m8-nav`→m7-hunks (#14).
-  Next slice (M8-3) freezes `m8-sections` on `m8-nav`.
+  `m8-nav`→m7-hunks (#14), `m8-sections`→m8-nav (#15).
+  Next slice (M8-4) freezes `m8-nav2` on `m8-sections`.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
@@ -225,8 +227,9 @@ are done & PR'd (#14, branch `m8-nav`). Next is the engine slice (spec:
   Spec: `docs/superpowers/specs/2026-06-19-m7-diffs-hunks-design.md`.
 - **M8 (breadth) in progress** — ✅ M8-1 `RET` visits the file at point (other
   window; pure C, non-prompting twin of poptofile) · ✅ M8-2 `?` pops a
-  read-only `*magit-help*` key legend · ⏳ M8-3 stash/branches sections
-  (libgit2 listers) · M8-4 section nav. Spec:
+  read-only `*magit-help*` key legend · ✅ M8-3 stash/branches sections
+  (`mg.git` `stashes`/`branches` libgit2 listers; `MG_LINE_STASH`/`_BRANCH`) ·
+  ⏳ M8-4 section nav (`M-n`/`M-p`). Spec:
   `docs/superpowers/specs/2026-06-19-m8-magit-breadth-design.md`.
   ⚠ magit keymap entries MUST stay in ascending key order (`doscan` scan) —
   now enforced: `magit_assert_keymap_sorted()` panics on first `C-x g` if not.
