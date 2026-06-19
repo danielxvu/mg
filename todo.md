@@ -153,7 +153,8 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
   (#3), `m2b-coro`→m2a-fswatch (#4), `m2c-libgit2`→m2b-coro (#5),
   `m2d1-bridge`→m2c-libgit2 (#6), `m2d2-modeline`→m2d1-bridge (#7),
   `m3-status-buffer`→m2d2-modeline (#8), `m4-staging`→m3-status-buffer (#9), `m5-discard`→m4-staging (#10),
-  `m6-commit`→m5-discard (#11).
+  `m6-commit`→m5-discard (#11),
+  `m7-diffs`→m6-commit (#12).
   Next
   milestone freezes a branch on `m2d2-modeline`.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
