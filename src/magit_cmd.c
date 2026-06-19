@@ -34,6 +34,7 @@ static int	magit_commit(int, int);
 static int	magit_commit_finish(int, int);
 static int	magit_commit_abort(int, int);
 static int	magit_toggle_expand(int, int);
+static int	magit_visit(int, int);
 
 /*
  * line -> {kind, hunk, path} map for the most recent render of *magit-status*.
@@ -52,6 +53,7 @@ static char	magit_expanded[MAGIT_MAX_EXPANDED][PATH_MAX];
 static int	magit_expanded_count;
 
 static PF magit_tab[] = { magit_toggle_expand };
+static PF magit_ret[] = { magit_visit };
 static PF magit_c[] = { magit_commit };
 static PF magit_g[] = { magit_refresh };
 static PF magit_k[] = { magit_discard };
@@ -59,12 +61,14 @@ static PF magit_q[] = { delwind };
 static PF magit_s[] = { magit_stage };
 static PF magit_u[] = { magit_unstage };
 
-static struct KEYMAPE (7) magitmap = {
-	7,
-	7,
+/* Entries MUST stay in ascending key order -- doscan() relies on it. */
+static struct KEYMAPE (8) magitmap = {
+	8,
+	8,
 	rescan,
 	{
 		{ CCHR('I'), CCHR('I'), magit_tab, NULL },	/* TAB: expand/collapse */
+		{ CCHR('M'), CCHR('M'), magit_ret, NULL },	/* RET: visit file */
 		{ 'c', 'c', magit_c, NULL },
 		{ 'g', 'g', magit_g, NULL },
 		{ 'k', 'k', magit_k, NULL },
@@ -248,6 +252,49 @@ magit_toggle_expand(int f, int n)
 		(void)strlcpy(magit_expanded[magit_expanded_count++], path,
 		    PATH_MAX);
 	return (magit_refresh(f, n));
+}
+
+/*
+ * RET: visit the file at point in another window (the status buffer stays
+ * visible). Works on file lines and on a hunk/diff line (whose meta records the
+ * owning file). Non-prompting twin of poptofile().
+ */
+static int
+magit_visit(int f, int n)
+{
+	struct buffer	*bp;
+	struct mgwin	*wp;
+	char		 cwd[PATH_MAX], full[PATH_MAX], *adjf, *path = NULL;
+	int		 kind, hunk, status;
+
+	kind = magit_at_point(&path, &hunk);
+	if (path == NULL || path[0] == '\0' ||
+	    (kind != MG_LINE_UNTRACKED && kind != MG_LINE_UNSTAGED &&
+	    kind != MG_LINE_STAGED && kind != MG_LINE_HUNK &&
+	    kind != MG_LINE_DIFF)) {
+		ewprintf("Nothing to visit on this line");
+		return (FALSE);
+	}
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	if (snprintf(full, sizeof(full), "%s/%s", cwd, path) >=
+	    (int)sizeof(full))
+		return (FALSE);
+	if ((adjf = adjustname(full, TRUE)) == NULL)
+		return (FALSE);
+	if ((bp = findbuffer(adjf)) == NULL)
+		return (FALSE);
+	if ((wp = popbuf(bp, WNONE)) == NULL)
+		return (FALSE);
+	curbp = bp;
+	curwp = wp;
+	if (bp->b_fname[0] == '\0') {
+		if ((status = readin(adjf)) != TRUE) {
+			(void)killbuffer(bp);
+			return (status);
+		}
+	}
+	return (TRUE);
 }
 
 static int
