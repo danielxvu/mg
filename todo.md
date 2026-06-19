@@ -152,7 +152,8 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
   `foundation`→master (#1), `m1-magit`→foundation (#2), `m2a-fswatch`→m1-magit
   (#3), `m2b-coro`→m2a-fswatch (#4), `m2c-libgit2`→m2b-coro (#5),
   `m2d1-bridge`→m2c-libgit2 (#6), `m2d2-modeline`→m2d1-bridge (#7),
-  `m3-status-buffer`→m2d2-modeline (#8), `m4-staging`→m3-status-buffer (#9), `m5-discard`→m4-staging (#10).
+  `m3-status-buffer`→m2d2-modeline (#8), `m4-staging`→m3-status-buffer (#9), `m5-discard`→m4-staging (#10),
+  `m6-commit`→m5-discard (#11).
   Next
   milestone freezes a branch on `m2d2-modeline`.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
@@ -198,7 +199,7 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
     - M4-1 `mg.git` stage()/unstage(); M4-2 enriched emit (kind+path) +
       stage/unstage bridge; M4-3 magit-status-mode keymap + point→file map +
       refresh (re-points windows after bclear).
-- **Magit roadmap:** ✅ M5 discard (`k`) done · M6 commit (`c`) ·
+- **Magit roadmap:** ✅ M5 discard (`k`) done · ✅ M6 commit (`c`) done ·
   M7 inline diffs + hunk/line staging (`TAB`/`s` on a hunk — the big one) ·
   M8 breadth (extra sections, log/stash/remotes/branches, `?` help, `RET` visit).
 - **Other:** live-while-idle modeline; auto-refresh the status buffer on fs
