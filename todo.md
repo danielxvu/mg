@@ -179,11 +179,18 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
 - **M2c done** — git access is now libgit2 (structured, no subprocess). `mg.git`
   RAII-wraps the C handles; pattern for wrapping other C libs. libgit2 sets up
   the future commit-DAG (`git_revwalk`) work too.
-- **🎉 M2 COMPLETE** — the native-magit modeline works end-to-end in the real
-  editor: cpp `mg` in a repo shows `git *N +M ?K`, updating on interaction
-  (Magit-faithful). OFF path stays byte-faithful upstream C (0 `mg_magit` syms).
-- **Possible next directions:** live-while-idle mode (watch-fd in `ttgetc`'s
-  poll, Emacs-native); a full `magit-status` *buffer* (not just the modeline)
-  via `git_revwalk`/refs; branch name in the modeline; or merge the PR stack.
+- **🎉 M2 COMPLETE** — native-magit modeline (`git *N +M ?K`, on-interaction).
+- **🎉 M3 COMPLETE** — `*magit-status*` buffer via `M-x magit-status` / `C-x g`
+  (gotoline stays in the OFF build + on `M-x goto-line`). Shows branch/HEAD,
+  untracked/unstaged/staged sections, recent commits (`git_revwalk`). Verified
+  end-to-end via pty. Spec:
+  `docs/superpowers/specs/2026-06-19-m3-magit-status-buffer-design.md`.
+    - M3-1 read_head + recent_commits (libgit2 refs/revwalk); M3-2 bridge
+      `mg_magit_status_buffer` (callback-emit composition); M3-3 the C command +
+      funmap/keymap glue, all `#ifdef ENABLE_NATIVE_MAGIT`.
+- **Next up: branch name in the modeline** — reuse `read_head().branch` so the
+  modeline reads e.g. `master git *1 ?2`.
+- **Possible later directions:** live-while-idle; auto-refresh the status buffer
+  on fs events; interactive staging/diffs; merge the PR stack.
 - Follow-ups (when needed): C-quoted/special-char paths, `-z` NUL format,
   commit-DAG (`git log`) and refs parsing, recursive worktree watching.

@@ -89,6 +89,12 @@ if(WITHOUT_CURSES)
     list(APPEND MG_SOURCES ansi.c)
 endif()
 
+# The native-magit command glue (calls the extern "C" bridge). Linked into mg
+# and ENABLE_NATIVE_MAGIT-defined from the root, alongside libmg_magit.
+if(ENABLE_NATIVE_MAGIT)
+    list(APPEND MG_SOURCES magit_cmd.c)
+endif()
+
 add_executable(mg ${MG_SOURCES} ${MG_LIBOBJ})
 
 # config.h lives in the build tree; def.h's `#include "config.h"` finds it here.

@@ -207,7 +207,11 @@ static PF cXcar[] = {
 	rescan,			/* d */
 	executemacro,		/* e */
 	setfillcol,		/* f */
+#ifdef ENABLE_NATIVE_MAGIT
+	magit_status,		/* g (goto-line still on M-x goto-line) */
+#else
 	gotoline,		/* g */
+#endif
 	markbuffer,		/* h */
 	fileinsert,		/* i */
 	rescan,			/* j */

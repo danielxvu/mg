@@ -528,6 +528,9 @@ int		 savebuffers(int, int);
 int		 listbuffers(int, int);
 int		 addlinef(struct buffer *, char *, ...);
 #define	 addline(bp, text)	addlinef(bp, "%s", text)
+#ifdef ENABLE_NATIVE_MAGIT
+int		 magit_status(int, int);	/* magit_cmd.c */
+#endif
 int		 anycb(int);
 int		 bclear(struct buffer *);
 int		 showbuffer(struct buffer *, struct mgwin *, int);

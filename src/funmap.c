@@ -164,6 +164,9 @@ static struct funmap functnames[] = {
 	{localunbind, "local-unset-key", 1, NULL},
 	{makebkfile, "make-backup-files", 0, NULL},
 	{make_dir, "make-directory", 1, NULL},
+#ifdef ENABLE_NATIVE_MAGIT
+	{magit_status, "magit-status", 0, NULL},
+#endif
 	{markpara, "mark-paragraph", 1, NULL},
 	{markbuffer, "mark-whole-buffer", 0, NULL},
 	{do_meta, "meta-key-mode", 0, NULL},	/* better name, anyone? */
