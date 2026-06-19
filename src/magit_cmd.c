@@ -11,6 +11,7 @@
  * This file is in the public domain.
  */
 #include <limits.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -26,6 +27,7 @@
 static int	magit_refresh(int, int);
 static int	magit_stage(int, int);
 static int	magit_unstage(int, int);
+static int	magit_discard(int, int);
 
 /*
  * line -> {kind, path} map for the most recent render of *magit-status*. There
@@ -39,16 +41,18 @@ static struct {
 static int	magit_meta_count;
 
 static PF magit_g[] = { magit_refresh };
+static PF magit_k[] = { magit_discard };
 static PF magit_q[] = { delwind };
 static PF magit_s[] = { magit_stage };
 static PF magit_u[] = { magit_unstage };
 
-static struct KEYMAPE (4) magitmap = {
-	4,
-	4,
+static struct KEYMAPE (5) magitmap = {
+	5,
+	5,
 	rescan,
 	{
 		{ 'g', 'g', magit_g, NULL },
+		{ 'k', 'k', magit_k, NULL },
 		{ 'q', 'q', magit_q, NULL },
 		{ 's', 's', magit_s, NULL },
 		{ 'u', 'u', magit_u, NULL }
@@ -200,6 +204,32 @@ magit_unstage(int f, int n)
 		return (FALSE);
 	if (mg_magit_unstage(cwd, path) != 1) {
 		ewprintf("Unstage failed");
+		return (FALSE);
+	}
+	return (magit_refresh(f, n));
+}
+
+static int
+magit_discard(int f, int n)
+{
+	char	*path = NULL;
+	char	 cwd[PATH_MAX];
+	char	 prompt[PATH_MAX + 32];
+	int	 kind;
+
+	kind = magit_at_point(&path);
+	if (kind != MG_LINE_UNTRACKED && kind != MG_LINE_UNSTAGED &&
+	    kind != MG_LINE_STAGED) {
+		ewprintf("Nothing to discard on this line");
+		return (FALSE);
+	}
+	(void)snprintf(prompt, sizeof(prompt), "Discard changes to %s", path);
+	if (eyesno(prompt) != TRUE)
+		return (FALSE);
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	if (mg_magit_discard(cwd, path) != 1) {
+		ewprintf("Discard failed");
 		return (FALSE);
 	}
 	return (magit_refresh(f, n));
