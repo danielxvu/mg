@@ -198,7 +198,7 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
     - M4-1 `mg.git` stage()/unstage(); M4-2 enriched emit (kind+path) +
       stage/unstage bridge; M4-3 magit-status-mode keymap + point→file map +
       refresh (re-points windows after bclear).
-- **Magit roadmap (approved, planned):** M5 discard (`k`) · M6 commit (`c`) ·
+- **Magit roadmap:** ✅ M5 discard (`k`) done · M6 commit (`c`) ·
   M7 inline diffs + hunk/line staging (`TAB`/`s` on a hunk — the big one) ·
   M8 breadth (extra sections, log/stash/remotes/branches, `?` help, `RET` visit).
 - **Other:** live-while-idle modeline; auto-refresh the status buffer on fs
