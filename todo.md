@@ -189,9 +189,15 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
     - M3-1 read_head + recent_commits (libgit2 refs/revwalk); M3-2 bridge
       `mg_magit_status_buffer` (callback-emit composition); M3-3 the C command +
       funmap/keymap glue, all `#ifdef ENABLE_NATIVE_MAGIT`.
-- **🎉 Branch name in the modeline** — the monitor prepends `read_head().branch`,
-  so the modeline reads e.g. `main git *1 ?2`.
-- **Possible later directions:** live-while-idle; auto-refresh the status buffer
-  on fs events; interactive staging/diffs; merge the PR stack (#1–#7+).
+- **🎉 Branch name in the modeline** — `main git *1 ?2`.
+- **In progress: M4 — interactive staging** (`s`/`u`/`g`/`q` in the status
+  buffer). Spec: `docs/superpowers/specs/2026-06-19-m4-interactive-staging-design.md`.
+    - M4-1 `mg.git` stage()/unstage(); M4-2 enriched emit + stage/unstage bridge;
+      M4-3 magit-status-mode keymap + point→file map + refresh.
+- **Magit roadmap (approved, planned):** M5 discard (`k`) · M6 commit (`c`) ·
+  M7 inline diffs + hunk/line staging (`TAB`/`s` on a hunk — the big one) ·
+  M8 breadth (extra sections, log/stash/remotes/branches, `?` help, `RET` visit).
+- **Other:** live-while-idle modeline; auto-refresh the status buffer on fs
+  events; merge the PR stack (#1–#8).
 - Follow-ups (when needed): C-quoted/special-char paths, `-z` NUL format,
   commit-DAG (`git log`) and refs parsing, recursive worktree watching.
