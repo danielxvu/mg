@@ -69,8 +69,23 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
       11 doctest cases (XY codes, rename `->`, multi-line, malformed). 0 warnings.
       Commit-DAG (`git log`) + refs are later slices. _(commit: M1)_  See spec
       `docs/superpowers/specs/2026-06-19-m1-magit-status-parser-design.md`.
-- [ ] **M2 — Coroutine background poller.** `co_await`-based non-blocking
-      `git status`/log polling feeding the status line via an `extern "C"` shim.
+- [ ] **M2 — Coroutine background poller** (decomposed; integration model:
+      **background thread + SIGWINCH-style dirty flag**, mirroring mg's
+      `winch_flag`/`main.c:251`). Spec:
+      `docs/superpowers/specs/2026-06-19-m2a-fswatch-design.md`.
+  - [x] **M2a — `mg.fswatch`** OS-abstracted, event-driven watcher: kqueue
+        (macOS/FreeBSD/OpenBSD/NetBSD) + inotify (Linux), compile-time selected,
+        one `std::expected`/RAII/move-only interface (`create`/`wait`/`fd`).
+        4 doctest slices on the kqueue backend (create, event, timeout, ENOENT).
+        ⚠ inotify backend written but **untested on this host** — Linux CI only.
+        _(commit: M2a)_
+  - [ ] **M2b** — coroutine layer: `co_await` awaitables over the watcher fd
+        (and later the git subprocess) driving a `git_monitor` pipeline.
+  - [ ] **M2c** — run `git status --porcelain` on a fired event, summarize via
+        M1's `parse_status` into a modeline string.
+  - [ ] **M2d** — `extern "C"` bridge + minimal C-core hook: watcher thread sets
+        a dirty flag (checked by `winch_flag` in `main.c`) and a modeline getter
+        (`display.c`/`modes.c`). First real C↔C++ bridge.
 
 ### Core engine (later — honestly scoped after review)
 - [ ] **C1 — `mg.text` pure leaf utilities.** Only genuinely free-standing
@@ -114,8 +129,11 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
 - **M1 done** — `mg.magit` status parser is the first live feature module.
   Pattern for future modules: module library under `src/<name>/`, PUBLIC
   CXX_MODULES file set, test binary links the library and `import`s it.
-- **Next up: M2** — coroutine background poller that *runs* `git status`
-  off-thread and feeds parsed `file_status` to mg's modeline via an `extern "C"`
-  bridge. First use of coroutines + the first real C↔C++ bridge.
+- **M2a done** — `mg.fswatch` watcher (kqueue verified on macOS). Pattern for
+  platform code: compile-time `#if` backend selection inside the module's global
+  fragment, one public interface. ⚠ The **inotify** backend is unverified on
+  this Mac (no Linux headers) — do not assume it compiles until Linux CI runs.
+- **Next up: M2b** — coroutine layer wrapping `mg.fswatch` (`co_await` the
+  watcher fd). First use of C++20 coroutines.
 - M1 follow-ups (when needed): C-quoted/special-char paths, `-z` NUL format,
   commit-DAG (`git log`) and refs parsing.
