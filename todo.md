@@ -228,7 +228,8 @@ are done & PR'd (#14, branch `m8-nav`). Next is the engine slice (spec:
   read-only `*magit-help*` key legend · ⏳ M8-3 stash/branches sections
   (libgit2 listers) · M8-4 section nav. Spec:
   `docs/superpowers/specs/2026-06-19-m8-magit-breadth-design.md`.
-  ⚠ magit keymap entries MUST stay in ascending key order (`doscan` scan).
+  ⚠ magit keymap entries MUST stay in ascending key order (`doscan` scan) —
+  now enforced: `magit_assert_keymap_sorted()` panics on first `C-x g` if not.
 - **Magit roadmap:** ✅ M5 discard (`k`) · ✅ M6 commit (`c`) · ✅ M7 inline
   diffs + hunk staging (`TAB`/`s`/`u` on a hunk) · ⏳ M8 breadth (M8-1/M8-2
   done; M8-3 stash/branches + M8-4 nav remain).
