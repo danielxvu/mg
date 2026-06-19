@@ -181,3 +181,11 @@ TEST_CASE("mg_magit_stage stages the file at a path")
 
     fs::remove_all(dir);
 }
+
+TEST_CASE("mg_magit_discard removes an untracked file")
+{
+    auto dir = make_repo_with_changes(); // untracked.txt is untracked
+    CHECK(mg_magit_discard(dir.string().c_str(), "untracked.txt") == 1);
+    CHECK_FALSE(fs::exists(dir / "untracked.txt"));
+    fs::remove_all(dir);
+}

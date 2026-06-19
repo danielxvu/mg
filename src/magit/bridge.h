@@ -41,10 +41,12 @@ typedef void (*mg_magit_emit_fn)(void *ctx, const char *line, int kind,
                                  const char *path);
 int mg_magit_status_buffer(const char *repo_path, mg_magit_emit_fn emit, void *ctx);
 
-/* Stage / unstage a single file (path relative to the repo root). Returns 1 on
- * success, 0 on failure. */
+/* Stage / unstage / discard a single file (path relative to the repo root).
+ * Returns 1 on success, 0 on failure. Discard deletes an untracked file or
+ * reverts a tracked one to HEAD. */
 int mg_magit_stage(const char *repo_path, const char *path);
 int mg_magit_unstage(const char *repo_path, const char *path);
+int mg_magit_discard(const char *repo_path, const char *path);
 
 #ifdef __cplusplus
 }
