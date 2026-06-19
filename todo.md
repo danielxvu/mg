@@ -61,11 +61,14 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
 > Promoted ahead of the core-buffer work: it is **greenfield** (zero coupling to
 > `def.h`) so it validates the whole pipeline — module + bridge + TDD — on a
 > clean slate. Needs F3 (modules) first to be a true `export module`.
-- [ ] **M1 — `src/magit/` DAG value types + porcelain parser.** `mg.magit`
-      module: commit/ref/oid value types; parse `git log --pretty`/`git status
-      --porcelain` into them. Unit-tested against checked-in fixture strings (no
-      live git needed). Pure logic — ranges/views for tokenization, `std::expected`
-      for parse errors.
+- [x] **M1 — `mg.magit` working-tree status parser.** `export module mg.magit`
+      at `src/magit/magit.cppm` (module library `mg_magit`, gated by
+      `ENABLE_NATIVE_MAGIT`, enabled in the `cpp` preset). Value types
+      (`status` enum, `file_status`, `parse_error`) + `parse_status_line` /
+      `parse_status` returning `std::expected`; `std::views::split` for lines.
+      11 doctest cases (XY codes, rename `->`, multi-line, malformed). 0 warnings.
+      Commit-DAG (`git log`) + refs are later slices. _(commit: M1)_  See spec
+      `docs/superpowers/specs/2026-06-19-m1-magit-status-parser-design.md`.
 - [ ] **M2 — Coroutine background poller.** `co_await`-based non-blocking
       `git status`/log polling feeding the status line via an `extern "C"` shim.
 
@@ -108,5 +111,11 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
 - **Module pipeline is live** — real modules (M1 `mg.magit`) can be built now.
 - **Foundation F1–F3 + F2 all complete.** OFF path (c-legacy) builds upstream
   mg; ON path (cpp) builds mg + C++ modules + tests. Both green.
-- **Next up: M1** — greenfield `mg.magit` module (commit/ref value types +
-  porcelain parser), the first real feature module on the verified pipeline.
+- **M1 done** — `mg.magit` status parser is the first live feature module.
+  Pattern for future modules: module library under `src/<name>/`, PUBLIC
+  CXX_MODULES file set, test binary links the library and `import`s it.
+- **Next up: M2** — coroutine background poller that *runs* `git status`
+  off-thread and feeds parsed `file_status` to mg's modeline via an `extern "C"`
+  bridge. First use of coroutines + the first real C↔C++ bridge.
+- M1 follow-ups (when needed): C-quoted/special-char paths, `-z` NUL format,
+  commit-DAG (`git log`) and refs parsing.

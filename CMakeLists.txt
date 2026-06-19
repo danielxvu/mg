@@ -47,13 +47,19 @@ include(CTest)
 # smoke test under BUILD_TESTING regardless of the upgrades flag.
 add_subdirectory(src)
 
+if(ENABLE_NATIVE_MAGIT AND NOT ENABLE_CPP_UPGRADES)
+    message(FATAL_ERROR
+        "ENABLE_NATIVE_MAGIT requires ENABLE_CPP_UPGRADES=ON (it is a C++ engine).")
+endif()
+
+# Native Git engine (C++20 modules). Configured before tests so its module
+# library exists when the test suite links test_magit against it.
+if(ENABLE_NATIVE_MAGIT)
+    add_subdirectory(src/magit)
+endif()
+
 # The C++ unit-test suite exercises the new C++23 modules, so it is only
 # meaningful when the upgrades are switched on.
 if(ENABLE_CPP_UPGRADES AND BUILD_TESTING)
     add_subdirectory(tests)
-endif()
-
-if(ENABLE_NATIVE_MAGIT AND NOT ENABLE_CPP_UPGRADES)
-    message(FATAL_ERROR
-        "ENABLE_NATIVE_MAGIT requires ENABLE_CPP_UPGRADES=ON (it is a C++ engine).")
 endif()

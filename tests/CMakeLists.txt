@@ -40,3 +40,10 @@ mg_add_test(test_sanity test_sanity.cpp)
 mg_add_module_test(test_modules
     SOURCES test_modules.cpp
     MODULES mg.probe.cppm)
+
+# Magit module tests: import mg.magit from the mg_magit module library.
+if(ENABLE_NATIVE_MAGIT)
+    add_executable(test_magit test_magit.cpp)
+    target_link_libraries(test_magit PRIVATE doctest::doctest mg_magit)
+    doctest_discover_tests(test_magit)
+endif()

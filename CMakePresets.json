@@ -21,6 +21,7 @@
       "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
         "ENABLE_CPP_UPGRADES": "ON",
+        "ENABLE_NATIVE_MAGIT": "ON",
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
         "CMAKE_C_COMPILER": "/opt/local/bin/clang-mp-21",
         "CMAKE_CXX_COMPILER": "/opt/local/bin/clang++-mp-21",
