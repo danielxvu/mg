@@ -22,7 +22,7 @@
 cmake_minimum_required(VERSION 3.28)
 
 project(mg
-    VERSION 7.6
+    VERSION 3.8
     DESCRIPTION "MicroGnuEmacs -- incremental modern-C++ refactor"
     LANGUAGES C CXX)
 
@@ -42,8 +42,13 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # Honour BUILD_TESTING (defaults ON) via CTest.
 include(CTest)
 
-# The unit-test suite exercises the new C++ modules, so it is only meaningful
-# when the upgrades are switched on.
+# The legacy mg editor (faithful plain C). Built in every configuration; it is
+# the entire program when ENABLE_CPP_UPGRADES=OFF, and registers the `mg -h`
+# smoke test under BUILD_TESTING regardless of the upgrades flag.
+add_subdirectory(src)
+
+# The C++ unit-test suite exercises the new C++23 modules, so it is only
+# meaningful when the upgrades are switched on.
 if(ENABLE_CPP_UPGRADES AND BUILD_TESTING)
     add_subdirectory(tests)
 endif()

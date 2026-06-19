@@ -43,14 +43,14 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
 ### Foundation
 - [x] **F1 — CMake skeleton + doctest test scaffolding.** Options, C++23, CTest,
       doctest fetch, sanity test (harness + `std::expected`). _(commit 80dec5e)_
-- [ ] **F2 — Faithful legacy C build.** _(toolchain-independent — do next.)_
-      Generate `src/config.h` via CMake feature checks mirroring `configure.ac`:
-      `HAVE_STRLCPY/STRLCAT/REALLOCARRAY/STRTONUM/FPARSELN/FUTIMENS/OPENPTY/`
-      `LOGIN_TTY/…`. For each missing symbol, compile the matching `lib/*.c`
-      fallback (macOS lacks `strtonum`, `fparseln`). Build `mg` from `src/*.c`
-      with upstream `-W -Wall -Wextra -Wno-unused-parameter` when
-      `ENABLE_CPP_UPGRADES=OFF`. **Smoke test:** `mg -h` exits 0 and prints
-      `usage:` (NOT `--version` — mg has no version flag; getopt = `hnRb:f:u:`).
+- [x] **F2 — Faithful legacy C build.** `cmake/config.h.in` + `src/CMakeLists.txt`
+      feature-detect the host (`check_function_exists`/`check_include_file`
+      mirroring `configure.ac`), generate `config.h` into the build tree, compile
+      the default source set + `lib/` fallbacks for missing libc funcs (macOS
+      needs only `reallocarray`), and link the termcap/curses cascade. Upstream
+      `-W -Wall -Wextra -Wno-unused-parameter` → **0 warnings**. `mg` builds under
+      both Apple Clang (c-legacy) and clang-21 (cpp). **Smoke test:** `mg -h`
+      exits 0 + prints `usage:`. _(commit: F2)_
 - [x] **F3 — MacPorts clang-21 toolchain + verify C++20 modules.** Added
       `CMakePresets.json` (`cpp` = clang-21+Ninja+scan-deps; `c-legacy` = Apple
       Clang). `tests/mg.probe.cppm` (`export module mg.probe;`) + `test_modules`
@@ -93,6 +93,10 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
   verifying the module pipeline was the highest-value de-risk and it unblocks
   M1. F2 (faithful C build) is independent and remains the open foundation task.
   Module build order confirmed working: dyndep scan → mg.probe.cppm.o → importer.
+- **2026-06-19 (F2):** faithful C build done. Only macOS libc delta is
+  `reallocarray` (→ `lib/reallocarray.c`); all other AC_REPLACE_FUNCS link.
+  `def.h:13` includes `config.h` via a TAB, so it reaches every TU. Foundation
+  (F1–F3) complete; next is the first real feature module, **M1 (mg.magit)**.
 
 ## Notes for the next iteration
 - **Branch:** all refactor work lives on `cpp-refactor` (NOT `master`). Stay on
@@ -102,6 +106,7 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
   `mg_add_module_test(name SOURCES … MODULES …)`. Reuse per module.
 - **Module pipeline is live** — real modules (M1 `mg.magit`) can be built now.
-- **Open foundation task: F2** (faithful C build via generated `config.h`).
-  Next up is either **F2** (finish the OFF-path contract) or **M1** (start the
-  greenfield magit module on the now-verified pipeline) — both unblocked.
+- **Foundation F1–F3 + F2 all complete.** OFF path (c-legacy) builds upstream
+  mg; ON path (cpp) builds mg + C++ modules + tests. Both green.
+- **Next up: M1** — greenfield `mg.magit` module (commit/ref value types +
+  porcelain parser), the first real feature module on the verified pipeline.
