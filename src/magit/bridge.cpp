@@ -65,9 +65,13 @@ public:
 private:
     void publish()
     {
+        std::string line;
+        if (auto head = mg::git::read_head(repo_);
+            head && !head->branch.empty())
+            line = head->branch + " ";
+
         auto st = mg::git::repo_status(repo_);
-        std::string line =
-            st ? mg::magit::summarize(*st) : std::string("git ?");
+        line += st ? mg::magit::summarize(*st) : std::string("git ?");
         {
             std::lock_guard lk(mu_);
             current_ = std::move(line);

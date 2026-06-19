@@ -113,7 +113,13 @@ TEST_CASE("bridge publishes a summarized modeline for a repo")
     char buf[128] = {0};
     int len = mg_magit_modeline(buf, sizeof buf);
     CHECK(len > 0);
-    CHECK(std::string(buf) == "git *1 ?1");
+
+    // Modeline is "<branch> git *1 ?1": a non-empty branch, then the status.
+    std::string ml(buf);
+    auto pos = ml.find(" git ");
+    REQUIRE(pos != std::string::npos);
+    CHECK(pos > 0);                            // non-empty branch prefix
+    CHECK(ml.substr(pos + 1) == "git *1 ?1");  // status part unchanged
 
     mg_magit_stop();
     fs::remove_all(dir);

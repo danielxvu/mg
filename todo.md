@@ -188,9 +188,9 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
     - M3-1 read_head + recent_commits (libgit2 refs/revwalk); M3-2 bridge
       `mg_magit_status_buffer` (callback-emit composition); M3-3 the C command +
       funmap/keymap glue, all `#ifdef ENABLE_NATIVE_MAGIT`.
-- **Next up: branch name in the modeline** — reuse `read_head().branch` so the
-  modeline reads e.g. `master git *1 ?2`.
+- **🎉 Branch name in the modeline** — the monitor prepends `read_head().branch`,
+  so the modeline reads e.g. `main git *1 ?2`.
 - **Possible later directions:** live-while-idle; auto-refresh the status buffer
-  on fs events; interactive staging/diffs; merge the PR stack.
+  on fs events; interactive staging/diffs; merge the PR stack (#1–#7+).
 - Follow-ups (when needed): C-quoted/special-char paths, `-z` NUL format,
   commit-DAG (`git log`) and refs parsing, recursive worktree watching.
