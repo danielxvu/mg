@@ -87,8 +87,16 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
         mis-links through a module's global fragment on clang-21 (toolchain bug,
         reproduced). 4 slices (generator finite/infinite, watch_stream
         stopped/event) + stop_flag. _(commit: M2b)_
-  - [ ] **M2c** — run `git status --porcelain` on a fired event, summarize via
-        M1's `parse_status` into a modeline string.
+  - [ ] **M2c** — **libgit2** status reader + summary (pivoted from subprocess;
+        libgit2 1.9.4 +threadsafe installed). Spec:
+        `docs/superpowers/specs/2026-06-19-m2c-libgit2-status-design.md`.
+    - [ ] **M2c-1** — retire M1's porcelain parser (keep `status`/`file_status`
+          types); add pure `summarize(span<file_status>) -> string` modeline
+          line. ⚠ Forward removal only — do NOT rebase the frozen `m1-magit`
+          branch (PRs #3/#4 stack on it).
+    - [ ] **M2c-2** — `mg.git` module: RAII-wrapped libgit2; `repo_status(path)
+          -> expected<vector<file_status>, git_error>` via `git_status_list`.
+          Integration-tested with a libgit2-built fixture repo (no shell git).
   - [ ] **M2d** — `extern "C"` bridge + minimal C-core hook: a `std::thread`
         (+ `mg::stop_flag` & RAII join — not `std::jthread`, see M2b) runs
         `for (auto ev : watch_stream(...))`, on each event sets a dirty flag
