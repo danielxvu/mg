@@ -225,6 +225,24 @@ TEST_CASE("discard() deletes an untracked file")
     fs::remove_all(dir);
 }
 
+TEST_CASE("file_diff returns hunks for an unstaged change")
+{
+    auto dir = make_repo_with_commit("base"); // a.txt committed as "content"
+    std::ofstream(dir / "a.txt") << "content\nmore line\n"; // unstaged edit
+
+    auto d = mg::git::file_diff(dir.string(), "a.txt", /*staged=*/false);
+    REQUIRE(d.has_value());
+    REQUIRE_FALSE(d->empty());
+
+    bool added = false;
+    for (const auto &h : *d)
+        for (const auto &l : h.lines)
+            if (l.origin == '+' && l.content.find("more line") != std::string::npos)
+                added = true;
+    CHECK(added);
+    fs::remove_all(dir);
+}
+
 TEST_CASE("commit() creates a commit from the staged tree")
 {
     auto dir = make_temp_dir();

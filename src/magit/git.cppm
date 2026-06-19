@@ -48,6 +48,10 @@ using tree_ptr = std::unique_ptr<
     git_tree, decltype([](git_tree *t) { git_tree_free(t); })>;
 using sig_ptr = std::unique_ptr<
     git_signature, decltype([](git_signature *s) { git_signature_free(s); })>;
+using diff_ptr = std::unique_ptr<
+    git_diff, decltype([](git_diff *d) { git_diff_free(d); })>;
+using patch_ptr = std::unique_ptr<
+    git_patch, decltype([](git_patch *p) { git_patch_free(p); })>;
 
 // 8-char abbreviated oid, like git's default short form.
 inline std::string short_oid(const git_oid *oid)
@@ -115,6 +119,18 @@ struct commit_brief {
     std::string summary;
 };
 
+// One line of a diff: origin is git's marker ('+', '-', ' ', etc.); content
+// includes the trailing newline.
+struct diff_line {
+    char origin;
+    std::string content;
+};
+
+struct hunk {
+    std::string header;            // e.g. "@@ -1,3 +1,4 @@"
+    std::vector<diff_line> lines;
+};
+
 std::expected<std::vector<mg::magit::file_status>, error>
 repo_status(std::string path);
 
@@ -134,6 +150,10 @@ std::expected<void, error> discard(std::string repo, std::string file);
 
 // Commit the staged tree with `message`; returns the new commit's short oid.
 std::expected<std::string, error> commit(std::string repo, std::string message);
+
+// The hunks of `path`'s diff: unstaged (workdir vs index) or staged (index vs HEAD).
+std::expected<std::vector<hunk>, error>
+file_diff(std::string repo, std::string path, bool staged);
 
 } // namespace mg::git
 
@@ -385,6 +405,66 @@ std::expected<std::string, error> commit(std::string repo, std::string message)
         return std::unexpected(last_error());
 
     return detail::short_oid(&commit_oid);
+}
+
+std::expected<std::vector<hunk>, error>
+file_diff(std::string repo, std::string path, bool staged)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    git_diff_options opts;
+    git_diff_options_init(&opts, GIT_DIFF_OPTIONS_VERSION);
+    char *paths[1] = {const_cast<char *>(path.c_str())};
+    opts.pathspec.strings = paths;
+    opts.pathspec.count = 1;
+
+    git_diff *raw_diff = nullptr;
+    if (staged) {
+        // index vs HEAD's tree (peeled; null if unborn).
+        git_object *raw_tree = nullptr;
+        git_revparse_single(&raw_tree, r.get(), "HEAD^{tree}");
+        detail::object_ptr tree(raw_tree);
+        if (git_diff_tree_to_index(&raw_diff, r.get(),
+                                   reinterpret_cast<git_tree *>(tree.get()),
+                                   nullptr, &opts) != 0)
+            return std::unexpected(last_error());
+    } else {
+        if (git_diff_index_to_workdir(&raw_diff, r.get(), nullptr, &opts) != 0)
+            return std::unexpected(last_error());
+    }
+    detail::diff_ptr diff(raw_diff);
+
+    std::vector<hunk> out;
+    const size_t ndeltas = git_diff_num_deltas(diff.get());
+    for (size_t di = 0; di < ndeltas; ++di) {
+        git_patch *raw_patch = nullptr;
+        if (git_patch_from_diff(&raw_patch, diff.get(), di) != 0)
+            continue;
+        detail::patch_ptr patch(raw_patch);
+
+        const size_t nhunks = git_patch_num_hunks(patch.get());
+        for (size_t hi = 0; hi < nhunks; ++hi) {
+            const git_diff_hunk *gh = nullptr;
+            size_t nlines = 0;
+            if (git_patch_get_hunk(&gh, &nlines, patch.get(), hi) != 0)
+                continue;
+            hunk h;
+            h.header.assign(gh->header, gh->header_len);
+            for (size_t li = 0; li < nlines; ++li) {
+                const git_diff_line *gl = nullptr;
+                if (git_patch_get_line_in_hunk(&gl, patch.get(), hi, li) != 0)
+                    continue;
+                h.lines.push_back(diff_line{
+                    gl->origin, std::string(gl->content, gl->content_len)});
+            }
+            out.push_back(std::move(h));
+        }
+    }
+    return out;
 }
 
 } // namespace mg::git
