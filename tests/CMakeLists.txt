@@ -54,4 +54,8 @@ if(ENABLE_NATIVE_MAGIT)
     add_executable(test_coro test_coro.cpp)
     target_link_libraries(test_coro PRIVATE doctest::doctest mg_magit)
     doctest_discover_tests(test_coro)
+
+    add_executable(test_git test_git.cpp)
+    target_link_libraries(test_git PRIVATE doctest::doctest mg_magit)
+    doctest_discover_tests(test_git)
 endif()

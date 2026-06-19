@@ -87,16 +87,18 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
         mis-links through a module's global fragment on clang-21 (toolchain bug,
         reproduced). 4 slices (generator finite/infinite, watch_stream
         stopped/event) + stop_flag. _(commit: M2b)_
-  - [ ] **M2c** — **libgit2** status reader + summary (pivoted from subprocess;
-        libgit2 1.9.4 +threadsafe installed). Spec:
+  - [x] **M2c** — **libgit2** status reader + summary (pivoted from subprocess;
+        libgit2 1.9.4 +threadsafe). Spec:
         `docs/superpowers/specs/2026-06-19-m2c-libgit2-status-design.md`.
-    - [ ] **M2c-1** — retire M1's porcelain parser (keep `status`/`file_status`
-          types); add pure `summarize(span<file_status>) -> string` modeline
-          line. ⚠ Forward removal only — do NOT rebase the frozen `m1-magit`
-          branch (PRs #3/#4 stack on it).
-    - [ ] **M2c-2** — `mg.git` module: RAII-wrapped libgit2; `repo_status(path)
-          -> expected<vector<file_status>, git_error>` via `git_status_list`.
-          Integration-tested with a libgit2-built fixture repo (no shell git).
+    - [x] **M2c-1** — retired M1's porcelain parser (kept `status`/`file_status`
+          types); added pure `summarize(span<file_status>) -> string`
+          (`"git clean"` / `"git *2 +1 ?3"`). Forward removal; `m1-magit` (PR #2)
+          untouched. _(commit: M2c-1)_
+    - [x] **M2c-2** — `mg.git` module: RAII-wrapped libgit2 (init guard +
+          `unique_ptr` handle owners), `repo_status(path) -> expected<vector<
+          file_status>, mg::git::error>` via `git_status_list`. libgit2 linked
+          to `mg_magit` via pkg-config. Integration-tested with a libgit2-built
+          fixture (no shell git). _(commit: M2c-2)_
   - [ ] **M2d** — `extern "C"` bridge + minimal C-core hook: a `std::thread`
         (+ `mg::stop_flag` & RAII join — not `std::jthread`, see M2b) runs
         `for (auto ev : watch_stream(...))`, on each event sets a dirty flag
@@ -157,7 +159,12 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
   standard headers with libc++ runtime symbols (e.g. `<stop_token>`) can
   mis-link through a module's global fragment on clang-21 — prefer header-only
   primitives across module boundaries (`<atomic>`, `<expected>`, ranges are safe).
-- **Next up: M2c** — run `git status --porcelain` on a watch event and summarize
-  via M1's `parse_status` into a modeline string.
+- **M2c done** — git access is now libgit2 (structured, no subprocess). `mg.git`
+  RAII-wraps the C handles; pattern for wrapping other C libs. libgit2 sets up
+  the future commit-DAG (`git_revwalk`) work too.
+- **Next up: M2d** — the `extern "C"` bridge + C-core hook: a `std::thread`
+  (+ `mg::stop_flag`/RAII join) runs `for (ev : watch_stream(...)) { repo_status
+  → summarize → publish }`; sets a dirty flag (à la `winch_flag` in `main.c`)
+  and exposes a modeline getter (`display.c`/`modes.c`). First real C↔C++ bridge.
 - M1 follow-ups (when needed): C-quoted/special-char paths, `-z` NUL format,
   commit-DAG (`git log`) and refs parsing.
