@@ -211,3 +211,35 @@ TEST_CASE("unstage() resets a staged modification to HEAD")
         }
     fs::remove_all(dir);
 }
+
+TEST_CASE("discard() deletes an untracked file")
+{
+    auto dir = make_repo_with_changes(); // untracked.txt is untracked
+    REQUIRE(mg::git::discard(dir.string(), "untracked.txt").has_value());
+
+    CHECK_FALSE(fs::exists(dir / "untracked.txt")); // gone from disk
+    auto st = mg::git::repo_status(dir.string());
+    REQUIRE(st.has_value());
+    for (const auto &e : *st)
+        CHECK(e.path != "untracked.txt");
+    fs::remove_all(dir);
+}
+
+TEST_CASE("discard() reverts a modified tracked file to HEAD")
+{
+    auto dir = make_repo_with_commit("v1"); // a.txt committed as "content"
+    std::ofstream(dir / "a.txt") << "modified content"; // unstaged change
+
+    REQUIRE(mg::git::discard(dir.string(), "a.txt").has_value());
+
+    std::ifstream in(dir / "a.txt");
+    std::string content;
+    std::getline(in, content);
+    CHECK(content == "content"); // reverted to HEAD
+
+    auto st = mg::git::repo_status(dir.string());
+    REQUIRE(st.has_value());
+    for (const auto &e : *st)
+        CHECK(e.path != "a.txt"); // clean again
+    fs::remove_all(dir);
+}

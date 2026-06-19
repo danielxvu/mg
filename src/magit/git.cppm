@@ -7,8 +7,10 @@
 module;
 #include <cstddef>
 #include <expected>
+#include <filesystem>
 #include <memory>
 #include <string>
+#include <system_error>
 #include <vector>
 
 #include <git2.h>
@@ -122,6 +124,9 @@ std::expected<void, error> stage(std::string repo, std::string file);
 
 // Unstage `file`: reset its index entry to HEAD (or drop it if unborn).
 std::expected<void, error> unstage(std::string repo, std::string file);
+
+// Discard `file`'s changes: delete it if untracked, else revert it to HEAD.
+std::expected<void, error> discard(std::string repo, std::string file);
 
 } // namespace mg::git
 
@@ -293,6 +298,41 @@ std::expected<void, error> unstage(std::string repo, std::string file)
     detail::index_ptr idx(raw_idx);
     if (git_index_remove_bypath(idx.get(), file.c_str()) != 0 ||
         git_index_write(idx.get()) != 0)
+        return std::unexpected(last_error());
+    return {};
+}
+
+std::expected<void, error> discard(std::string repo, std::string file)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    unsigned int flags = 0;
+    const bool untracked = git_status_file(&flags, r.get(), file.c_str()) == 0 &&
+                           (flags & GIT_STATUS_WT_NEW);
+
+    if (untracked) {
+        const char *wd = git_repository_workdir(r.get());
+        if (wd == nullptr)
+            return std::unexpected(error{0, "no work tree"});
+        std::error_code ec;
+        std::filesystem::remove(std::filesystem::path(wd) / file, ec);
+        if (ec)
+            return std::unexpected(error{0, ec.message()});
+        return {};
+    }
+
+    // Tracked: force-checkout the path from HEAD, dropping worktree+index edits.
+    git_checkout_options opts;
+    git_checkout_options_init(&opts, GIT_CHECKOUT_OPTIONS_VERSION);
+    opts.checkout_strategy = GIT_CHECKOUT_FORCE;
+    char *paths[1] = {const_cast<char *>(file.c_str())};
+    opts.paths.strings = paths;
+    opts.paths.count = 1;
+    if (git_checkout_head(r.get(), &opts) != 0)
         return std::unexpected(last_error());
     return {};
 }
