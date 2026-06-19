@@ -140,7 +140,8 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
   named branch at that tip and open a **stacked** PR (base = the previous
   milestone's branch, so each PR shows only its own diff). Done so far:
   `foundation`→master (#1), `m1-magit`→foundation (#2), `m2a-fswatch`→m1-magit
-  (#3), `m2b-coro`→m2a-fswatch (#4). Next milestone freezes a branch on `m2b-coro`.
+  (#3), `m2b-coro`→m2a-fswatch (#4), `m2c-libgit2`→m2b-coro (#5). Next milestone
+  freezes a branch on `m2c-libgit2`.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
