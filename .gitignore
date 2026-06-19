@@ -15,3 +15,9 @@ GSYMS
 GTAGS
 ID
 *~
+
+# CMake / modern-C++ refactor build trees
+build/
+build-*/
+cmake-build-*/
+src/config.h
