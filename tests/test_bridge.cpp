@@ -122,7 +122,79 @@ fs::path make_repo_unstaged()
     git_libgit2_shutdown();
     return dir;
 }
+// A repo with one commit, an extra branch, and one stashed modification.
+fs::path make_repo_stash_branch()
+{
+    auto dir = make_temp_dir();
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_init(&repo, dir.string().c_str(), 0) == 0);
+    std::ofstream(dir / "a.txt") << "one\n";
+    git_index *idx = nullptr;
+    REQUIRE(git_repository_index(&idx, repo) == 0);
+    REQUIRE(git_index_add_bypath(idx, "a.txt") == 0);
+    REQUIRE(git_index_write(idx) == 0);
+    git_oid toid;
+    REQUIRE(git_index_write_tree(&toid, idx) == 0);
+    git_tree *tree = nullptr;
+    REQUIRE(git_tree_lookup(&tree, repo, &toid) == 0);
+    git_signature *sig = nullptr;
+    REQUIRE(git_signature_now(&sig, "T", "t@t") == 0);
+    git_oid coid;
+    REQUIRE(git_commit_create(&coid, repo, "HEAD", sig, sig, nullptr, "c1", tree,
+                              0, nullptr) == 0);
+    git_commit *target = nullptr;
+    REQUIRE(git_commit_lookup(&target, repo, &coid) == 0);
+    git_reference *branch = nullptr;
+    REQUIRE(git_branch_create(&branch, repo, "feature", target, 0) == 0);
+    git_reference_free(branch);
+    git_commit_free(target);
+
+    std::ofstream(dir / "a.txt") << "one\ntwo\n"; // dirty -> stashable
+    git_oid soid;
+    REQUIRE(git_stash_save(&soid, repo, sig, "WIP work", 0) == 0);
+
+    git_signature_free(sig);
+    git_tree_free(tree);
+    git_index_free(idx);
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+    return dir;
+}
 } // namespace
+
+TEST_CASE("mg_magit_status_buffer emits Stashes and Branches sections")
+{
+    auto dir = make_repo_stash_branch();
+
+    struct row { std::string line; int kind; };
+    std::vector<row> rows;
+    mg_magit_status_buffer(
+        dir.string().c_str(), nullptr, 0,
+        [](void *ctx, const char *line, int kind, const char *, int) {
+            static_cast<std::vector<row> *>(ctx)->push_back({line, kind});
+        },
+        &rows);
+
+    std::vector<std::string> lines;
+    for (const auto &r : rows)
+        lines.push_back(r.line);
+    CHECK(any_line_has(lines, "Stashes (1)"));
+    CHECK(any_line_has(lines, "WIP work"));
+    CHECK(any_line_has(lines, "Branches (2)"));
+    CHECK(any_line_has(lines, "feature"));
+
+    bool stash_kind = false, branch_kind = false;
+    for (const auto &r : rows) {
+        if (r.kind == MG_LINE_STASH)
+            stash_kind = true;
+        if (r.kind == MG_LINE_BRANCH)
+            branch_kind = true;
+    }
+    CHECK(stash_kind);
+    CHECK(branch_kind);
+    fs::remove_all(dir);
+}
 
 TEST_CASE("bridge publishes a summarized modeline for a repo")
 {

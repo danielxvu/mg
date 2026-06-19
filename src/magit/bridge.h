@@ -36,6 +36,8 @@ int mg_magit_modeline(char *buf, size_t buflen);
 #define MG_LINE_STAGED    3
 #define MG_LINE_HUNK      4   /* a hunk header under an expanded file */
 #define MG_LINE_DIFF      5   /* a +/-/context diff line within a hunk */
+#define MG_LINE_STASH     6   /* a stash entry (stash@{N}) */
+#define MG_LINE_BRANCH    7   /* a local branch */
 
 /* Compose the *magit-status* buffer for the repo at `repo_path`, calling
  * `emit(ctx, line, kind, path, hunk)` once per line. Files whose path is in

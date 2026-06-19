@@ -52,6 +52,9 @@ using diff_ptr = std::unique_ptr<
     git_diff, decltype([](git_diff *d) { git_diff_free(d); })>;
 using patch_ptr = std::unique_ptr<
     git_patch, decltype([](git_patch *p) { git_patch_free(p); })>;
+using branch_iter_ptr = std::unique_ptr<
+    git_branch_iterator,
+    decltype([](git_branch_iterator *i) { git_branch_iterator_free(i); })>;
 
 // 8-char abbreviated oid, like git's default short form.
 inline std::string short_oid(const git_oid *oid)
@@ -131,6 +134,17 @@ struct commit_brief {
     std::string summary;
 };
 
+struct stash_entry {
+    std::size_t index;       // 0 = most recent (stash@{0})
+    std::string message;
+    std::string short_oid;
+};
+
+struct branch_entry {
+    std::string name;        // shorthand, e.g. "master"
+    bool is_head;            // true for the currently checked-out branch
+};
+
 // One line of a diff: origin is git's marker ('+', '-', ' ', etc.); content
 // includes the trailing newline.
 struct diff_line {
@@ -150,6 +164,12 @@ std::expected<head_info, error> read_head(std::string path);
 
 std::expected<std::vector<commit_brief>, error>
 recent_commits(std::string path, std::size_t n);
+
+// The repository's stash entries, most recent first.
+std::expected<std::vector<stash_entry>, error> stashes(std::string path);
+
+// The repository's local branches; one entry has is_head == true.
+std::expected<std::vector<branch_entry>, error> branches(std::string path);
 
 // Stage `file` (relative to the repo root) into the index.
 std::expected<void, error> stage(std::string repo, std::string file);
@@ -295,6 +315,57 @@ recent_commits(std::string path, std::size_t n)
         }
         out.push_back(std::move(cb));
     }
+    return out;
+}
+
+std::expected<std::vector<stash_entry>, error> stashes(std::string path)
+{
+    detail::init_guard guard;
+    git_repository *raw_repo = nullptr;
+    if (git_repository_open_ext(&raw_repo, path.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr repo(raw_repo);
+
+    std::vector<stash_entry> out;
+    auto cb = [](size_t index, const char *message, const git_oid *stash_id,
+                 void *payload) -> int {
+        auto *v = static_cast<std::vector<stash_entry> *>(payload);
+        v->push_back(stash_entry{index, message ? message : "",
+                                 detail::short_oid(stash_id)});
+        return 0; // continue
+    };
+    if (git_stash_foreach(repo.get(), cb, &out) != 0)
+        return std::unexpected(last_error());
+    return out;
+}
+
+std::expected<std::vector<branch_entry>, error> branches(std::string path)
+{
+    detail::init_guard guard;
+    git_repository *raw_repo = nullptr;
+    if (git_repository_open_ext(&raw_repo, path.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr repo(raw_repo);
+
+    git_branch_iterator *raw_iter = nullptr;
+    if (git_branch_iterator_new(&raw_iter, repo.get(), GIT_BRANCH_LOCAL) != 0)
+        return std::unexpected(last_error());
+    detail::branch_iter_ptr iter(raw_iter);
+
+    std::vector<branch_entry> out;
+    git_reference *raw_ref = nullptr;
+    git_branch_t type;
+    int rc;
+    while ((rc = git_branch_next(&raw_ref, &type, iter.get())) == 0) {
+        detail::ref_ptr ref(raw_ref);
+        branch_entry e;
+        if (const char *sh = git_reference_shorthand(ref.get()))
+            e.name = sh;
+        e.is_head = git_branch_is_head(ref.get()) == 1;
+        out.push_back(std::move(e));
+    }
+    if (rc != GIT_ITEROVER)
+        return std::unexpected(last_error());
     return out;
 }
 

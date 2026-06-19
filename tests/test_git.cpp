@@ -136,6 +136,47 @@ fs::path make_repo_with_commit(const char *message)
     git_libgit2_shutdown();
     return dir;
 }
+// A repo with one commit, then a modification stashed away.
+fs::path make_repo_with_stash(const char *stash_message)
+{
+    auto dir = make_repo_with_commit("base"); // a.txt committed as "content"
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_open(&repo, dir.string().c_str()) == 0);
+
+    std::ofstream(dir / "a.txt") << "content changed"; // dirty -> stashable
+    git_signature *sig = nullptr;
+    REQUIRE(git_signature_now(&sig, "Test", "t@example.com") == 0);
+    git_oid stash_oid;
+    REQUIRE(git_stash_save(&stash_oid, repo, sig, stash_message, 0) == 0);
+
+    git_signature_free(sig);
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+    return dir;
+}
+
+// A repo with a commit (default branch) plus an extra branch `extra`.
+fs::path make_repo_with_branch(const char *extra)
+{
+    auto dir = make_repo_with_commit("base");
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_open(&repo, dir.string().c_str()) == 0);
+
+    git_oid head_oid;
+    REQUIRE(git_reference_name_to_id(&head_oid, repo, "HEAD") == 0);
+    git_commit *target = nullptr;
+    REQUIRE(git_commit_lookup(&target, repo, &head_oid) == 0);
+    git_reference *branch = nullptr;
+    REQUIRE(git_branch_create(&branch, repo, extra, target, 0) == 0);
+
+    git_reference_free(branch);
+    git_commit_free(target);
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+    return dir;
+}
 } // namespace
 
 TEST_CASE("repo_status reports a staged and an untracked entry")
@@ -404,6 +445,50 @@ TEST_CASE("unstage_hunk drops one staged hunk back to unstaged")
             if (l.origin == '+' && l.content.find('B') != std::string::npos)
                 unstaged_has_B = true;
     CHECK(unstaged_has_B);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("stashes() lists a saved stash, newest first")
+{
+    auto dir = make_repo_with_stash("WIP on work");
+    auto s = mg::git::stashes(dir.string());
+    REQUIRE(s.has_value());
+    REQUIRE(s->size() == 1);
+    CHECK((*s)[0].index == 0);
+    CHECK((*s)[0].message.find("WIP on work") != std::string::npos);
+    CHECK((*s)[0].short_oid.size() == 8);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("stashes() on a repo with no stashes is empty (not an error)")
+{
+    auto dir = make_repo_with_commit("base");
+    auto s = mg::git::stashes(dir.string());
+    REQUIRE(s.has_value());
+    CHECK(s->empty());
+    fs::remove_all(dir);
+}
+
+TEST_CASE("branches() lists local branches and flags HEAD")
+{
+    auto dir = make_repo_with_branch("feature");
+    auto b = mg::git::branches(dir.string());
+    REQUIRE(b.has_value());
+    REQUIRE(b->size() == 2);
+
+    bool saw_feature = false, head_flagged = false;
+    int head_count = 0;
+    for (const auto &e : *b) {
+        if (e.name == "feature")
+            saw_feature = true;
+        if (e.is_head) {
+            head_count++;
+            head_flagged = (e.name != "feature"); // HEAD is the default branch
+        }
+    }
+    CHECK(saw_feature);
+    CHECK(head_flagged);
+    CHECK(head_count == 1); // exactly one current branch
     fs::remove_all(dir);
 }
 

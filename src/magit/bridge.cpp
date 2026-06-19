@@ -216,12 +216,29 @@ extern "C" int mg_magit_status_buffer(const char *repo_path,
         section("Staged changes", staged, true, true, MG_LINE_STAGED, true);
     }
 
+    if (auto stashes = mg::git::stashes(repo_path);
+        stashes && !stashes->empty()) {
+        out("");
+        out("Stashes (" + std::to_string(stashes->size()) + ")");
+        for (const auto &s : *stashes)
+            out("  stash@{" + std::to_string(s.index) + "} " + s.message,
+                MG_LINE_STASH);
+    }
+
     if (auto commits = mg::git::recent_commits(repo_path, 10);
         commits && !commits->empty()) {
         out("");
         out("Recent commits");
         for (const auto &c : *commits)
             out("  " + c.short_oid + " " + c.summary);
+    }
+
+    if (auto branches = mg::git::branches(repo_path);
+        branches && !branches->empty()) {
+        out("");
+        out("Branches (" + std::to_string(branches->size()) + ")");
+        for (const auto &b : *branches)
+            out(std::string(b.is_head ? "* " : "  ") + b.name, MG_LINE_BRANCH);
     }
 
     return n;
