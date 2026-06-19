@@ -110,6 +110,29 @@ static struct KEYMAPE (1) commitmap = {
 	}
 };
 
+/*
+ * doscan() finds a binding by scanning map_element[] in order and short-
+ * circuiting once the typed key passes an element's range -- so the elements
+ * MUST be sorted ascending and non-overlapping, or a binding silently becomes
+ * unreachable. This is a compile-time-fixed table, so any violation is a
+ * programming error: verify it once and panic (fail fast) rather than ship a
+ * dead key. Data-driven, so it covers whatever entries the table grows.
+ */
+static void
+magit_assert_keymap_sorted(void)
+{
+	int	i;
+
+	for (i = 0; i < magitmap.map_num; i++) {
+		struct map_element *e = &magitmap.map_element[i];
+
+		if (e->k_base > e->k_num)
+			panic("magit keymap: element has k_base > k_num");
+		if (i > 0 && magitmap.map_element[i - 1].k_num >= e->k_base)
+			panic("magit keymap: elements out of ascending order");
+	}
+}
+
 /* emit callback: record the line's kind/path, then append it to the buffer. */
 static void
 magit_emit(void *ctx, const char *line, int kind, const char *path, int hunk)
@@ -181,6 +204,7 @@ magit_status(int f, int n)
 	struct mgwin	*wp;
 
 	if (!initialized) {
+		magit_assert_keymap_sorted();
 		maps_add((KEYMAP *)&magitmap, "magit-status-mode");
 		initialized = 1;
 	}
