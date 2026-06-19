@@ -27,6 +27,12 @@ int mg_magit_take_dirty(void);
  * length. Returns 0 when no monitor is running. */
 int mg_magit_modeline(char *buf, size_t buflen);
 
+/* Compose the *magit-status* buffer for the repo at `repo_path`, calling
+ * `emit(ctx, line)` once per line. Returns the number of lines emitted. This is
+ * a one-shot read (independent of the background monitor). */
+typedef void (*mg_magit_emit_fn)(void *ctx, const char *line);
+int mg_magit_status_buffer(const char *repo_path, mg_magit_emit_fn emit, void *ctx);
+
 #ifdef __cplusplus
 }
 #endif

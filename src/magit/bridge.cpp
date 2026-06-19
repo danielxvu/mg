@@ -97,6 +97,20 @@ private:
 
 std::unique_ptr<monitor> g_monitor;
 
+// Human label for a status code, for the magit-status sections.
+const char *state_word(mg::magit::status s)
+{
+    using S = mg::magit::status;
+    switch (s) {
+    case S::added:    return "new file";
+    case S::deleted:  return "deleted";
+    case S::renamed:  return "renamed";
+    case S::copied:   return "copied";
+    case S::unmerged: return "unmerged";
+    default:          return "modified";
+    }
+}
+
 } // namespace
 
 extern "C" void mg_magit_start(const char *repo_path)
@@ -114,4 +128,69 @@ extern "C" int mg_magit_take_dirty(void)
 extern "C" int mg_magit_modeline(char *buf, size_t buflen)
 {
     return g_monitor ? g_monitor->modeline(buf, buflen) : 0;
+}
+
+extern "C" int mg_magit_status_buffer(const char *repo_path,
+                                      mg_magit_emit_fn emit, void *ctx)
+{
+    if (repo_path == nullptr || emit == nullptr)
+        return 0;
+
+    int n = 0;
+    auto out = [&](const std::string &line) {
+        emit(ctx, line.c_str());
+        ++n;
+    };
+
+    if (auto head = mg::git::read_head(repo_path)) {
+        out("On branch " +
+            (head->branch.empty() ? std::string("(unknown)") : head->branch));
+        if (!head->short_oid.empty())
+            out("Head:     " + head->short_oid + " " + head->summary);
+    }
+
+    if (auto st = mg::git::repo_status(repo_path)) {
+        using S = mg::magit::status;
+        std::vector<const mg::magit::file_status *> untracked, unstaged, staged;
+        for (const auto &e : *st) {
+            if (e.worktree == S::untracked) {
+                untracked.push_back(&e);
+                continue;
+            }
+            if (e.index != S::unmodified)
+                staged.push_back(&e);
+            if (e.worktree != S::unmodified)
+                unstaged.push_back(&e);
+        }
+
+        auto section = [&](const char *title,
+                           const std::vector<const mg::magit::file_status *> &v,
+                           bool labeled, bool use_index) {
+            if (v.empty())
+                return;
+            out("");
+            out(std::string(title) + " (" + std::to_string(v.size()) + ")");
+            for (const auto *e : v) {
+                if (labeled)
+                    out("  " + std::string(state_word(use_index ? e->index
+                                                                : e->worktree)) +
+                        "  " + e->path);
+                else
+                    out("  " + e->path);
+            }
+        };
+        section("Untracked files", untracked, false, false);
+        section("Unstaged changes", unstaged, true, false);
+        section("Staged changes", staged, true, true);
+    }
+
+    if (auto commits = mg::git::recent_commits(repo_path, 10);
+        commits && !commits->empty()) {
+        out("");
+        out("Recent commits");
+        for (const auto &c : *commits)
+            out("  " + c.short_oid + " " + c.summary);
+    }
+
+    return n;
 }
