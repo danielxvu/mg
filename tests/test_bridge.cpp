@@ -189,3 +189,37 @@ TEST_CASE("mg_magit_discard removes an untracked file")
     CHECK_FALSE(fs::exists(dir / "untracked.txt"));
     fs::remove_all(dir);
 }
+
+TEST_CASE("mg_magit_commit commits the staged tree")
+{
+    auto dir = make_temp_dir();
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_init(&repo, dir.string().c_str(), 0) == 0);
+    git_config *cfg = nullptr;
+    REQUIRE(git_repository_config(&cfg, repo) == 0);
+    git_config_set_string(cfg, "user.name", "T");
+    git_config_set_string(cfg, "user.email", "t@t");
+    git_config_free(cfg);
+    std::ofstream(dir / "f.txt") << "x";
+    git_index *idx = nullptr;
+    REQUIRE(git_repository_index(&idx, repo) == 0);
+    REQUIRE(git_index_add_bypath(idx, "f.txt") == 0);
+    REQUIRE(git_index_write(idx) == 0);
+    git_index_free(idx);
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+
+    CHECK(mg_magit_commit(dir.string().c_str(), "bridge commit") == 1);
+
+    std::vector<std::string> lines;
+    mg_magit_status_buffer(
+        dir.string().c_str(),
+        [](void *ctx, const char *line, int, const char *) {
+            static_cast<std::vector<std::string> *>(ctx)->emplace_back(line);
+        },
+        &lines);
+    CHECK(any_line_has(lines, "bridge commit"));   // appears under Recent commits
+    CHECK(!any_line_has(lines, "Staged changes")); // nothing staged now
+    fs::remove_all(dir);
+}

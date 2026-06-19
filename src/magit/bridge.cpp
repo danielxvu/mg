@@ -220,3 +220,10 @@ extern "C" int mg_magit_discard(const char *repo_path, const char *path)
         return 0;
     return mg::git::discard(repo_path, path).has_value() ? 1 : 0;
 }
+
+extern "C" int mg_magit_commit(const char *repo_path, const char *message)
+{
+    if (repo_path == nullptr || message == nullptr)
+        return 0;
+    return mg::git::commit(repo_path, message).has_value() ? 1 : 0;
+}
