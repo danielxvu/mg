@@ -144,6 +144,18 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
   `def.h:13` includes `config.h` via a TAB, so it reaches every TU. Foundation
   (F1–F3) complete; next is the first real feature module, **M1 (mg.magit)**.
 
+## ▶ RESUME HERE (next session)
+
+**M7-3 — hunk-level staging (git_apply).** The diff-viewing half (M7-1 read,
+M7-2 inline render + `TAB`) is done & PR'd (#12). To resume:
+- Add `mg.git` `stage_hunk(repo, path, hunk_index)` / `unstage_hunk(...)`:
+  build a one-hunk patch and `git_apply` it to the index
+  (`GIT_APPLY_LOCATION_INDEX`); reverse-apply to unstage.
+- Bridge `mg_magit_stage_hunk`/`unstage_hunk`. Then **M7-4**: in
+  `magit_cmd.c`, make `s`/`u` on a `MG_LINE_HUNK`/`MG_LINE_DIFF` line call the
+  hunk ops (the meta map already records `{kind,path,hunk}`).
+- Build: `cmake --preset cpp && ctest --preset cpp`. PR per the stacked workflow.
+
 ## Notes for the next iteration
 - **Branch / PR workflow:** ongoing work rides the rolling `cpp-refactor` tip
   (NOT `master`); commit atomically per iteration. At each milestone, freeze a
