@@ -107,10 +107,13 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
           `mg_magit_start`/`stop`/`take_dirty`/`modeline(buf,n)`. Cancellation =
           `request_stop()` + `watcher.wake()` + `join`. Tested end-to-end on a
           libgit2 fixture, no C-core edits. _(commit: M2d-1)_
-    - [ ] **M2d-2** — wire into the C core: `main.c` checks `mg_magit_take_dirty()`
-          near `winch_flag` + lifecycle; `display.c` `modeline()` appends
-          `mg_magit_modeline()`. **Decide live-while-idle** (signal-interrupt
-          `read()` in `ttgetc`'s EINTR handler, à la winch) vs update-on-keypress.
+    - [x] **M2d-2** — wired into the C core (first legacy-C edits, all under
+          `#ifdef ENABLE_NATIVE_MAGIT`): `main.c` `mg_magit_start(cwd)` +
+          `atexit(mg_magit_stop)` + `take_dirty()→sgarbf` by `winch_flag`;
+          `display.c` modeline appends `mg_magit_modeline()`. Root CMake links
+          `mg→mg_magit` + `LINKER_LANGUAGE CXX`. **Live-update = on-interaction**
+          (Magit-faithful). Verified end-to-end: cpp `mg` shows `git *1 ?2` in a
+          pty-driven temp repo; OFF `mg` has 0 `mg_magit` symbols. _(commit: M2d-2)_
 
 ### Core engine (later — honestly scoped after review)
 - [ ] **C1 — `mg.text` pure leaf utilities.** Only genuinely free-standing
@@ -175,9 +178,11 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
 - **M2c done** — git access is now libgit2 (structured, no subprocess). `mg.git`
   RAII-wraps the C handles; pattern for wrapping other C libs. libgit2 sets up
   the future commit-DAG (`git_revwalk`) work too.
-- **M2d-1 done** — the full native-magit pipeline runs end-to-end behind the
-  `extern "C"` bridge (`bridge.h`), tested with no mg-core edits.
-- **Next up: M2d-2** — wire the bridge into `main.c`/`display.c` (first edits to
-  the legacy C core) + decide live-while-idle. Makes the feature user-visible.
+- **🎉 M2 COMPLETE** — the native-magit modeline works end-to-end in the real
+  editor: cpp `mg` in a repo shows `git *N +M ?K`, updating on interaction
+  (Magit-faithful). OFF path stays byte-faithful upstream C (0 `mg_magit` syms).
+- **Possible next directions:** live-while-idle mode (watch-fd in `ttgetc`'s
+  poll, Emacs-native); a full `magit-status` *buffer* (not just the modeline)
+  via `git_revwalk`/refs; branch name in the modeline; or merge the PR stack.
 - Follow-ups (when needed): C-quoted/special-char paths, `-z` NUL format,
   commit-DAG (`git log`) and refs parsing, recursive worktree watching.

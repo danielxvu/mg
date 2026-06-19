@@ -99,8 +99,10 @@ repo_status(std::string path)
 {
     detail::init_guard guard;
 
+    // flags = 0 makes open_ext walk up parent directories (the default), so
+    // launching mg in any subdirectory of a repository still finds it.
     git_repository *raw_repo = nullptr;
-    if (git_repository_open(&raw_repo, path.c_str()) != 0)
+    if (git_repository_open_ext(&raw_repo, path.c_str(), 0, nullptr) != 0)
         return std::unexpected(last_error());
     detail::repo_ptr repo(raw_repo);
 

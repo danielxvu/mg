@@ -47,10 +47,20 @@ Build a libgit2 fixture repo (1 staged + 1 untracked) → `mg_magit_start` → p
 - `main.c`: near the `winch_flag` check, `if (mg_magit_take_dirty()) sgarbf = TRUE;`
   and `mg_magit_start(...)` / `mg_magit_stop()` in startup/teardown.
 - `display.c` `modeline()`: append `mg_magit_modeline(buf, n)` to the mode line.
-- **Live-while-idle decision (deferred to M2d-2):** mirror the `winch_flag`
-  path in `ttgetc`'s EINTR handler so a git change redraws the modeline while
-  mg is blocked in `read()`. Requires the monitor to signal the main thread.
-  Alternative: update-on-next-interaction (no signal). Decide at M2d-2.
+- **Live-while-idle decision (resolved 2026-06-19): on-interaction.** This
+  matches default Magit/VC behavior (refresh on command/save, not continuous
+  watching). The main-loop `take_dirty()` check redraws on the next interaction;
+  the fs-watcher already makes detection instant, so the modeline is never more
+  than one keypress stale. Live-while-idle (signal à la winch, or the
+  Emacs-native watch-fd-in-`ttgetc`-poll) stays a clean follow-up — the watcher
+  already exposes `fd()` for the latter.
+
+**M2d-2 done (2026-06-19):** hooks added under `#ifdef ENABLE_NATIVE_MAGIT`
+(`main.c` start/atexit-stop + dirty→`sgarbf`; `display.c` modeline append);
+root CMake links `mg → mg_magit`, defines the macro, sets `LINKER_LANGUAGE CXX`;
+`repo_status` uses `git_repository_open_ext` (walk-up). Verified: cpp `mg` shows
+`git *1 ?2` in the modeline (pty-driven in a temp repo); OFF `mg` has **zero**
+`mg_magit` symbols (`nm`); both build 0-warning.
 
 ## Out of scope (M2d-1)
 

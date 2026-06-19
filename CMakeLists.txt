@@ -56,6 +56,13 @@ endif()
 # library exists when the test suite links test_magit against it.
 if(ENABLE_NATIVE_MAGIT)
     add_subdirectory(src/magit)
+
+    # Link the engine into the legacy mg binary and switch on its C-core hooks
+    # (main.c lifecycle/dirty-check, display.c modeline). mg now links a C++
+    # library, so the final link must use the C++ driver.
+    target_link_libraries(mg PRIVATE mg_magit)
+    target_compile_definitions(mg PRIVATE ENABLE_NATIVE_MAGIT)
+    set_target_properties(mg PROPERTIES LINKER_LANGUAGE CXX)
 endif()
 
 # The C++ unit-test suite exercises the new C++23 modules, so it is only

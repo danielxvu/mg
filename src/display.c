@@ -22,6 +22,10 @@
 #include "def.h"
 #include "kbd.h"
 
+#ifdef ENABLE_NATIVE_MAGIT
+#include "magit/bridge.h"	/* mg_magit_modeline() */
+#endif
+
 /*
  * A video structure always holds
  * an array of characters whose length is equal to
@@ -869,6 +873,18 @@ modeline(struct mgwin *wp, int modelinecolor)
 		n += vtputs(" gwd", wp);
 	vtputc(')', wp);
 	++n;
+
+#ifdef ENABLE_NATIVE_MAGIT
+	{
+		char gb[24];
+
+		if (mg_magit_modeline(gb, sizeof(gb)) > 0) {
+			vtputc(' ', wp);
+			++n;
+			n += vtputs(gb, wp);
+		}
+	}
+#endif
 
 	/* Show time/date/mail */
 	if (timesh) {

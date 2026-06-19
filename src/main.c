@@ -25,6 +25,10 @@
 #include "log.h"
 #endif
 
+#ifdef ENABLE_NATIVE_MAGIT
+#include "magit/bridge.h"	/* native C++ git engine, via extern "C" */
+#endif
+
 int		 thisflag;			/* flags, this command	*/
 int		 lastflag;			/* flags, last command	*/
 int		 curgoal;			/* goal column		*/
@@ -241,6 +245,18 @@ notnum:
 
 	ewprintf(" %s", hlp);
 
+#ifdef ENABLE_NATIVE_MAGIT
+	/* Start the background git monitor for the working directory. */
+	{
+		char cwd[PATH_MAX];
+
+		if (getcwd(cwd, sizeof(cwd)) != NULL) {
+			atexit(mg_magit_stop);
+			mg_magit_start(cwd);
+		}
+	}
+#endif
+
 	/* fake last flags */
 	thisflag = 0;
 	for (;;) {
@@ -252,6 +268,11 @@ notnum:
 			do_redraw(0, 0, TRUE);
 			winch_flag = 0;
 		}
+#ifdef ENABLE_NATIVE_MAGIT
+		/* Git status changed on disk: force a modeline redraw. */
+		if (mg_magit_take_dirty())
+			sgarbf = TRUE;
+#endif
 		update(CMODE);
 		lastflag = thisflag;
 		thisflag = 0;
