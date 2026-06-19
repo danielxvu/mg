@@ -35,6 +35,7 @@ static int	magit_commit_finish(int, int);
 static int	magit_commit_abort(int, int);
 static int	magit_toggle_expand(int, int);
 static int	magit_visit(int, int);
+static int	magit_help(int, int);
 
 /*
  * line -> {kind, hunk, path} map for the most recent render of *magit-status*.
@@ -54,6 +55,7 @@ static int	magit_expanded_count;
 
 static PF magit_tab[] = { magit_toggle_expand };
 static PF magit_ret[] = { magit_visit };
+static PF magit_qmark[] = { magit_help };
 static PF magit_c[] = { magit_commit };
 static PF magit_g[] = { magit_refresh };
 static PF magit_k[] = { magit_discard };
@@ -62,13 +64,14 @@ static PF magit_s[] = { magit_stage };
 static PF magit_u[] = { magit_unstage };
 
 /* Entries MUST stay in ascending key order -- doscan() relies on it. */
-static struct KEYMAPE (8) magitmap = {
-	8,
-	8,
+static struct KEYMAPE (9) magitmap = {
+	9,
+	9,
 	rescan,
 	{
 		{ CCHR('I'), CCHR('I'), magit_tab, NULL },	/* TAB: expand/collapse */
 		{ CCHR('M'), CCHR('M'), magit_ret, NULL },	/* RET: visit file */
+		{ '?', '?', magit_qmark, NULL },		/* ?: key help */
 		{ 'c', 'c', magit_c, NULL },
 		{ 'g', 'g', magit_g, NULL },
 		{ 'k', 'k', magit_k, NULL },
@@ -294,6 +297,46 @@ magit_visit(int f, int n)
 			return (status);
 		}
 	}
+	return (TRUE);
+}
+
+/* ?: pop a read-only *magit-help* buffer listing the key bindings. */
+static int
+magit_help(int f, int n)
+{
+	static const char *const keys[] = {
+		"magit-status key bindings",
+		"",
+		"  TAB  expand / collapse the inline diff",
+		"  RET  visit the file at point (other window)",
+		"  s    stage the file or hunk at point",
+		"  u    unstage the file or hunk at point",
+		"  k    discard changes at point",
+		"  c    commit the staged changes",
+		"  g    refresh",
+		"  q    quit this window",
+		"  ?    this help",
+	};
+	struct buffer	*bp;
+	struct mgwin	*wp;
+	size_t		 i;
+
+	if ((bp = bfind("*magit-help*", TRUE)) == NULL)
+		return (FALSE);
+	bp->b_flag |= BFIGNDIRTY;
+	if (bclear(bp) != TRUE)
+		return (FALSE);
+	for (i = 0; i < sizeof(keys) / sizeof(keys[0]); i++)
+		(void)addlinef(bp, "%s", keys[i]);
+	bp->b_flag |= BFREADONLY;
+	bp->b_dotp = bfirstlp(bp);
+	bp->b_doto = 0;
+	if ((wp = popbuf(bp, WNONE)) == NULL)
+		return (FALSE);
+	curbp = bp;
+	curwp = wp;
+	wp->w_dotp = bp->b_dotp;
+	wp->w_doto = 0;
 	return (TRUE);
 }
 
