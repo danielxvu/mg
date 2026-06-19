@@ -1,37 +1,19 @@
-// mg.magit -- native Git working-tree status parser (task M1).
+// mg.magit -- Git working-tree status value types + modeline summary.
 //
-// Pure logic: parses `git status --porcelain=v1` text into value types, with
-// errors reported through std::expected (no integer codes, no exceptions).
-// Greenfield -- zero coupling to mg's C core.
+// Git access moved to libgit2 (mg.git), so the original porcelain *text* parser
+// was retired; these value types are the domain model libgit2 results map into,
+// and summarize() renders them into the editor modeline string.
 
-module;                 // global module fragment for header includes
-#include <expected>
+module;
 #include <optional>
-#include <ranges>
+#include <span>
 #include <string>
-#include <string_view>
-#include <vector>
 
 export module mg.magit;
 
-namespace mg::magit {
-// Module-internal: is `c` one of the porcelain v1 status characters?
-constexpr bool is_status_char(char c)
-{
-    switch (c) {
-    case ' ': case 'M': case 'A': case 'D': case 'R':
-    case 'C': case 'U': case '?': case '!':
-        return true;
-    default:
-        return false;
-    }
-}
-} // namespace mg::magit
-
 export namespace mg::magit {
 
-// Porcelain status codes. The enumerator values ARE the literal characters git
-// prints, so parsing a status column is a direct static_cast<status>(ch).
+// Working-tree status codes (values mirror git's porcelain characters).
 enum class status : char {
     unmodified = ' ',
     modified   = 'M',
@@ -44,59 +26,41 @@ enum class status : char {
     ignored    = '!',
 };
 
-// One entry of `git status` output: the two-column XY code plus the path.
+// One entry of git status: the two-column XY state plus the path.
 struct file_status {
     status index;                          // X -- staged / index side
     status worktree;                       // Y -- unstaged / working-tree side
     std::string path;
-    std::optional<std::string> orig_path;  // set for renames/copies (orig -> path)
+    std::optional<std::string> orig_path;  // set for renames/copies
 };
 
-struct parse_error {
-    std::string message;
-    std::string line;
-};
-
-// Parse a single porcelain line ("XY<space>PATH", or "XY<space>ORIG -> PATH"
-// for renames/copies).
-std::expected<file_status, parse_error> parse_status_line(std::string_view line)
+// Render a compact modeline string: "git clean", or "git" followed by the
+// nonzero counts of staged (*), unstaged (+), and untracked (?) entries,
+// e.g. "git *2 +1 ?3".
+std::string summarize(std::span<const file_status> entries)
 {
-    // Need at least "XY<space>P": two codes, a separator space, one path char.
-    if (line.size() < 4 || line[2] != ' ')
-        return std::unexpected(parse_error{"line too short", std::string(line)});
-    if (!is_status_char(line[0]) || !is_status_char(line[1]))
-        return std::unexpected(parse_error{"unknown status code", std::string(line)});
-
-    file_status fs;
-    fs.index    = static_cast<status>(line[0]);
-    fs.worktree = static_cast<status>(line[1]);
-
-    std::string_view rest = line.substr(3);
-    if (auto arrow = rest.find(" -> "); arrow != std::string_view::npos) {
-        fs.orig_path = std::string(rest.substr(0, arrow));
-        fs.path      = std::string(rest.substr(arrow + 4));
-    } else {
-        fs.path = std::string(rest);
-    }
-    return fs;
-}
-
-// Parse whole `git status --porcelain` output: one entry per non-empty line,
-// short-circuiting to the first line that fails to parse.
-std::expected<std::vector<file_status>, parse_error>
-parse_status(std::string_view porcelain)
-{
-    std::vector<file_status> entries;
-    for (const auto chunk : porcelain | std::views::split('\n')) {
-        std::string_view line(chunk.begin(), chunk.end());
-        if (line.empty())
+    int staged = 0, unstaged = 0, untracked = 0;
+    for (const auto &e : entries) {
+        if (e.worktree == status::untracked) {
+            ++untracked;
             continue;
-        auto parsed = parse_status_line(line);
-        if (!parsed)
-            return std::unexpected(std::move(parsed.error()));
-        entries.push_back(std::move(*parsed));
+        }
+        if (e.index != status::unmodified)
+            ++staged;
+        if (e.worktree != status::unmodified)
+            ++unstaged;
     }
-    return entries;
+    if (staged == 0 && unstaged == 0 && untracked == 0)
+        return "git clean";
+
+    std::string s = "git";
+    if (staged)
+        s += " *" + std::to_string(staged);
+    if (unstaged)
+        s += " +" + std::to_string(unstaged);
+    if (untracked)
+        s += " ?" + std::to_string(untracked);
+    return s;
 }
 
 } // namespace mg::magit

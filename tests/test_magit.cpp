@@ -1,93 +1,51 @@
-// Unit tests for the mg.magit working-tree status parser (task M1).
-// Fixtures are real `git status --porcelain=v1` line shapes, hardcoded for
-// determinism (no live git invocation -- that is M2's job).
+// Unit tests for mg.magit domain types + modeline summary (task M2c-1).
+// The porcelain text parser was retired when git access moved to libgit2.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
+
+#include <array>
 
 import mg.magit;
 
 using namespace mg::magit;
 
-TEST_CASE("parse_status_line: unstaged modified ' M path'")
+TEST_CASE("summarize: a clean tree")
 {
-    auto r = parse_status_line(" M src/foo.c");
-    REQUIRE(r.has_value());
-    CHECK(r->index == status::unmodified);
-    CHECK(r->worktree == status::modified);
-    CHECK(r->path == "src/foo.c");
-    CHECK_FALSE(r->orig_path.has_value());
+    std::array<file_status, 0> none;
+    CHECK(summarize(none) == "git clean");
 }
 
-// Same two-column rule as slice 1, exercised across several XY codes. These
-// are data-coverage for the generic parser, not new behaviour.
-TEST_CASE("parse_status_line: assorted XY codes")
+TEST_CASE("summarize: counts staged, unstaged, and untracked")
 {
-    SUBCASE("staged + unstaged modified 'MM'") {
-        auto r = parse_status_line("MM src/baz.c");
-        REQUIRE(r.has_value());
-        CHECK(r->index == status::modified);
-        CHECK(r->worktree == status::modified);
-        CHECK(r->path == "src/baz.c");
+    SUBCASE("one staged change")
+    {
+        std::array<file_status, 1> e{
+            file_status{status::modified, status::unmodified, "a", {}}};
+        CHECK(summarize(e) == "git *1");
     }
-    SUBCASE("staged add 'A '") {
-        auto r = parse_status_line("A  newfile");
-        REQUIRE(r.has_value());
-        CHECK(r->index == status::added);
-        CHECK(r->worktree == status::unmodified);
-        CHECK(r->path == "newfile");
+    SUBCASE("one unstaged change")
+    {
+        std::array<file_status, 1> e{
+            file_status{status::unmodified, status::modified, "a", {}}};
+        CHECK(summarize(e) == "git +1");
     }
-    SUBCASE("untracked '?\?'") {
-        auto r = parse_status_line("?? new.txt");
-        REQUIRE(r.has_value());
-        CHECK(r->index == status::untracked);
-        CHECK(r->worktree == status::untracked);
-        CHECK(r->path == "new.txt");
+    SUBCASE("one untracked file")
+    {
+        std::array<file_status, 1> e{
+            file_status{status::untracked, status::untracked, "a", {}}};
+        CHECK(summarize(e) == "git ?1");
     }
-}
-
-TEST_CASE("parse_status_line: rename sets orig_path ('R  old -> new')")
-{
-    auto r = parse_status_line("R  old.c -> new.c");
-    REQUIRE(r.has_value());
-    CHECK(r->index == status::renamed);
-    CHECK(r->worktree == status::unmodified);
-    CHECK(r->path == "new.c");
-    REQUIRE(r->orig_path.has_value());
-    CHECK(r->orig_path.value() == "old.c");
-}
-
-TEST_CASE("parse_status: multi-line porcelain into a vector")
-{
-    auto r = parse_status("M  a.c\n?? b.txt\n");
-    REQUIRE(r.has_value());
-    REQUIRE(r->size() == 2);
-    CHECK((*r)[0].index == status::modified);
-    CHECK((*r)[0].path == "a.c");
-    CHECK((*r)[1].index == status::untracked);
-    CHECK((*r)[1].path == "b.txt");
-}
-
-TEST_CASE("parse_status_line: malformed input yields a parse_error")
-{
-    SUBCASE("too short to hold XY + path") {
-        auto r = parse_status_line("M");
-        REQUIRE_FALSE(r.has_value());
-        CHECK(r.error().line == "M");
+    SUBCASE("mixed: 2 staged, 1 unstaged, 3 untracked")
+    {
+        std::array<file_status, 6> e{
+            file_status{status::added, status::unmodified, "s1", {}},
+            file_status{status::modified, status::unmodified, "s2", {}},
+            file_status{status::unmodified, status::modified, "u1", {}},
+            file_status{status::untracked, status::untracked, "q1", {}},
+            file_status{status::untracked, status::untracked, "q2", {}},
+            file_status{status::untracked, status::untracked, "q3", {}},
+        };
+        CHECK(summarize(e) == "git *2 +1 ?3");
     }
-    SUBCASE("missing path after the code") {
-        auto r = parse_status_line("MM ");
-        REQUIRE_FALSE(r.has_value());
-    }
-    SUBCASE("unknown status code") {
-        auto r = parse_status_line("ZZ file");
-        REQUIRE_FALSE(r.has_value());
-    }
-}
-
-TEST_CASE("parse_status: propagates the first malformed line as an error")
-{
-    auto r = parse_status("M  a.c\nZZ bad\n");
-    REQUIRE_FALSE(r.has_value());
-    CHECK(r.error().line == "ZZ bad");
 }
