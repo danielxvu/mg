@@ -141,8 +141,9 @@ extern "C" int mg_magit_status_buffer(const char *repo_path,
         return 0;
 
     int n = 0;
-    auto out = [&](const std::string &line) {
-        emit(ctx, line.c_str());
+    auto out = [&](const std::string &line, int kind = MG_LINE_OTHER,
+                   const char *path = nullptr) {
+        emit(ctx, line.c_str(), kind, path);
         ++n;
     };
 
@@ -169,23 +170,23 @@ extern "C" int mg_magit_status_buffer(const char *repo_path,
 
         auto section = [&](const char *title,
                            const std::vector<const mg::magit::file_status *> &v,
-                           bool labeled, bool use_index) {
+                           bool labeled, bool use_index, int kind) {
             if (v.empty())
                 return;
             out("");
             out(std::string(title) + " (" + std::to_string(v.size()) + ")");
             for (const auto *e : v) {
-                if (labeled)
-                    out("  " + std::string(state_word(use_index ? e->index
-                                                                : e->worktree)) +
-                        "  " + e->path);
-                else
-                    out("  " + e->path);
+                std::string text =
+                    labeled ? "  " + std::string(state_word(use_index ? e->index
+                                                                      : e->worktree)) +
+                                  "  " + e->path
+                            : "  " + e->path;
+                out(text, kind, e->path.c_str());
             }
         };
-        section("Untracked files", untracked, false, false);
-        section("Unstaged changes", unstaged, true, false);
-        section("Staged changes", staged, true, true);
+        section("Untracked files", untracked, false, false, MG_LINE_UNTRACKED);
+        section("Unstaged changes", unstaged, true, false, MG_LINE_UNSTAGED);
+        section("Staged changes", staged, true, true, MG_LINE_STAGED);
     }
 
     if (auto commits = mg::git::recent_commits(repo_path, 10);
@@ -197,4 +198,18 @@ extern "C" int mg_magit_status_buffer(const char *repo_path,
     }
 
     return n;
+}
+
+extern "C" int mg_magit_stage(const char *repo_path, const char *path)
+{
+    if (repo_path == nullptr || path == nullptr)
+        return 0;
+    return mg::git::stage(repo_path, path).has_value() ? 1 : 0;
+}
+
+extern "C" int mg_magit_unstage(const char *repo_path, const char *path)
+{
+    if (repo_path == nullptr || path == nullptr)
+        return 0;
+    return mg::git::unstage(repo_path, path).has_value() ? 1 : 0;
 }

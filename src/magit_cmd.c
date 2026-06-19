@@ -16,10 +16,13 @@
 
 #ifdef ENABLE_NATIVE_MAGIT
 
-/* emit callback: append one composed line to the buffer (ctx). */
+/* emit callback: append one composed line to the buffer (ctx). The kind/path
+ * metadata is used by interactive staging (M4-3); ignored here. */
 static void
-magit_emit(void *ctx, const char *line)
+magit_emit(void *ctx, const char *line, int kind, const char *path)
 {
+	(void)kind;
+	(void)path;
 	(void)addlinef((struct buffer *)ctx, "%s", (char *)line);
 }
 

@@ -129,22 +129,55 @@ TEST_CASE("mg_magit_status_buffer composes branch, sections, and commits")
 {
     auto dir = make_repo_full();
 
-    std::vector<std::string> lines;
+    struct row { std::string line; int kind; std::string path; };
+    std::vector<row> rows;
     int count = mg_magit_status_buffer(
         dir.string().c_str(),
-        [](void *ctx, const char *line) {
-            static_cast<std::vector<std::string> *>(ctx)->emplace_back(line);
+        [](void *ctx, const char *line, int kind, const char *path) {
+            static_cast<std::vector<row> *>(ctx)->push_back(
+                {line, kind, path ? path : ""});
         },
-        &lines);
+        &rows);
 
-    CHECK(count == static_cast<int>(lines.size()));
+    std::vector<std::string> lines;
+    for (const auto &r : rows)
+        lines.push_back(r.line);
+
+    CHECK(count == static_cast<int>(rows.size()));
     CHECK(any_line_has(lines, "On branch "));
     CHECK(any_line_has(lines, "initial commit"));     // HEAD summary + commit list
     CHECK(any_line_has(lines, "Untracked files (1)"));
-    CHECK(any_line_has(lines, "untracked.txt"));
     CHECK(any_line_has(lines, "Staged changes (1)"));
-    CHECK(any_line_has(lines, "staged.txt"));
     CHECK(any_line_has(lines, "Recent commits"));
+
+    // The file rows carry the right kind + path for staging.
+    bool untracked_ok = false, staged_ok = false;
+    for (const auto &r : rows) {
+        if (r.kind == MG_LINE_UNTRACKED && r.path == "untracked.txt")
+            untracked_ok = true;
+        if (r.kind == MG_LINE_STAGED && r.path == "staged.txt")
+            staged_ok = true;
+    }
+    CHECK(untracked_ok);
+    CHECK(staged_ok);
+
+    fs::remove_all(dir);
+}
+
+TEST_CASE("mg_magit_stage stages the file at a path")
+{
+    auto dir = make_repo_with_changes(); // untracked.txt is untracked
+    CHECK(mg_magit_stage(dir.string().c_str(), "untracked.txt") == 1);
+
+    std::vector<std::string> lines;
+    mg_magit_status_buffer(
+        dir.string().c_str(),
+        [](void *ctx, const char *line, int, const char *) {
+            static_cast<std::vector<std::string> *>(ctx)->emplace_back(line);
+        },
+        &lines);
+    CHECK(any_line_has(lines, "Staged changes (2)")); // staged.txt + untracked.txt
+    CHECK(!any_line_has(lines, "Untracked files"));   // none left
 
     fs::remove_all(dir);
 }
