@@ -254,3 +254,19 @@ extern "C" int mg_magit_commit(const char *repo_path, const char *message)
         return 0;
     return mg::git::commit(repo_path, message).has_value() ? 1 : 0;
 }
+
+extern "C" int mg_magit_stage_hunk(const char *repo_path, const char *path,
+                                   int hunk)
+{
+    if (repo_path == nullptr || path == nullptr || hunk < 0)
+        return 0;
+    return mg::git::stage_hunk(repo_path, path, hunk).has_value() ? 1 : 0;
+}
+
+extern "C" int mg_magit_unstage_hunk(const char *repo_path, const char *path,
+                                     int hunk)
+{
+    if (repo_path == nullptr || path == nullptr || hunk < 0)
+        return 0;
+    return mg::git::unstage_hunk(repo_path, path, hunk).has_value() ? 1 : 0;
+}

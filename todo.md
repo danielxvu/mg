@@ -146,15 +146,11 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
 
 ## ▶ RESUME HERE (next session)
 
-**M7-3 — hunk-level staging (git_apply).** The diff-viewing half (M7-1 read,
-M7-2 inline render + `TAB`) is done & PR'd (#12). To resume:
-- Add `mg.git` `stage_hunk(repo, path, hunk_index)` / `unstage_hunk(...)`:
-  build a one-hunk patch and `git_apply` it to the index
-  (`GIT_APPLY_LOCATION_INDEX`); reverse-apply to unstage.
-- Bridge `mg_magit_stage_hunk`/`unstage_hunk`. Then **M7-4**: in
-  `magit_cmd.c`, make `s`/`u` on a `MG_LINE_HUNK`/`MG_LINE_DIFF` line call the
-  hunk ops (the meta map already records `{kind,path,hunk}`).
-- Build: `cmake --preset cpp && ctest --preset cpp`. PR per the stacked workflow.
+**M8 — magit breadth.** M7 is complete (inline diffs + hunk staging, PR #13).
+Next is M8: extra sections + navigation — stash/remotes/branches sections, a
+log view, `?` help, `RET` to visit the file at point. Decompose into slices and
+spec it first (see `docs/superpowers/specs/`). Build: `cmake --preset cpp &&
+ctest --preset cpp`. Freeze a `m8-*` branch on `m7-hunks` and PR per the stack.
 
 ## Notes for the next iteration
 - **Branch / PR workflow:** ongoing work rides the rolling `cpp-refactor` tip
@@ -166,9 +162,8 @@ M7-2 inline render + `TAB`) is done & PR'd (#12). To resume:
   `m2d1-bridge`→m2c-libgit2 (#6), `m2d2-modeline`→m2d1-bridge (#7),
   `m3-status-buffer`→m2d2-modeline (#8), `m4-staging`→m3-status-buffer (#9), `m5-discard`→m4-staging (#10),
   `m6-commit`→m5-discard (#11),
-  `m7-diffs`→m6-commit (#12).
-  Next
-  milestone freezes a branch on `m2d2-modeline`.
+  `m7-diffs`→m6-commit (#12), `m7-hunks`→m7-diffs (#13).
+  Next milestone (M8) freezes a branch on `m7-hunks`.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
@@ -212,8 +207,17 @@ M7-2 inline render + `TAB`) is done & PR'd (#12). To resume:
     - M4-1 `mg.git` stage()/unstage(); M4-2 enriched emit (kind+path) +
       stage/unstage bridge; M4-3 magit-status-mode keymap + point→file map +
       refresh (re-points windows after bclear).
-- **Magit roadmap:** ✅ M5 discard (`k`) done · ✅ M6 commit (`c`) done ·
-  M7 inline diffs + hunk/line staging (`TAB`/`s` on a hunk — the big one) ·
+- **🎉 M7 COMPLETE — inline diffs + hunk staging.** `TAB` expands a file's diff
+  inline; `s`/`u` on a hunk's `@@` (or any diff line) stage/unstage just that
+  hunk. Engine: `mg.git` `stage_hunk`/`unstage_hunk` via `git_apply` +
+  `hunk_cb` filter — stage applies the index→workdir diff to the index; unstage
+  applies the *reverse* (index_tree→HEAD_tree, built with `git_diff_tree_to_tree`
+  since `git_apply` has no reverse flag). Bridge `mg_magit_stage_hunk`/
+  `unstage_hunk`; `magit_cmd.c` routes `s`/`u` on `MG_LINE_HUNK`/`MG_LINE_DIFF`
+  to the hunk ops. Verified end-to-end via pty (staged b→B, left k→K unstaged).
+  Spec: `docs/superpowers/specs/2026-06-19-m7-diffs-hunks-design.md`.
+- **Magit roadmap:** ✅ M5 discard (`k`) · ✅ M6 commit (`c`) · ✅ M7 inline
+  diffs + hunk staging (`TAB`/`s`/`u` on a hunk) ·
   M8 breadth (extra sections, log/stash/remotes/branches, `?` help, `RET` visit).
 - **Other:** live-while-idle modeline; auto-refresh the status buffer on fs
   events; merge the PR stack (#1–#8).

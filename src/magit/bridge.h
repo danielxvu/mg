@@ -57,6 +57,11 @@ int mg_magit_discard(const char *repo_path, const char *path);
  * (e.g. user.name/user.email unset, or nothing staged). */
 int mg_magit_commit(const char *repo_path, const char *message);
 
+/* Stage / unstage a single hunk (0-based `hunk`, as numbered in the rendered
+ * diff) of `path`. Returns 1 on success, 0 on failure. */
+int mg_magit_stage_hunk(const char *repo_path, const char *path, int hunk);
+int mg_magit_unstage_hunk(const char *repo_path, const char *path, int hunk);
+
 #ifdef __cplusplus
 }
 #endif

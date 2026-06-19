@@ -61,6 +61,18 @@ inline std::string short_oid(const git_oid *oid)
     return std::string(buf);
 }
 
+// git_apply hunk_cb that applies exactly one hunk (by 0-based position) and
+// skips the rest. Hunks are visited in order, so a running counter is enough.
+struct hunk_filter {
+    std::size_t target;
+    std::size_t seen = 0;
+};
+int apply_one_hunk(const git_diff_hunk *, void *payload)
+{
+    auto *f = static_cast<hunk_filter *>(payload);
+    return f->seen++ == f->target ? 0 : 1; // 0 = apply this hunk, >0 = skip it
+}
+
 mg::magit::file_status map_entry(const git_status_entry *e)
 {
     using mg::magit::status;
@@ -154,6 +166,16 @@ std::expected<std::string, error> commit(std::string repo, std::string message);
 // The hunks of `path`'s diff: unstaged (workdir vs index) or staged (index vs HEAD).
 std::expected<std::vector<hunk>, error>
 file_diff(std::string repo, std::string path, bool staged);
+
+// Stage just hunk `hunk_index` (0-based, as numbered by file_diff(.,.,false))
+// of `path` into the index, leaving the file's other hunks unstaged.
+std::expected<void, error>
+stage_hunk(std::string repo, std::string path, std::size_t hunk_index);
+
+// Unstage just hunk `hunk_index` (0-based, as numbered by file_diff(.,.,true))
+// of `path`, returning that hunk to the working tree's unstaged changes.
+std::expected<void, error>
+unstage_hunk(std::string repo, std::string path, std::size_t hunk_index);
 
 } // namespace mg::git
 
@@ -465,6 +487,94 @@ file_diff(std::string repo, std::string path, bool staged)
         }
     }
     return out;
+}
+
+// Apply one hunk of `diff` (scoped to a single path) to the index.
+static std::expected<void, error>
+apply_hunk_to_index(git_repository *repo, git_diff *diff, std::size_t hunk_index)
+{
+    detail::hunk_filter filter{hunk_index};
+    git_apply_options aopts;
+    git_apply_options_init(&aopts, GIT_APPLY_OPTIONS_VERSION);
+    aopts.hunk_cb = detail::apply_one_hunk;
+    aopts.payload = &filter;
+    if (git_apply(repo, diff, GIT_APPLY_LOCATION_INDEX, &aopts) != 0)
+        return std::unexpected(last_error());
+    return {};
+}
+
+// Fill `opts` with a single-path pathspec (the storage must outlive the diff).
+static void path_scoped_diff_opts(git_diff_options &opts, char **path_storage)
+{
+    git_diff_options_init(&opts, GIT_DIFF_OPTIONS_VERSION);
+    opts.pathspec.strings = path_storage;
+    opts.pathspec.count = 1;
+}
+
+std::expected<void, error>
+stage_hunk(std::string repo, std::string path, std::size_t hunk_index)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    char *paths[1] = {const_cast<char *>(path.c_str())};
+    git_diff_options opts;
+    path_scoped_diff_opts(opts, paths);
+
+    // index -> workdir : the unstaged changes; applying a hunk to the index
+    // stages exactly that hunk.
+    git_diff *raw_diff = nullptr;
+    if (git_diff_index_to_workdir(&raw_diff, r.get(), nullptr, &opts) != 0)
+        return std::unexpected(last_error());
+    detail::diff_ptr diff(raw_diff);
+
+    return apply_hunk_to_index(r.get(), diff.get(), hunk_index);
+}
+
+std::expected<void, error>
+unstage_hunk(std::string repo, std::string path, std::size_t hunk_index)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    // Snapshot the index as a tree (its staged content).
+    git_index *raw_idx = nullptr;
+    if (git_repository_index(&raw_idx, r.get()) != 0)
+        return std::unexpected(last_error());
+    detail::index_ptr idx(raw_idx);
+    git_oid index_tree_oid;
+    if (git_index_write_tree(&index_tree_oid, idx.get()) != 0)
+        return std::unexpected(last_error());
+    git_tree *raw_index_tree = nullptr;
+    if (git_tree_lookup(&raw_index_tree, r.get(), &index_tree_oid) != 0)
+        return std::unexpected(last_error());
+    detail::tree_ptr index_tree(raw_index_tree);
+
+    // HEAD's tree (null on an unborn branch -> diff against the empty tree).
+    git_object *raw_head_tree = nullptr;
+    git_revparse_single(&raw_head_tree, r.get(), "HEAD^{tree}");
+    detail::object_ptr head_tree(raw_head_tree);
+
+    char *paths[1] = {const_cast<char *>(path.c_str())};
+    git_diff_options opts;
+    path_scoped_diff_opts(opts, paths);
+
+    // index -> HEAD : the reverse of the staged view (file_diff(.,.,true)), so
+    // applying a hunk to the index rolls just that hunk back toward HEAD.
+    git_diff *raw_diff = nullptr;
+    if (git_diff_tree_to_tree(&raw_diff, r.get(), index_tree.get(),
+                              reinterpret_cast<git_tree *>(head_tree.get()),
+                              &opts) != 0)
+        return std::unexpected(last_error());
+    detail::diff_ptr diff(raw_diff);
+
+    return apply_hunk_to_index(r.get(), diff.get(), hunk_index);
 }
 
 } // namespace mg::git

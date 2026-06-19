@@ -49,6 +49,60 @@ fs::path make_repo_with_changes()
     return dir;
 }
 
+// Commit `body` to `name` in `dir` (dir must be an initialized repo).
+void commit_file(const fs::path &dir, const char *name, const std::string &body,
+                 const char *message)
+{
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_open(&repo, dir.string().c_str()) == 0);
+    std::ofstream(dir / name) << body;
+    git_index *idx = nullptr;
+    REQUIRE(git_repository_index(&idx, repo) == 0);
+    REQUIRE(git_index_add_bypath(idx, name) == 0);
+    REQUIRE(git_index_write(idx) == 0);
+    git_oid tree_oid;
+    REQUIRE(git_index_write_tree(&tree_oid, idx) == 0);
+    git_tree *tree = nullptr;
+    REQUIRE(git_tree_lookup(&tree, repo, &tree_oid) == 0);
+    git_signature *sig = nullptr;
+    REQUIRE(git_signature_now(&sig, "Test", "t@example.com") == 0);
+    git_oid head_oid;
+    bool born = git_reference_name_to_id(&head_oid, repo, "HEAD") == 0;
+    git_commit *parent = nullptr;
+    if (born)
+        REQUIRE(git_commit_lookup(&parent, repo, &head_oid) == 0);
+    const git_commit *parents[1] = {parent};
+    git_oid commit_oid;
+    REQUIRE(git_commit_create(&commit_oid, repo, "HEAD", sig, sig, nullptr,
+                              message, tree, born ? 1 : 0,
+                              born ? parents : nullptr) == 0);
+    if (parent)
+        git_commit_free(parent);
+    git_signature_free(sig);
+    git_tree_free(tree);
+    git_index_free(idx);
+    git_repository_free(repo);
+}
+
+// A repo whose committed file has two far-apart regions changed on disk,
+// producing two independent hunks in the unstaged diff.
+fs::path make_repo_with_two_hunks()
+{
+    auto dir = make_temp_dir();
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_init(&repo, dir.string().c_str(), 0) == 0);
+    git_repository_free(repo);
+
+    // 12 lines a..l; changes to line 2 and line 11 stay >6 lines apart, so
+    // git's 3-line context never merges them into one hunk.
+    commit_file(dir, "f.txt", "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\n", "base");
+    std::ofstream(dir / "f.txt") << "a\nB\nc\nd\ne\nf\ng\nh\ni\nj\nK\nl\n";
+
+    git_libgit2_shutdown();
+    return dir;
+}
+
 // A repo with a single commit on HEAD (built with libgit2).
 fs::path make_repo_with_commit(const char *message)
 {
@@ -277,6 +331,79 @@ TEST_CASE("commit() creates a commit from the staged tree")
     REQUIRE(st.has_value());
     for (const auto &e : *st)
         CHECK(e.path != "f.txt"); // committed, no longer staged
+    fs::remove_all(dir);
+}
+
+TEST_CASE("stage_hunk stages only the selected hunk of a two-hunk change")
+{
+    auto dir = make_repo_with_two_hunks();
+
+    auto unstaged_hunks = [&] {
+        auto d = mg::git::file_diff(dir.string(), "f.txt", false);
+        return d ? *d : std::vector<mg::git::hunk>{};
+    };
+    REQUIRE(unstaged_hunks().size() == 2); // two independent hunks, none staged
+
+    // Stage the first hunk (the 'B' change) only.
+    REQUIRE(mg::git::stage_hunk(dir.string(), "f.txt", 0).has_value());
+
+    auto staged = mg::git::file_diff(dir.string(), "f.txt", /*staged=*/true);
+    REQUIRE(staged.has_value());
+    bool staged_has_B = false, staged_has_K = false;
+    for (const auto &h : *staged)
+        for (const auto &l : h.lines) {
+            if (l.origin == '+' && l.content.find('B') != std::string::npos)
+                staged_has_B = true;
+            if (l.origin == '+' && l.content.find('K') != std::string::npos)
+                staged_has_K = true;
+        }
+    CHECK(staged_has_B);       // first hunk got staged
+    CHECK_FALSE(staged_has_K); // second hunk did not
+
+    // The second hunk ('K') remains unstaged.
+    bool unstaged_has_K = false;
+    for (const auto &h : unstaged_hunks())
+        for (const auto &l : h.lines)
+            if (l.origin == '+' && l.content.find('K') != std::string::npos)
+                unstaged_has_K = true;
+    CHECK(unstaged_has_K);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("unstage_hunk drops one staged hunk back to unstaged")
+{
+    auto dir = make_repo_with_two_hunks();
+    // Stage everything, leaving two staged hunks.
+    REQUIRE(mg::git::stage(dir.string(), "f.txt").has_value());
+    auto staged = mg::git::file_diff(dir.string(), "f.txt", /*staged=*/true);
+    REQUIRE(staged.has_value());
+    REQUIRE(staged->size() == 2);
+
+    // Unstage the first staged hunk (the 'B' change).
+    REQUIRE(mg::git::unstage_hunk(dir.string(), "f.txt", 0).has_value());
+
+    auto staged_after = mg::git::file_diff(dir.string(), "f.txt", true);
+    REQUIRE(staged_after.has_value());
+    bool staged_has_B = false, staged_has_K = false;
+    for (const auto &h : *staged_after)
+        for (const auto &l : h.lines) {
+            if (l.origin == '+' && l.content.find('B') != std::string::npos)
+                staged_has_B = true;
+            if (l.origin == '+' && l.content.find('K') != std::string::npos)
+                staged_has_K = true;
+        }
+    CHECK_FALSE(staged_has_B); // first hunk unstaged
+    CHECK(staged_has_K);       // second hunk still staged
+
+    // The 'B' change is back on the unstaged side.
+    auto unstaged = mg::git::file_diff(dir.string(), "f.txt", false);
+    REQUIRE(unstaged.has_value());
+    bool unstaged_has_B = false;
+    for (const auto &h : *unstaged)
+        for (const auto &l : h.lines)
+            if (l.origin == '+' && l.content.find('B') != std::string::npos)
+                unstaged_has_B = true;
+    CHECK(unstaged_has_B);
     fs::remove_all(dir);
 }
 

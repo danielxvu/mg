@@ -258,12 +258,20 @@ magit_stage(int f, int n)
 	int	 kind, hunk;
 
 	kind = magit_at_point(&path, &hunk);
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	/* On a hunk/diff line, stage just that hunk; on a file line, the file. */
+	if (kind == MG_LINE_HUNK || kind == MG_LINE_DIFF) {
+		if (mg_magit_stage_hunk(cwd, path, hunk) != 1) {
+			ewprintf("Stage hunk failed");
+			return (FALSE);
+		}
+		return (magit_refresh(f, n));
+	}
 	if (kind != MG_LINE_UNTRACKED && kind != MG_LINE_UNSTAGED) {
 		ewprintf("Nothing to stage on this line");
 		return (FALSE);
 	}
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
-		return (FALSE);
 	if (mg_magit_stage(cwd, path) != 1) {
 		ewprintf("Stage failed");
 		return (FALSE);
@@ -279,12 +287,20 @@ magit_unstage(int f, int n)
 	int	 kind, hunk;
 
 	kind = magit_at_point(&path, &hunk);
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	/* On a hunk/diff line, unstage just that hunk; on a file line, the file. */
+	if (kind == MG_LINE_HUNK || kind == MG_LINE_DIFF) {
+		if (mg_magit_unstage_hunk(cwd, path, hunk) != 1) {
+			ewprintf("Unstage hunk failed");
+			return (FALSE);
+		}
+		return (magit_refresh(f, n));
+	}
 	if (kind != MG_LINE_STAGED) {
 		ewprintf("Nothing to unstage on this line");
 		return (FALSE);
 	}
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
-		return (FALSE);
 	if (mg_magit_unstage(cwd, path) != 1) {
 		ewprintf("Unstage failed");
 		return (FALSE);

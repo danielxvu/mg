@@ -240,6 +240,35 @@ TEST_CASE("mg_magit_status_buffer emits diff lines for an expanded file")
     fs::remove_all(dir);
 }
 
+TEST_CASE("mg_magit_stage_hunk stages just one hunk through the bridge")
+{
+    auto dir = make_repo_unstaged(); // a.txt: "line one\n" + unstaged "more line\n"
+    CHECK(mg_magit_stage_hunk(dir.string().c_str(), "a.txt", 0) == 1);
+
+    // The expanded staged view now carries the "more line" addition.
+    const char *expanded[1] = {"a.txt"};
+    struct row { std::string line; int kind; };
+    std::vector<row> rows;
+    mg_magit_status_buffer(
+        dir.string().c_str(), expanded, 1,
+        [](void *ctx, const char *line, int kind, const char *, int) {
+            static_cast<std::vector<row> *>(ctx)->push_back({line, kind});
+        },
+        &rows);
+
+    bool staged_section = false, staged_add = false;
+    for (const auto &r : rows) {
+        if (r.line.find("Staged changes") != std::string::npos)
+            staged_section = true;
+        if (r.kind == MG_LINE_DIFF &&
+            r.line.find("more line") != std::string::npos)
+            staged_add = true;
+    }
+    CHECK(staged_section);
+    CHECK(staged_add);
+    fs::remove_all(dir);
+}
+
 TEST_CASE("mg_magit_discard removes an untracked file")
 {
     auto dir = make_repo_with_changes(); // untracked.txt is untracked
