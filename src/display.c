@@ -27,6 +27,23 @@
 #endif
 
 /*
+ * A virtual-screen cell (task U2). Plain C builds keep one byte per column
+ * (upstream). Under ENABLE_CPP_UPGRADES a cell holds a codepoint so multi-byte
+ * UTF-8 renders at the correct display width: a wide (2-column) char occupies
+ * two cells, the second tagged VT_CONT; uline encodes each cell back to UTF-8
+ * on output via the mg.utf8 bridge.
+ */
+#ifdef ENABLE_CPP_UPGRADES
+#include "utf8/bridge.h"
+typedef int vtcell;
+#define VT_CONT	(-1)		/* 2nd column of a wide char: emits nothing */
+static void vtputuc(unsigned int, int, struct mgwin *);
+static void vt_render_line(struct line *, struct mgwin *);
+#else
+typedef char vtcell;
+#endif
+
+/*
  * A video structure always holds
  * an array of characters whose length is equal to
  * the longest line possible. v_text is allocated
@@ -37,7 +54,7 @@ struct video {
 	short	v_flag;		/* Flag word.			 */
 	short	v_color;	/* Color of the line.		 */
 	int	v_cost;		/* Cost of display.		 */
-	char	*v_text;	/* The actual characters.	 */
+	vtcell	*v_text;	/* The actual characters.	 */
 };
 
 #define VFCHG	0x0001			/* Changed.			 */
@@ -230,8 +247,8 @@ vtresize(int force, int newrow, int newcol)
 	}
 	if (rowchanged || colchanged || first_run) {
 		for (i = 0; i < 2 * (newrow - 1); i++)
-			TRYREALLOC(video[i].v_text, newcol);
-		TRYREALLOC(blanks.v_text, newcol);
+			TRYREALLOC(video[i].v_text, newcol * sizeof(vtcell));
+		TRYREALLOC(blanks.v_text, newcol * sizeof(vtcell));
 	}
 
 	nrow = newrow;
@@ -352,6 +369,60 @@ vtputc(int c, struct mgwin *wp)
 	}
 }
 
+#ifdef ENABLE_CPP_UPGRADES
+/*
+ * Put a codepoint of display width `width` to the virtual screen (task U2). A
+ * wide (2-column) char occupies two cells, the second tagged VT_CONT. Width-0
+ * combining marks are dropped here -- full grapheme composition is a later
+ * slice. The right-margin handling mirrors vtputc's '$' overflow marker.
+ */
+static void
+vtputuc(unsigned int cp, int width, struct mgwin *wp)
+{
+	struct video	*vp = vscreen[vtrow];
+
+	(void)wp;
+	if (width <= 0)
+		return;
+	if (vtcol >= ncol) {
+		vp->v_text[ncol - 1] = '$';
+		return;
+	}
+	if (width == 2 && vtcol + 2 > ncol) {	/* wide char won't fit */
+		vp->v_text[vtcol++] = '$';
+		return;
+	}
+	vp->v_text[vtcol++] = (vtcell)cp;
+	if (width == 2)
+		vp->v_text[vtcol++] = VT_CONT;
+}
+
+/*
+ * Render a buffer line into the virtual screen, decoding UTF-8 so each
+ * codepoint advances by its display width. ASCII/tab/control still go through
+ * vtputc (mg_utf8_decode returns 1 byte for them, so their handling is
+ * unchanged); only bytes >= 0x80 take the codepoint path.
+ */
+static void
+vt_render_line(struct line *lp, struct mgwin *wp)
+{
+	int		 j = 0, len = llength(lp);
+	unsigned int	 cp;
+	int		 w, n;
+
+	while (j < len) {
+		n = mg_utf8_decode(&ltext(lp)[j], len - j, &cp, &w);
+		if (n <= 0)
+			n = 1;
+		if (cp < 0x80)
+			vtputc((int)cp, wp);
+		else
+			vtputuc(cp, w, wp);
+		j += n;
+	}
+}
+#endif /* ENABLE_CPP_UPGRADES */
+
 /*
  * Put a character to the virtual screen in an extended line.  If we are not
  * yet on left edge, don't print it yet.  Check for overflow on the right
@@ -420,7 +491,10 @@ update(int modelinecolor)
 	struct mgwin	*wp;
 	struct video	*vp1;
 	struct video	*vp2;
-	int	 c, i, j;
+	int	 c, i;
+#ifndef ENABLE_CPP_UPGRADES
+	int	 j;	/* byte index into the line in the plain-C render loops */
+#endif
 	int	 hflag;
 	int	 currow, curcol;
 	int	 offs, size;
@@ -495,8 +569,12 @@ update(int modelinecolor)
 			vscreen[i]->v_color = CTEXT;
 			vscreen[i]->v_flag |= (VFCHG | VFHBAD);
 			vtmove(i, 0);
+#ifdef ENABLE_CPP_UPGRADES
+			vt_render_line(lp, wp);
+#else
 			for (j = 0; j < llength(lp); ++j)
 				vtputc(lgetc(lp, j), wp);
+#endif
 			vteeol();
 		} else if ((wp->w_rflag & (WFEDIT | WFFULL)) != 0) {
 			hflag = TRUE;
@@ -505,8 +583,12 @@ update(int modelinecolor)
 				vscreen[i]->v_flag |= (VFCHG | VFHBAD);
 				vtmove(i, 0);
 				if (lp != wp->w_bufp->b_headp) {
+#ifdef ENABLE_CPP_UPGRADES
+					vt_render_line(lp, wp);
+#else
 					for (j = 0; j < llength(lp); ++j)
 						vtputc(lgetc(lp, j), wp);
+#endif
 					lp = lforw(lp);
 				}
 				vteeol();
@@ -527,18 +609,33 @@ update(int modelinecolor)
 	curcol = 0;
 	i = 0;
 	while (i < curwp->w_doto) {
-		c = lgetc(lp, i++);
+		c = lgetc(lp, i);
 		if (c == '\t') {
 			curcol = ntabstop(curcol, curwp->w_bufp->b_tabw);
-		} else if (ISCTRL(c) != FALSE)
+			i++;
+		} else if (ISCTRL(c) != FALSE) {
 			curcol += 2;
-		else if (isprint(c))
+			i++;
+#ifdef ENABLE_CPP_UPGRADES
+		} else if (c >= 0x80) {		/* multi-byte: advance by width */
+			unsigned int cp;
+			int w, n;
+
+			n = mg_utf8_decode(&ltext(lp)[i], llength(lp) - i, &cp, &w);
+			if (n <= 0)
+				n = 1;
+			curcol += (w > 0 ? w : 0);
+			i += n;
+#endif
+		} else if (isprint(c)) {
 			curcol++;
-		else {
+			i++;
+		} else {
 			char bf[5];
 
 			snprintf(bf, sizeof(bf), "\\%o", c);
 			curcol += strlen(bf);
+			i++;
 		}
 	}
 	if (curcol >= ncol - 1) {	/* extended line. */
@@ -563,8 +660,12 @@ update(int modelinecolor)
 				if ((wp != curwp) || (lp != wp->w_dotp) ||
 				    (curcol < ncol - 1)) {
 					vtmove(i, 0);
+#ifdef ENABLE_CPP_UPGRADES
+					vt_render_line(lp, wp);
+#else
 					for (j = 0; j < llength(lp); ++j)
 						vtputc(lgetc(lp, j), wp);
+#endif
 					vteeol();
 					/* this line no longer is extended */
 					vscreen[i]->v_flag &= ~VFEXT;
@@ -666,7 +767,7 @@ ucopy(struct video *vvp, struct video *pvp)
 	pvp->v_hash = vvp->v_hash;
 	pvp->v_cost = vvp->v_cost;
 	pvp->v_color = vvp->v_color;
-	bcopy(vvp->v_text, pvp->v_text, ncol);
+	bcopy(vvp->v_text, pvp->v_text, ncol * sizeof(vtcell));
 }
 
 /*
@@ -710,14 +811,38 @@ updext(int currow, int curcol)
  * line when updating CMODE color lines, because of the way that
  * reverse video works on most terminals.
  */
+#ifdef ENABLE_CPP_UPGRADES
+/* Emit one virtual-screen cell to the terminal: a wide char's continuation
+ * cell emits nothing (the glyph already advanced the terminal); a codepoint is
+ * encoded back to UTF-8. ASCII (< 0x80) is a plain byte, as upstream. */
+static void
+ttputcell(vtcell c)
+{
+	char	buf[4];
+	int	n, i;
+
+	if (c == VT_CONT)
+		return;
+	if ((unsigned int)c < 0x80) {
+		ttputc((int)c);
+		return;
+	}
+	n = mg_utf8_encode((unsigned int)c, buf);
+	for (i = 0; i < n; i++)
+		ttputc((unsigned char)buf[i]);
+}
+#else
+#define ttputcell(c)	ttputc(c)	/* a cell is a byte in the plain-C build */
+#endif
+
 void
 uline(int row, struct video *vvp, struct video *pvp)
 {
-	char  *cp1;
-	char  *cp2;
-	char  *cp3;
-	char  *cp4;
-	char  *cp5;
+	vtcell  *cp1;
+	vtcell  *cp2;
+	vtcell  *cp3;
+	vtcell  *cp4;
+	vtcell  *cp5;
 	int    nbflag;
 
 	if (vvp->v_color != pvp->v_color) {	/* Wrong color, do a	 */
@@ -741,7 +866,7 @@ uline(int row, struct video *vvp, struct video *pvp)
 		cp2 = &vvp->v_text[ncol];
 #endif
 		while (cp1 != cp2) {
-			ttputc(*cp1++);
+			ttputcell(*cp1++);
 			++ttcol;
 		}
 		ttcolor(CTEXT);
@@ -764,6 +889,18 @@ uline(int row, struct video *vvp, struct video *pvp)
 		if (cp3[0] != ' ')	/* Note non-blanks in	 */
 			nbflag = TRUE;	/* the right match.	 */
 	}
+#ifdef ENABLE_CPP_UPGRADES
+	/* Never split a wide char (codepoint + VT_CONT) across an update
+	 * boundary, or the terminal cursor column would desync. */
+	while (cp1 > &vvp->v_text[0] && *cp1 == VT_CONT) {
+		--cp1;
+		--cp2;
+	}
+	if (cp3 < &vvp->v_text[ncol] && *cp3 == VT_CONT) {
+		++cp3;
+		++cp4;
+	}
+#endif
 	cp5 = cp3;			/* Is erase good?	 */
 	if (nbflag == FALSE && vvp->v_color == CTEXT) {
 		while (cp5 != cp1 && cp5[-1] == ' ')
@@ -784,7 +921,7 @@ uline(int row, struct video *vvp, struct video *pvp)
 #endif
 		ttcolor(vvp->v_color);
 	while (cp1 != cp5) {
-		ttputc(*cp1++);
+		ttputcell(*cp1++);
 		++ttcol;
 	}
 	if (cp5 != cp3)			/* Do erase.		 */
@@ -929,7 +1066,7 @@ void
 hash(struct video *vp)
 {
 	int	i, n;
-	char   *s;
+	vtcell *s;
 
 	if ((vp->v_flag & VFHBAD) != 0) {	/* Hash bad.		 */
 		s = &vp->v_text[ncol - 1];

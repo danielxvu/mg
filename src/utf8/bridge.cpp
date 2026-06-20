@@ -28,6 +28,13 @@ extern "C" int mg_utf8_char_width(unsigned int cp)
     return mg::utf8::char_width(static_cast<char32_t>(cp));
 }
 
+extern "C" int mg_utf8_encode(unsigned int cp, char *out)
+{
+    if (out == nullptr)
+        return 0;
+    return mg::utf8::encode(static_cast<char32_t>(cp), out);
+}
+
 extern "C" int mg_utf8_is_word(unsigned int cp)
 {
     return mg::utf8::is_word(static_cast<char32_t>(cp)) ? 1 : 0;

@@ -15,6 +15,10 @@
 
 #include "def.h"
 
+#ifdef ENABLE_CPP_UPGRADES
+#include "utf8/bridge.h"	/* getcolpos counts UTF-8 display columns (U2) */
+#endif
+
 /*
  * Compute next tab stop, with `col' being the a column number and
  * `tabw' the tab width.
@@ -107,18 +111,33 @@ getcolpos(struct mgwin *wp)
 	/* determine column */
 	col = 0;
 
-	for (i = 0; i < wp->w_doto; ++i) {
+	for (i = 0; i < wp->w_doto; ) {
 		c = lgetc(wp->w_dotp, i);
 		if (c == '\t') {
 			col = ntabstop(col, wp->w_bufp->b_tabw);
-		} else if (ISCTRL(c) != FALSE)
+			i++;
+		} else if (ISCTRL(c) != FALSE) {
 			col += 2;
-		else if (isprint(c)) {
+			i++;
+#ifdef ENABLE_CPP_UPGRADES
+		} else if (c >= 0x80) {		/* multi-byte: advance by width */
+			unsigned int cp;
+			int w, n;
+
+			n = mg_utf8_decode(&ltext(wp->w_dotp)[i],
+			    llength(wp->w_dotp) - i, &cp, &w);
+			if (n <= 0)
+				n = 1;
+			col += (w > 0 ? w : 0);
+			i += n;
+#endif
+		} else if (isprint(c)) {
 			col++;
+			i++;
 		} else {
 			col += snprintf(tmp, sizeof(tmp), "\\%o", c);
+			i++;
 		}
-
 	}
 	return (col);
 }

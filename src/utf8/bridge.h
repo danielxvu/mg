@@ -20,6 +20,9 @@ int mg_utf8_decode(const char *s, int len, unsigned int *cp, int *width);
 /* Display width of a codepoint: 0 (combining), 1, or 2 (wide). */
 int mg_utf8_char_width(unsigned int cp);
 
+/* Encode `cp` as UTF-8 into `out` (>= 4 bytes); returns byte count (0 on error). */
+int mg_utf8_encode(unsigned int cp, char *out);
+
 /* Is `cp` a word constituent (letter/number/connector)?  1 or 0. */
 int mg_utf8_is_word(unsigned int cp);
 

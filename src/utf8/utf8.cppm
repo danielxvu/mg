@@ -30,6 +30,9 @@ decoded decode_first(std::string_view s);
 // Display width of a codepoint (0 combining, 1, or 2 wide).
 int char_width(char32_t cp);
 
+// Encode `cp` as UTF-8 into `out` (must hold >= 4 bytes); returns byte count.
+int encode(char32_t cp, char *out);
+
 // Word constituent: any letter/number, plus connector punctuation ('_' etc.).
 bool is_word(char32_t cp);
 
@@ -63,6 +66,14 @@ int char_width(char32_t cp)
 {
     const int w = utf8proc_charwidth(static_cast<utf8proc_int32_t>(cp));
     return w < 0 ? 1 : w;
+}
+
+int encode(char32_t cp, char *out)
+{
+    const utf8proc_ssize_t n = utf8proc_encode_char(
+        static_cast<utf8proc_int32_t>(cp),
+        reinterpret_cast<utf8proc_uint8_t *>(out));
+    return n > 0 ? static_cast<int>(n) : 0;
 }
 
 bool is_word(char32_t cp)

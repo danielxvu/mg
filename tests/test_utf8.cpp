@@ -79,6 +79,20 @@ TEST_CASE("char_width matches decode for representative codepoints")
     CHECK(char_width(U'́') == 0); // combining acute
 }
 
+TEST_CASE("encode produces the right byte counts (round-trips decode)")
+{
+    char buf[4];
+    CHECK(encode(U'A', buf) == 1);
+    CHECK(buf[0] == 'A');
+    CHECK(encode(U'é', buf) == 2);
+    CHECK(encode(U'日', buf) == 3);
+    CHECK(encode(U'\U0001F600', buf) == 4);
+    // round-trip: encode then decode_first yields the same codepoint
+    int n = encode(U'日', buf);
+    auto d = decode_first(std::string_view(buf, n));
+    CHECK(d.cp == U'日');
+}
+
 TEST_CASE("is_word covers letters, digits, and non-ASCII letters")
 {
     CHECK(is_word(U'A'));
