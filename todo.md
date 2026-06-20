@@ -154,25 +154,25 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
 
 ## ▶ RESUME HERE (next session)
 
-**🎉 C1.5 COMPLETE — both core modules now wired in** (`chrdef.h` classification
-→ `mg.text`, `cinfo[]` retired, PR #21, branch `c1_5-text`). `mg.io` (C3.5) and
-`mg.text` (C1.5) both serve real C-core paths under `#ifdef ENABLE_CPP_UPGRADES`;
-OFF build byte-for-byte upstream. ⚠ **OFF build dir is `build-c`.** Directions:
-- **C2 — opaque `struct line` → piece table** (the big one, recommended next):
-  `struct line` is public (`def.h:229`) and ~24 `.c` files poke
-  `l_text`/`l_used`/`l_size`/`lforw`/`lback` directly. Phase (a): introduce an
-  accessor API (`ltext`/`llength` macros already exist — extend to a full
-  get/set surface) and make `struct line` opaque across all 24 files. Phase (b):
-  only THEN swap storage to a piece table behind that API. Spec carefully;
-  weigh the **UTF-8 goal** (Future goals) — line storage + column math need
-  multi-byte awareness. This is multi-iteration; do phase (a) discovery first.
-- **Widen the wire-ins** (lower-risk filler): route `fchecktime`/`fupdstat`
-  (stat) through `mg.io`; wire `next_tabstop`/`word.c` helpers via `mg.text`.
-- **C3 file-IO depth**: route the `ffropen`/`ffgetline` read loop through
-  `mg.io` (bigger, riskier — real replacement of the hot path).
-Recommend **starting C2 phase (a)** — it's the project's structural centerpiece
-and everything else is now warmed up. Build: `cmake --preset cpp &&
-ctest --preset cpp`. Freeze the next branch on `c1_5-text`.
+**C2 phase (a) IN PROGRESS — make `struct line` opaque.** Spec:
+`docs/superpowers/specs/2026-06-20-c2a-opaque-line-design.md`. ✅ **C2a-1 done**
+(PR #22, branch `c2a1-line`): added accessors `lsize`/`lsetlen`/`lsetforw`/
+`lsetback` to def.h; converted word.c/util.c/re_search.c/tags.c. Pure-C,
+behavior-preserving, both builds clean. ⚠ **OFF build dir is `build-c`.** Next:
+- **C2a-2**: convert the remaining leakage to accessors — extend.c (24), echo.c
+  (11), kbd.c (10), buffer.c (10), log.c (7), macro.c/file.c/dired.c (4 each).
+  Mostly line *relinking* (`maclcur` splices) → `lsetforw`/`lsetback`; `l_used`
+  writes → `lsetlen`; reads → existing `lforw`/`lback`/`llength`/`ltext`. Find
+  sites: `grep -nE "(->|\.)(l_fp|l_bp|l_size|l_used|l_text)\b" src/<file>.c`.
+- **C2a-3 (the flip)**: convert line.c's own uses where natural; then flip ALL
+  accessor macros → functions (decls in def.h, defs in line.c) and move `struct
+  line` definition into line.c, leaving `struct line;` opaque in def.h. The
+  incomplete type then rejects any stray direct access at compile time (the
+  enforcement). No call-site changes (call syntax identical). Verify both builds.
+- Then **C2 phase (b)**: piece-table storage behind the accessors (weigh the
+  **UTF-8 goal** — see Future goals — when designing it).
+Build each slice: `cmake --build --preset cpp && ctest --preset cpp` +
+`cmake --build --preset c-legacy` (0 warnings). Freeze next branch on `c2a1-line`.
 
 ## Future goals (not yet scheduled)
 - **UTF-8 support** (user, 2026-06-20). mg is byte-oriented Latin-1 today (C1
@@ -196,8 +196,9 @@ ctest --preset cpp`. Freeze the next branch on `c1_5-text`.
   `m8-nav`→m7-hunks (#14), `m8-sections`→m8-nav (#15),
   `m8-nav2`→m8-sections (#16), `m9-actions`→m8-nav2 (#17),
   `c3-io`→m9-actions (#18), `c1-text`→c3-io (#19),
-  `c3_5-fisdir`→c1-text (#20), `c1_5-text`→c3_5-fisdir (#21).
-  Next milestone (C2 phase a) freezes its branch on `c1_5-text`.
+  `c3_5-fisdir`→c1-text (#20), `c1_5-text`→c3_5-fisdir (#21),
+  `c2a1-line`→c1_5-text (#22).
+  Next slice (C2a-2) freezes its branch on `c2a1-line`.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
