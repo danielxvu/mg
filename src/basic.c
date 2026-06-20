@@ -20,6 +20,10 @@
 
 #include "def.h"
 
+#ifdef ENABLE_CPP_UPGRADES
+#include "utf8/bridge.h"	/* forwchar/backchar step whole codepoints (U3) */
+#endif
+
 #define percint(n1, n2)		((n1 * (int) n2) * 0.1)
 
 /*
@@ -60,8 +64,19 @@ backchar(int f, int n)
 			curwp->w_doto = llength(lp);
 			curwp->w_rflag |= WFMOVE;
 			curwp->w_dotline--;
-		} else
+		} else {
+#ifdef ENABLE_CPP_UPGRADES
+			/* step back over a whole codepoint (skip UTF-8
+			 * continuation bytes 0x80-0xBF). */
+			int p = curwp->w_doto - 1;
+			while (p > 0 && (((unsigned char)
+			    ltext(curwp->w_dotp)[p]) & 0xC0) == 0x80)
+				p--;
+			curwp->w_doto = p;
+#else
 			curwp->w_doto--;
+#endif
+		}
 	}
 	return (TRUE);
 }
@@ -102,8 +117,19 @@ forwchar(int f, int n)
 			curwp->w_doto = 0;
 			curwp->w_dotline++;
 			curwp->w_rflag |= WFMOVE;
-		} else
+		} else {
+#ifdef ENABLE_CPP_UPGRADES
+			/* advance over a whole codepoint (ASCII -> 1 byte). */
+			unsigned int cp;
+			int w, nb;
+
+			nb = mg_utf8_decode(&ltext(curwp->w_dotp)[curwp->w_doto],
+			    llength(curwp->w_dotp) - curwp->w_doto, &cp, &w);
+			curwp->w_doto += (nb > 0 ? nb : 1);
+#else
 			curwp->w_doto++;
+#endif
+		}
 	}
 	return (TRUE);
 }

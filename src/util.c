@@ -447,6 +447,69 @@ indent(int f, int n)
 }
 
 
+#ifdef ENABLE_CPP_UPGRADES
+/*
+ * Bytes spanning `n` characters forward / backward from dot, so the delete
+ * commands remove whole UTF-8 characters rather than single bytes (U3). A
+ * newline (end of line) counts as one character/byte.
+ */
+static RSIZE
+char_bytes_forward(int n)
+{
+	struct line	*lp = curwp->w_dotp;
+	int		 doto = curwp->w_doto;
+	RSIZE		 bytes = 0;
+
+	while (n-- > 0) {
+		if (doto == llength(lp)) {
+			lp = lforw(lp);
+			if (lp == curbp->b_headp)
+				break;
+			doto = 0;
+			bytes += 1;
+		} else {
+			unsigned int cp;
+			int w, nb;
+
+			nb = mg_utf8_decode(&ltext(lp)[doto],
+			    llength(lp) - doto, &cp, &w);
+			if (nb <= 0)
+				nb = 1;
+			doto += nb;
+			bytes += nb;
+		}
+	}
+	return (bytes);
+}
+
+static RSIZE
+char_bytes_backward(int n)
+{
+	struct line	*lp = curwp->w_dotp;
+	int		 doto = curwp->w_doto;
+	RSIZE		 bytes = 0;
+
+	while (n-- > 0) {
+		if (doto == 0) {
+			lp = lback(lp);
+			if (lp == curbp->b_headp)
+				break;
+			doto = llength(lp);
+			bytes += 1;
+		} else {
+			int p = doto - 1;
+
+			while (p > 0 &&
+			    (((unsigned char)ltext(lp)[p]) & 0xC0) == 0x80)
+				p--;
+			bytes += (doto - p);
+			doto = p;
+		}
+	}
+	return (bytes);
+}
+#endif /* ENABLE_CPP_UPGRADES */
+
 /*
  * Delete forward.  This is real easy, because the basic delete routine does
  * all of the work.  Watches for negative arguments, and does the right thing.
@@ -466,7 +529,11 @@ forwdel(int f, int n)
 		thisflag |= CFKILL;
 	}
 
+#ifdef ENABLE_CPP_UPGRADES
+	return (ldelete(char_bytes_forward(n), (f & FFARG) ? KFORW : KNONE));
+#else
 	return (ldelete((RSIZE) n, (f & FFARG) ? KFORW : KNONE));
+#endif
 }
 
 /*
@@ -488,8 +555,18 @@ backdel(int f, int n)
 			kdelete();
 		thisflag |= CFKILL;
 	}
+#ifdef ENABLE_CPP_UPGRADES
+	{
+		/* span the n chars before dot, then move back and delete them. */
+		RSIZE	span = char_bytes_backward(n);
+
+		if ((s = backchar(f | FFRAND, n)) == TRUE)
+			s = ldelete(span, (f & FFARG) ? KFORW : KNONE);
+	}
+#else
 	if ((s = backchar(f | FFRAND, n)) == TRUE)
 		s = ldelete((RSIZE)n, (f & FFARG) ? KFORW : KNONE);
+#endif
 
 	return (s);
 }
