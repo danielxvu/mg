@@ -494,6 +494,7 @@ addlinef(struct buffer *bp, char *fmt, ...)
 	va_list		 ap;
 	struct line	*lp;
 	char		*txt;
+	int		 len;
 
 	if ((lp = lalloc(0)) == NULL)
 		return (FALSE);
@@ -503,9 +504,19 @@ addlinef(struct buffer *bp, char *fmt, ...)
 		va_end(ap);
 		return (FALSE);
 	}
-	lsettext(lp, txt);
-	lsetlen(lp, strlen(txt));
 	va_end(ap);
+	/* Copy into the line's own storage (representation-agnostic: works for
+	 * both the C buffer and the mg.line vector<char>). */
+	len = (int)strlen(txt);
+	if (lrealloc(lp, len) == FALSE) {
+		free(txt);
+		lfree(lp);
+		return (FALSE);
+	}
+	if (len > 0)
+		memcpy(ltext(lp), txt, len);
+	lsetlen(lp, len);
+	free(txt);
 
 	lsetforw(lback(bp->b_headp), lp);	/* Hook onto the end	 */
 	lsetback(lp, lback(bp->b_headp));

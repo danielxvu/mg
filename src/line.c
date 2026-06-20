@@ -26,12 +26,18 @@
 
 #include "def.h"
 
+#ifdef ENABLE_CPP_UPGRADES
+/* lalloc/lrealloc/lfreestore + the accessors come from the mg.line C++ module
+ * (src/line/storage.cpp); they are declared in def.h. */
+#else
 /*
  * The private storage layout of a line (task C2a-3). The rest of the editor
  * sees only an incomplete `struct line;` in def.h and reaches lines through the
- * accessors below, so this representation can change -- e.g. to a piece table
- * (C2 phase b) -- without a ripple. Each line holds the used size, the size of
- * the text array, and the text; the end-of-line is implied, not stored.
+ * accessors below, so this representation can change without a ripple. Under
+ * ENABLE_CPP_UPGRADES the whole storage core (this struct, the accessors,
+ * lalloc/lrealloc, lfreestore) instead comes from the mg.line C++ module
+ * (vector<char>-backed); see src/line/. Each line holds the used size, the size
+ * of the text array, and the text; the end-of-line is implied, not stored.
  */
 struct line {
 	struct line	*l_fp;		/* Link to the next line	 */
@@ -50,9 +56,9 @@ int	llength(const struct line *lp)		{ return (lp->l_used); }
 char	*ltext(const struct line *lp)		{ return (lp->l_text); }
 int	lsize(const struct line *lp)		{ return (lp->l_size); }
 void	lsetlen(struct line *lp, int n)	{ lp->l_used = n; }
-void	lsettext(struct line *lp, char *s) { lp->l_text = s; }
 void	lsetforw(struct line *lp, struct line *lq) { lp->l_fp = lq; }
 void	lsetback(struct line *lp, struct line *lq) { lp->l_bp = lq; }
+#endif /* !ENABLE_CPP_UPGRADES */
 
 int	casereplace = TRUE;
 
@@ -70,9 +76,11 @@ setcasereplace(int f, int n)
 	return (TRUE);
 }
 
+#ifndef ENABLE_CPP_UPGRADES
 /*
  * Allocate a new line of size `used'.  lrealloc() can be called if the line
- * ever needs to grow beyond that.
+ * ever needs to grow beyond that. (Under ENABLE_CPP_UPGRADES, lalloc/lrealloc
+ * come from the mg.line C++ module instead.)
  */
 struct line *
 lalloc(int used)
@@ -104,6 +112,7 @@ lrealloc(struct line *lp, int newsize)
 	}
 	return (TRUE);
 }
+#endif /* !ENABLE_CPP_UPGRADES */
 
 /*
  * Delete line "lp".  Fix all of the links that might point to it (they are
@@ -143,8 +152,12 @@ lfree(struct line *lp)
 	}
 	lsetforw(lback(lp), lforw(lp));
 	lsetback(lforw(lp), lback(lp));
-	free(lp->l_text);	/* storage core (becomes lfreestore in C2b-2) */
+#ifdef ENABLE_CPP_UPGRADES
+	lfreestore(lp);		/* C++ delete (frees the vector<char> too) */
+#else
+	free(lp->l_text);
 	free(lp);
+#endif
 }
 
 /*
@@ -513,7 +526,11 @@ ldelnewline(void)
 		lsetlen(lp1, llength(lp1) + llength(lp2));
 		lsetforw(lp1, lforw(lp2));
 		lsetback(lforw(lp2), lp1);
-		free(lp2);		/* storage core */
+#ifdef ENABLE_CPP_UPGRADES
+		lfreestore(lp2);
+#else
+		free(lp2);
+#endif
 		return (TRUE);
 	}
 	if ((lp3 = lalloc(llength(lp1) + llength(lp2))) == NULL)
@@ -540,8 +557,13 @@ ldelnewline(void)
 			wp->w_marko += llength(lp1);
 		}
 	}
+#ifdef ENABLE_CPP_UPGRADES
+	lfreestore(lp1);
+	lfreestore(lp2);
+#else
 	free(lp1);
 	free(lp2);
+#endif
 	return (TRUE);
 }
 

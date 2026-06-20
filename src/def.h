@@ -243,7 +243,6 @@ int		 llength(const struct line *lp);
 char		*ltext(const struct line *lp);
 int		 lsize(const struct line *lp);
 void		 lsetlen(struct line *lp, int n);
-void		 lsettext(struct line *lp, char *s);
 void		 lsetforw(struct line *lp, struct line *lq);
 void		 lsetback(struct line *lp, struct line *lq);
 
@@ -482,6 +481,19 @@ int		 do_filevisitalt(char *);
 struct line	*lalloc(int);
 int		 lrealloc(struct line *, int);
 void		 lfree(struct line *);
+void		 lfreestore(struct line *);	/* C2b: destroy a line's storage */
+/*
+ * Free a lalloc'd line that is NOT linked into a buffer (keyboard-macro line
+ * lists, abandoned temporaries). Under the mg.line C++ storage a line is
+ * new/delete'd, so it must go through lfreestore; the plain-C build frees the
+ * struct exactly as upstream did. (lfree() is the linked-line counterpart and
+ * keeps its own #ifdef since its C path also frees l_text.)
+ */
+#ifdef ENABLE_CPP_UPGRADES
+#define lfreeunlinked(lp)	lfreestore(lp)
+#else
+#define lfreeunlinked(lp)	free(lp)
+#endif
 void		 lchange(int);
 int		 linsert(int, int);
 int		 lnewline_at(struct line *, int);

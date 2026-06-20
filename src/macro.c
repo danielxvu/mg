@@ -39,9 +39,9 @@ definemacro(int f, int n)
 	if (maclhead != NULL) {
 		for (lp1 = lforw(maclhead); lp1 != maclhead; lp1 = lp2) {
 			lp2 = lforw(lp1);
-			free(lp1);
+			lfreeunlinked(lp1);
 		}
-		free(lp1);
+		lfreeunlinked(lp1);
 	}
 
 	if ((maclhead = lp1 = lalloc(0)) == NULL)

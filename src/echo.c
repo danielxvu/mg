@@ -164,7 +164,7 @@ eyesno(const char *sp)
 
 				maclcur = lback(lp);
 				lsetforw(maclcur, lforw(lp));
-				free(lp);
+				lfreeunlinked(lp);
 			}
 			if (strcasecmp(rep, "yes") == 0) {
 				eerase();

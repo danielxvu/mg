@@ -541,7 +541,7 @@ extend(int f, int n)
 			macro[macrocount - 1].m_funct = funct;
 			maclcur = lback(lp);
 			lsetforw(maclcur, lforw(lp));
-			free(lp);
+			lfreeunlinked(lp);
 		}
 		return ((*funct)(f, n));
 	}
@@ -867,10 +867,10 @@ excline(char *line, int llen, int lnum)
 			if ((curmap = name_map(ltext(lp))) == NULL) {
 				(void)dobeep_msgs("No such mode:", ltext(lp));
 				status = FALSE;
-				free(lp);
+				lfreeunlinked(lp);
 				goto cleanup;
 			}
-			free(lp);
+			lfreeunlinked(lp);
 			bind = BINDARG;
 			break;
 		default:
@@ -908,10 +908,10 @@ cleanup:
 	lp = lforw(maclcur);
 	while (lp != maclcur) {
 		np = lforw(lp);
-		free(lp);
+		lfreeunlinked(lp);
 		lp = np;
 	}
-	free(lp);
+	lfreeunlinked(lp);
 	maclhead = NULL;
 	macrodef = FALSE;
 	return (status);
