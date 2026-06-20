@@ -124,12 +124,15 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
       wired in. _(commit: C1, PR #19)_ Spec:
       `docs/superpowers/specs/2026-06-20-c1-text-utils-design.md`. ⚠ word.c/
       util.c editor commands remain in C (coupled to `curwp`/`curbp`).
-- [ ] **C2 — EPIC (multi-iteration): opaque lines, then PieceTable.** ⚠ Review
-      found `struct line` is **public** (`def.h:229`) and **24 of ~30 `.c` files**
-      poke `l_text/l_used/l_size/lforw/lback` directly — there is no API to hide
-      behind, so this is NOT a drop-in module swap. Sub-tasks: (a) introduce an
-      accessor API + make `struct line` opaque across all 24 files; (b) only then
-      swap the storage model to a piece-table behind that API.
+- [~] **C2 — EPIC (multi-iteration): opaque lines, then PieceTable.**
+      ✅ **(a) DONE** — accessor API + `struct line` opaque (PRs #22/#23/#24).
+      Measured 189 accesses/13 files (not 24); converted all 12 non-owner files
+      to accessors, then moved the struct into line.c + flipped macros→functions
+      so the incomplete type compile-enforces the boundary. ⏳ **(b) TODO** —
+      swap storage to a piece table behind the now-sealed accessors. ⚠ `ltext`
+      returns a contiguous `char*` that callers scan directly — phase (b) must
+      still materialize a contiguous buffer for it (or migrate those callers
+      first). Weigh the UTF-8 goal in the design.
 - [x] **C3 — `std::expected` file-IO layer** (`mg.io`). `stat_file`/`read_file`/
       `write_file` → `expected<…, io_error>` (errno-faithful, POSIX + RAII fd
       guard); `read_lines`/`copy_file` compose via `.and_then()`, tests cover
@@ -154,28 +157,24 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
 
 ## ▶ RESUME HERE (next session)
 
-**C2 phase (a) IN PROGRESS — make `struct line` opaque.** Spec:
-`docs/superpowers/specs/2026-06-20-c2a-opaque-line-design.md`. ✅ **C2a-1**
-(accessors + trivial files, PR #22) · ✅ **C2a-2** (splice/buffer files, PR #23,
-branch `c2a2-line`): all leakage outside line.c now uses the accessor API; added
-`lsettext`. **Only `line.c` (the owner) still touches members directly.** Pure-C,
-behavior-preserving; both builds clean; macro record/replay identical OFF/ON.
-⚠ **OFF build dir is `build-c`.** Next — **C2a-3 (the flip):**
-- Convert line.c's own member uses to accessors where natural (it keeps the full
-  struct, so this is optional/cosmetic for readability).
-- Flip ALL accessor macros (lforw/lback/lgetc/lputc/llength/ltext/lsize/lsetlen/
-  lsettext/lsetforw/lsetback) → **functions**: declarations in def.h, definitions
-  in line.c (where the full struct lives). Call syntax is identical, so NO
-  call-site changes anywhere.
-- Move the `struct line { … }` definition from def.h into line.c (or a private
-  `line.h` included only by line.c); leave `struct line;` (incomplete) in def.h.
-  The incomplete type now **compile-rejects** any stray direct member access —
-  the enforcement that proves encapsulation is complete.
-- Verify both presets build + 0 warnings + behavior unchanged.
-- Then **C2 phase (b)**: piece-table storage behind the accessors (weigh the
-  **UTF-8 goal** — Future goals — when designing it).
+**🎉 C2 phase (a) COMPLETE — `struct line` is opaque** (PRs #22/#23/#24). The
+full struct lives in line.c alone; def.h has only `struct line;` + accessor
+function decls. Any direct member access outside line.c is now a *compile error*
+(proven by injecting `->l_used` → "incomplete definition of type 'struct line'").
+The accessor API (`lforw`/`lback`/`lgetc`/`lputc`/`llength`/`ltext`/`lsize`/
+`lsetlen`/`lsettext`/`lsetforw`/`lsetback`) is the sealed seam. ⚠ **OFF dir is
+`build-c`.** Next — **C2 phase (b): piece-table storage** (the original goal):
+- Spec it carefully first. The line's content (`l_text`/`l_used`/`l_size`) is
+  now reachable ONLY via `lgetc`/`lputc`/`llength`/`ltext`/`lsize`/`lsetlen`/
+  `lsettext`; reimplement those over a piece table inside line.c (the links
+  `lforw`/`lback` stay pointer-based). ⚠ **`ltext` returns a contiguous `char*`**
+  — many callers index/scan it directly, so a piece table must still materialize
+  a contiguous buffer for `ltext` (or those callers must move to `lgetc`/a span
+  API first). Weigh this + the **UTF-8 goal** (Future goals) when designing.
+- Consider whether phase (b) is a C++ module (`mg.line`) wired in under
+  `#ifdef`, or stays C in line.c. The opaque seam supports either.
 Build each slice: `cmake --build --preset cpp && ctest --preset cpp` +
-`cmake --build --preset c-legacy` (0 warnings). Freeze next branch on `c2a2-line`.
+`cmake --build --preset c-legacy` (0 warnings). Freeze next branch on `c2a3-line`.
 
 ## Future goals (not yet scheduled)
 - **UTF-8 support** (user, 2026-06-20). mg is byte-oriented Latin-1 today (C1
@@ -200,8 +199,9 @@ Build each slice: `cmake --build --preset cpp && ctest --preset cpp` +
   `m8-nav2`→m8-sections (#16), `m9-actions`→m8-nav2 (#17),
   `c3-io`→m9-actions (#18), `c1-text`→c3-io (#19),
   `c3_5-fisdir`→c1-text (#20), `c1_5-text`→c3_5-fisdir (#21),
-  `c2a1-line`→c1_5-text (#22), `c2a2-line`→c2a1-line (#23).
-  Next slice (C2a-3, the flip) freezes its branch on `c2a2-line`.
+  `c2a1-line`→c1_5-text (#22), `c2a2-line`→c2a1-line (#23),
+  `c2a3-line`→c2a2-line (#24).
+  Next milestone (C2 phase b) freezes its branch on `c2a3-line`.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
