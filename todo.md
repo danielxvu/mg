@@ -155,23 +155,29 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
 
 ## ▶ RESUME HERE (next session)
 
-**🎉 C2 COMPLETE — `struct line` opaque + C++ `vector<char>` storage** (PRs
-#22-#26). The editor's central data structure now runs on RAII C++ storage
-(`mg.line`, `src/line/storage.cpp`) under `ENABLE_CPP_UPGRADES`, behind the
-compile-enforced accessor seam; OFF is faithful C. With C1/C1.5, C3/C3.5, and C2
-done, the three core subsystems (text classification, file I/O, line storage)
-all have modern C++ implementations wired in. ⚠ **OFF dir is `build-c`.**
-Candidate next milestones — pick & spec one:
-- **UTF-8 support** (the user's stated goal — see Future goals). Now well-placed:
-  `mg.text` gets a codepoint-aware classification + display-width API (beside the
-  byte table), and `mg.line`/column math gain multi-byte awareness. Big; spec in
-  slices (decode/iterate → width → classification → cursor/column → display).
-- **Widen the wire-ins**: route the `fileio.c` read loop (`ffropen`/`ffgetline`)
-  through `mg.io`; more `mg.text` call sites.
-- **C++ buffer/window structures** (next core type after line): apply the same
-  opaque-seam → C++ pattern to `struct buffer` or `struct mgwin`.
+**UTF-8 support IN PROGRESS** (engine: utf8proc; ship Display+nav first, extend
+to Full). Spec: `docs/superpowers/specs/2026-06-20-u1-utf8-foundation-design.md`.
+✅ **U1 done** (PR #27, branch `u1-utf8`): `mg.utf8` C++ codepoint layer over
+utf8proc — `decode_first`(→cp/bytes/width), `char_width`, `is_word`, `is_space`
++ `extern "C"` bridge (`mg_utf8_decode`/`char_width`/`is_word`). Tested
+standalone (11 cases), NOT wired into the C core yet. ⚠ **OFF dir is `build-c`.**
+Next slices (each `#ifdef`-gated, OFF unchanged):
+- **U2 — display width:** link `mg→mg_utf8`; in `display.c` (the column/refresh
+  math) replace per-byte column stepping with `mg_utf8_decode` so a multi-byte
+  char advances by `width` columns and consumes `bytes` bytes. ⚠ find the
+  byte→column loops (e.g. `vtputc`/`updateline`/`getcolpos`). Verify `日本語`/
+  `café` render aligned (pty screen capture).
+- **U3 — cursor/delete by char:** `basic.c` `forwchar`/`backchar` and delete
+  step whole codepoints (use `mg_utf8_decode` forward; for backward, scan back
+  over UTF-8 continuation bytes `0x80–0xBF`). Verify cursor lands on char
+  boundaries; backspace removes a whole char.
+- **U4 — classification:** in `chrdef.h`/word.c, ASCII keeps the `mg.text` byte
+  table; for lead bytes ≥0x80 decode + use `mg_utf8_is_word`. Reconciles the
+  byte vs codepoint word rule (see U1 spec note).
+- **Later → Full:** grapheme-cluster cursor moves + NFC normalization (utf8proc
+  has both: `utf8proc_grapheme_break`, `utf8proc_map`/NFC).
 Build: `cmake --build --preset cpp && ctest --preset cpp` +
-`cmake --build --preset c-legacy` (0 warnings). Freeze next branch on `c2b2-line`.
+`cmake --build --preset c-legacy` (0 warnings). Freeze next branch on `u1-utf8`.
 
 ## Future goals (not yet scheduled)
 - **UTF-8 support** (user, 2026-06-20). mg is byte-oriented Latin-1 today (C1
@@ -198,8 +204,8 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `c3_5-fisdir`→c1-text (#20), `c1_5-text`→c3_5-fisdir (#21),
   `c2a1-line`→c1_5-text (#22), `c2a2-line`→c2a1-line (#23),
   `c2a3-line`→c2a2-line (#24), `c2b1-line`→c2a3-line (#25),
-  `c2b2-line`→c2b1-line (#26).
-  Next milestone freezes its branch on `c2b2-line`.
+  `c2b2-line`→c2b1-line (#26), `u1-utf8`→c2b2-line (#27).
+  Next slice (U2 display width) freezes its branch on `u1-utf8`.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
