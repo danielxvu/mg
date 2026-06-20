@@ -169,11 +169,15 @@ Next slices (each `#ifdef`-gated, OFF unchanged):
 - ✅ **U3 done** (PR #29, branch `u3-cursor`): `forwchar`/`backchar` step whole
   codepoints; `forwdel`/`backdel` delete the byte span of n chars (whole-char
   delete). ASCII byte-identical; UTF-8 verified.
-- **U4 — classification:** in `chrdef.h`/word.c, ASCII keeps the `mg.text` byte
-  table; for lead bytes ≥0x80 decode + use `mg_utf8_is_word`. Reconciles the
-  byte vs codepoint word rule (see U1 spec note).
-- **Later → Full:** grapheme-cluster cursor moves + NFC normalization (utf8proc
-  has both: `utf8proc_grapheme_break`, `utf8proc_map`/NFC).
+- ✅ **U4 done** (PR #30, branch `u4-classify`): `inword()` classifies by
+  codepoint (ASCII→byte table, ≥0x80→`mg_utf8_is_word`); word counters byte-count
+  via `fwd_bytes`/`bwd_bytes`; case ops ASCII-only guard; `grabword` whole-char.
+  **🎉 Display+navigation UTF-8 target COMPLETE (U1–U4): UTF-8 files open & edit
+  cleanly.**
+- **Later → Full** (optional, utf8proc has the primitives): grapheme-cluster
+  cursor moves (`utf8proc_grapheme_break`); NFC normalization on load/save
+  (`utf8proc_map`/`utf8proc_NFC`); non-ASCII case mapping (upper/lowerword over
+  codepoints, handling byte-length changes); extended-line (`updext`) UTF-8.
 Build: `cmake --build --preset cpp && ctest --preset cpp` +
 `cmake --build --preset c-legacy` (0 warnings). Freeze next branch on `u1-utf8`.
 
@@ -203,8 +207,9 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `c2a1-line`→c1_5-text (#22), `c2a2-line`→c2a1-line (#23),
   `c2a3-line`→c2a2-line (#24), `c2b1-line`→c2a3-line (#25),
   `c2b2-line`→c2b1-line (#26), `u1-utf8`→c2b2-line (#27),
-  `u2-display`→u1-utf8 (#28), `u3-cursor`→u2-display (#29).
-  Next slice (U4 classification) freezes its branch on `u3-cursor`.
+  `u2-display`→u1-utf8 (#28), `u3-cursor`→u2-display (#29),
+  `u4-classify`→u3-cursor (#30).
+  Next (UTF-8 Full extras, or a new direction) freezes on `u4-classify`.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
