@@ -155,24 +155,27 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
 ## ▶ RESUME HERE (next session)
 
 **C2 phase (a) IN PROGRESS — make `struct line` opaque.** Spec:
-`docs/superpowers/specs/2026-06-20-c2a-opaque-line-design.md`. ✅ **C2a-1 done**
-(PR #22, branch `c2a1-line`): added accessors `lsize`/`lsetlen`/`lsetforw`/
-`lsetback` to def.h; converted word.c/util.c/re_search.c/tags.c. Pure-C,
-behavior-preserving, both builds clean. ⚠ **OFF build dir is `build-c`.** Next:
-- **C2a-2**: convert the remaining leakage to accessors — extend.c (24), echo.c
-  (11), kbd.c (10), buffer.c (10), log.c (7), macro.c/file.c/dired.c (4 each).
-  Mostly line *relinking* (`maclcur` splices) → `lsetforw`/`lsetback`; `l_used`
-  writes → `lsetlen`; reads → existing `lforw`/`lback`/`llength`/`ltext`. Find
-  sites: `grep -nE "(->|\.)(l_fp|l_bp|l_size|l_used|l_text)\b" src/<file>.c`.
-- **C2a-3 (the flip)**: convert line.c's own uses where natural; then flip ALL
-  accessor macros → functions (decls in def.h, defs in line.c) and move `struct
-  line` definition into line.c, leaving `struct line;` opaque in def.h. The
-  incomplete type then rejects any stray direct access at compile time (the
-  enforcement). No call-site changes (call syntax identical). Verify both builds.
+`docs/superpowers/specs/2026-06-20-c2a-opaque-line-design.md`. ✅ **C2a-1**
+(accessors + trivial files, PR #22) · ✅ **C2a-2** (splice/buffer files, PR #23,
+branch `c2a2-line`): all leakage outside line.c now uses the accessor API; added
+`lsettext`. **Only `line.c` (the owner) still touches members directly.** Pure-C,
+behavior-preserving; both builds clean; macro record/replay identical OFF/ON.
+⚠ **OFF build dir is `build-c`.** Next — **C2a-3 (the flip):**
+- Convert line.c's own member uses to accessors where natural (it keeps the full
+  struct, so this is optional/cosmetic for readability).
+- Flip ALL accessor macros (lforw/lback/lgetc/lputc/llength/ltext/lsize/lsetlen/
+  lsettext/lsetforw/lsetback) → **functions**: declarations in def.h, definitions
+  in line.c (where the full struct lives). Call syntax is identical, so NO
+  call-site changes anywhere.
+- Move the `struct line { … }` definition from def.h into line.c (or a private
+  `line.h` included only by line.c); leave `struct line;` (incomplete) in def.h.
+  The incomplete type now **compile-rejects** any stray direct member access —
+  the enforcement that proves encapsulation is complete.
+- Verify both presets build + 0 warnings + behavior unchanged.
 - Then **C2 phase (b)**: piece-table storage behind the accessors (weigh the
-  **UTF-8 goal** — see Future goals — when designing it).
+  **UTF-8 goal** — Future goals — when designing it).
 Build each slice: `cmake --build --preset cpp && ctest --preset cpp` +
-`cmake --build --preset c-legacy` (0 warnings). Freeze next branch on `c2a1-line`.
+`cmake --build --preset c-legacy` (0 warnings). Freeze next branch on `c2a2-line`.
 
 ## Future goals (not yet scheduled)
 - **UTF-8 support** (user, 2026-06-20). mg is byte-oriented Latin-1 today (C1
@@ -197,8 +200,8 @@ Build each slice: `cmake --build --preset cpp && ctest --preset cpp` +
   `m8-nav2`→m8-sections (#16), `m9-actions`→m8-nav2 (#17),
   `c3-io`→m9-actions (#18), `c1-text`→c3-io (#19),
   `c3_5-fisdir`→c1-text (#20), `c1_5-text`→c3_5-fisdir (#21),
-  `c2a1-line`→c1_5-text (#22).
-  Next slice (C2a-2) freezes its branch on `c2a1-line`.
+  `c2a1-line`→c1_5-text (#22), `c2a2-line`→c2a1-line (#23).
+  Next slice (C2a-3, the flip) freezes its branch on `c2a2-line`.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
