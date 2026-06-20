@@ -162,11 +162,10 @@ utf8proc — `decode_first`(→cp/bytes/width), `char_width`, `is_word`, `is_spa
 + `extern "C"` bridge (`mg_utf8_decode`/`char_width`/`is_word`). Tested
 standalone (11 cases), NOT wired into the C core yet. ⚠ **OFF dir is `build-c`.**
 Next slices (each `#ifdef`-gated, OFF unchanged):
-- **U2 — display width:** link `mg→mg_utf8`; in `display.c` (the column/refresh
-  math) replace per-byte column stepping with `mg_utf8_decode` so a multi-byte
-  char advances by `width` columns and consumes `bytes` bytes. ⚠ find the
-  byte→column loops (e.g. `vtputc`/`updateline`/`getcolpos`). Verify `日本語`/
-  `café` render aligned (pty screen capture).
+- ✅ **U2 done** (PR #28, branch `u2-display`): codepoint video cells (`vtcell`
+  typedef) — `display.c` renders UTF-8 glyphs at correct width, cursor column is
+  display-width-based. ⚠ extended (horizontally-scrolled) lines still byte-wise
+  (`updext`/`vtpute`) — a documented follow-up.
 - **U3 — cursor/delete by char:** `basic.c` `forwchar`/`backchar` and delete
   step whole codepoints (use `mg_utf8_decode` forward; for backward, scan back
   over UTF-8 continuation bytes `0x80–0xBF`). Verify cursor lands on char
@@ -204,8 +203,9 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `c3_5-fisdir`→c1-text (#20), `c1_5-text`→c3_5-fisdir (#21),
   `c2a1-line`→c1_5-text (#22), `c2a2-line`→c2a1-line (#23),
   `c2a3-line`→c2a2-line (#24), `c2b1-line`→c2a3-line (#25),
-  `c2b2-line`→c2b1-line (#26), `u1-utf8`→c2b2-line (#27).
-  Next slice (U2 display width) freezes its branch on `u1-utf8`.
+  `c2b2-line`→c2b1-line (#26), `u1-utf8`→c2b2-line (#27),
+  `u2-display`→u1-utf8 (#28).
+  Next slice (U3 cursor/delete by char) freezes its branch on `u2-display`.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
