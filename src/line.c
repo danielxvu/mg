@@ -119,31 +119,31 @@ lfree(struct line *lp)
 
 	for (wp = wheadp; wp != NULL; wp = wp->w_wndp) {
 		if (wp->w_linep == lp)
-			wp->w_linep = lp->l_fp;
+			wp->w_linep = lforw(lp);
 		if (wp->w_dotp == lp) {
-			wp->w_dotp = lp->l_fp;
+			wp->w_dotp = lforw(lp);
 			wp->w_doto = 0;
 		}
 		if (wp->w_markp == lp) {
-			wp->w_markp = lp->l_fp;
+			wp->w_markp = lforw(lp);
 			wp->w_marko = 0;
 		}
 	}
 	for (bp = bheadp; bp != NULL; bp = bp->b_bufp) {
 		if (bp->b_nwnd == 0) {
 			if (bp->b_dotp == lp) {
-				bp->b_dotp = lp->l_fp;
+				bp->b_dotp = lforw(lp);
 				bp->b_doto = 0;
 			}
 			if (bp->b_markp == lp) {
-				bp->b_markp = lp->l_fp;
+				bp->b_markp = lforw(lp);
 				bp->b_marko = 0;
 			}
 		}
 	}
-	lp->l_bp->l_fp = lp->l_fp;
-	lp->l_fp->l_bp = lp->l_bp;
-	free(lp->l_text);
+	lsetforw(lback(lp), lforw(lp));
+	lsetback(lforw(lp), lback(lp));
+	free(lp->l_text);	/* storage core (becomes lfreestore in C2b-2) */
 	free(lp);
 }
 
@@ -222,14 +222,14 @@ linsert(int n, int c)
 		if ((lp2 = lalloc(n)) == NULL)
 			return (FALSE);
 		/* previous line */
-		lp3 = lp1->l_bp;
+		lp3 = lback(lp1);
 		/* link in */
-		lp3->l_fp = lp2;
-		lp2->l_fp = lp1;
-		lp1->l_bp = lp2;
-		lp2->l_bp = lp3;
+		lsetforw(lp3, lp2);
+		lsetforw(lp2, lp1);
+		lsetback(lp1, lp2);
+		lsetback(lp2, lp3);
 		for (i = 0; i < n; ++i)
-			lp2->l_text[i] = c;
+			lputc(lp2, i, c);
 		for (wp = wheadp; wp != NULL; wp = wp->w_wndp) {
 			if (wp->w_linep == lp1)
 				wp->w_linep = lp2;
@@ -245,18 +245,18 @@ linsert(int n, int c)
 	/* save for later */
 	doto = curwp->w_doto;
 
-	if ((lp1->l_used + n) > lp1->l_size) {
-		if (lrealloc(lp1, lp1->l_used + n) == FALSE)
+	if ((llength(lp1) + n) > lsize(lp1)) {
+		if (lrealloc(lp1, llength(lp1) + n) == FALSE)
 			return (FALSE);
 	}
-	lp1->l_used += n;
-	if (lp1->l_used != n)
-		memmove(&lp1->l_text[doto + n], &lp1->l_text[doto],
-		    lp1->l_used - n - doto);
+	lsetlen(lp1, llength(lp1) + n);
+	if (llength(lp1) != n)
+		memmove(&ltext(lp1)[doto + n], &ltext(lp1)[doto],
+		    llength(lp1) - n - doto);
 
 	/* Add the characters */
 	for (i = 0; i < n; ++i)
-		lp1->l_text[doto + i] = c;
+		lputc(lp1, doto + i, c);
 	for (wp = wheadp; wp != NULL; wp = wp->w_wndp) {
 		if (wp->w_dotp == lp1) {
 			if (wp == curwp || wp->w_doto > doto)
@@ -301,10 +301,10 @@ lnewline_at(struct line *lp1, int doto)
 		/* new first part */
 		if ((lp2 = lalloc(0)) == NULL)
 			return (FALSE);
-		lp2->l_bp = lp1->l_bp;
-		lp1->l_bp->l_fp = lp2;
-		lp2->l_fp = lp1;
-		lp1->l_bp = lp2;
+		lsetback(lp2, lback(lp1));
+		lsetforw(lback(lp1), lp2);
+		lsetforw(lp2, lp1);
+		lsetback(lp1, lp2);
 		for (wp = wheadp; wp != NULL; wp = wp->w_wndp) {
 			if (wp->w_linep == lp1)
 				wp->w_linep = lp2;
@@ -325,12 +325,12 @@ lnewline_at(struct line *lp1, int doto)
 	if ((lp2 = lalloc(nlen)) == NULL)
 		return (FALSE);
 	if (nlen != 0)
-		bcopy(&lp1->l_text[doto], &lp2->l_text[0], nlen);
-	lp1->l_used = doto;
-	lp2->l_bp = lp1;
-	lp2->l_fp = lp1->l_fp;
-	lp1->l_fp = lp2;
-	lp2->l_fp->l_bp = lp2;
+		bcopy(&ltext(lp1)[doto], &ltext(lp2)[0], nlen);
+	lsetlen(lp1, doto);
+	lsetback(lp2, lp1);
+	lsetforw(lp2, lforw(lp1));
+	lsetforw(lp1, lp2);
+	lsetback(lforw(lp2), lp2);
 	/* Windows */
 	for (wp = wheadp; wp != NULL; wp = wp->w_wndp) {
 		if (wp->w_dotp == lp1 && wp->w_doto >= doto) {
@@ -413,7 +413,7 @@ ldelete(RSIZE n, int kflag)
 		if (dotp == curbp->b_headp)
 			goto out;
 		/* Size of the chunk */
-		chunk = dotp->l_used - doto;
+		chunk = llength(dotp) - doto;
 
 		if (chunk > n)
 			chunk = n;
@@ -430,14 +430,14 @@ ldelete(RSIZE n, int kflag)
 		}
 		lchange(WFEDIT);
 		/* Scrunch text */
-		cp1 = &dotp->l_text[doto];
+		cp1 = &ltext(dotp)[doto];
 		memcpy(&sv[end], cp1, chunk);
 		end += chunk;
 		sv[end] = '\0';
-		for (cp2 = cp1 + chunk; cp2 < &dotp->l_text[dotp->l_used];
+		for (cp2 = cp1 + chunk; cp2 < &ltext(dotp)[llength(dotp)];
 		    cp2++)
 			*cp1++ = *cp2;
-		dotp->l_used -= (int)chunk;
+		lsetlen(dotp, llength(dotp) - (int)chunk);
 		for (wp = wheadp; wp != NULL; wp = wp->w_wndp) {
 			if (wp->w_dotp == dotp && wp->w_doto >= doto) {
 				wp->w_doto -= chunk;
@@ -488,7 +488,7 @@ ldelnewline(void)
 	}
 
 	lp1 = curwp->w_dotp;
-	lp2 = lp1->l_fp;
+	lp2 = lforw(lp1);
 	/* at the end of the buffer */
 	if (lp2 == curbp->b_headp)
 		return (TRUE);
@@ -496,34 +496,34 @@ ldelnewline(void)
 	curwp->w_bufp->b_lines--;
 	if (curwp->w_markline > curwp->w_dotline)
 		curwp->w_markline--;
-	if (lp2->l_used <= lp1->l_size - lp1->l_used) {
-		bcopy(&lp2->l_text[0], &lp1->l_text[lp1->l_used], lp2->l_used);
+	if (llength(lp2) <= lsize(lp1) - llength(lp1)) {
+		bcopy(&ltext(lp2)[0], &ltext(lp1)[llength(lp1)], llength(lp2));
 		for (wp = wheadp; wp != NULL; wp = wp->w_wndp) {
 			if (wp->w_linep == lp2)
 				wp->w_linep = lp1;
 			if (wp->w_dotp == lp2) {
 				wp->w_dotp = lp1;
-				wp->w_doto += lp1->l_used;
+				wp->w_doto += llength(lp1);
 			}
 			if (wp->w_markp == lp2) {
 				wp->w_markp = lp1;
-				wp->w_marko += lp1->l_used;
+				wp->w_marko += llength(lp1);
 			}
 		}
-		lp1->l_used += lp2->l_used;
-		lp1->l_fp = lp2->l_fp;
-		lp2->l_fp->l_bp = lp1;
-		free(lp2);
+		lsetlen(lp1, llength(lp1) + llength(lp2));
+		lsetforw(lp1, lforw(lp2));
+		lsetback(lforw(lp2), lp1);
+		free(lp2);		/* storage core */
 		return (TRUE);
 	}
-	if ((lp3 = lalloc(lp1->l_used + lp2->l_used)) == NULL)
+	if ((lp3 = lalloc(llength(lp1) + llength(lp2))) == NULL)
 		return (FALSE);
-	bcopy(&lp1->l_text[0], &lp3->l_text[0], lp1->l_used);
-	bcopy(&lp2->l_text[0], &lp3->l_text[lp1->l_used], lp2->l_used);
-	lp1->l_bp->l_fp = lp3;
-	lp3->l_fp = lp2->l_fp;
-	lp2->l_fp->l_bp = lp3;
-	lp3->l_bp = lp1->l_bp;
+	bcopy(&ltext(lp1)[0], &ltext(lp3)[0], llength(lp1));
+	bcopy(&ltext(lp2)[0], &ltext(lp3)[llength(lp1)], llength(lp2));
+	lsetforw(lback(lp1), lp3);
+	lsetforw(lp3, lforw(lp2));
+	lsetback(lforw(lp2), lp3);
+	lsetback(lp3, lback(lp1));
 	for (wp = wheadp; wp != NULL; wp = wp->w_wndp) {
 		if (wp->w_linep == lp1 || wp->w_linep == lp2)
 			wp->w_linep = lp3;
@@ -531,13 +531,13 @@ ldelnewline(void)
 			wp->w_dotp = lp3;
 		else if (wp->w_dotp == lp2) {
 			wp->w_dotp = lp3;
-			wp->w_doto += lp1->l_used;
+			wp->w_doto += llength(lp1);
 		}
 		if (wp->w_markp == lp1)
 			wp->w_markp = lp3;
 		else if (wp->w_markp == lp2) {
 			wp->w_markp = lp3;
-			wp->w_marko += lp1->l_used;
+			wp->w_marko += llength(lp1);
 		}
 	}
 	free(lp1);
