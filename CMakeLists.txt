@@ -58,6 +58,7 @@ endif()
 # core), so it only needs to exist for the test suite to link it.
 if(ENABLE_CPP_UPGRADES)
     add_subdirectory(src/io)
+    add_subdirectory(src/text)
 endif()
 
 # Native Git engine (C++20 modules). Configured before tests so its module

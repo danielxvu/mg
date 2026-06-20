@@ -41,10 +41,14 @@ mg_add_module_test(test_modules
     SOURCES test_modules.cpp
     MODULES mg.probe.cppm)
 
-# Core C++23 module tests (task C-series): import mg.io from the mg_io library.
+# Core C++23 module tests (task C-series): import mg.io / mg.text.
 add_executable(test_io test_io.cpp)
 target_link_libraries(test_io PRIVATE doctest::doctest mg_io)
 doctest_discover_tests(test_io)
+
+add_executable(test_text test_text.cpp)
+target_link_libraries(test_text PRIVATE doctest::doctest mg_text)
+doctest_discover_tests(test_text)
 
 # Magit module tests: import mg.magit from the mg_magit module library.
 if(ENABLE_NATIVE_MAGIT)
