@@ -163,6 +163,38 @@ fs::path make_repo_stash_branch()
 }
 } // namespace
 
+TEST_CASE("mg_magit_checkout and mg_magit_stash_drop act through the bridge")
+{
+    auto dir = make_repo_stash_branch(); // 1 stash + branch "feature"
+
+    // Checkout the feature branch -> status buffer reports it as current.
+    REQUIRE(mg_magit_checkout(dir.string().c_str(), "feature") == 1);
+    {
+        std::vector<std::string> lines;
+        mg_magit_status_buffer(
+            dir.string().c_str(), nullptr, 0,
+            [](void *ctx, const char *line, int, const char *, int) {
+                static_cast<std::vector<std::string> *>(ctx)->emplace_back(line);
+            },
+            &lines);
+        CHECK(any_line_has(lines, "On branch feature"));
+    }
+
+    // Drop the stash -> the Stashes section disappears.
+    REQUIRE(mg_magit_stash_drop(dir.string().c_str(), 0) == 1);
+    {
+        std::vector<std::string> lines;
+        mg_magit_status_buffer(
+            dir.string().c_str(), nullptr, 0,
+            [](void *ctx, const char *line, int, const char *, int) {
+                static_cast<std::vector<std::string> *>(ctx)->emplace_back(line);
+            },
+            &lines);
+        CHECK(!any_line_has(lines, "Stashes"));
+    }
+    fs::remove_all(dir);
+}
+
 TEST_CASE("mg_magit_status_buffer emits Stashes and Branches sections")
 {
     auto dir = make_repo_stash_branch();

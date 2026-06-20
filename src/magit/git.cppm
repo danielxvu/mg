@@ -171,6 +171,15 @@ std::expected<std::vector<stash_entry>, error> stashes(std::string path);
 // The repository's local branches; one entry has is_head == true.
 std::expected<std::vector<branch_entry>, error> branches(std::string path);
 
+// Reapply stash `index` to the working tree, keeping it in the stash list.
+std::expected<void, error> stash_apply(std::string repo, std::size_t index);
+
+// Delete stash `index` from the stash list.
+std::expected<void, error> stash_drop(std::string repo, std::size_t index);
+
+// Check out local branch `name`, moving HEAD and updating the working tree.
+std::expected<void, error> checkout_branch(std::string repo, std::string name);
+
 // Stage `file` (relative to the repo root) into the index.
 std::expected<void, error> stage(std::string repo, std::string file);
 
@@ -367,6 +376,60 @@ std::expected<std::vector<branch_entry>, error> branches(std::string path)
     if (rc != GIT_ITEROVER)
         return std::unexpected(last_error());
     return out;
+}
+
+std::expected<void, error> stash_apply(std::string repo, std::size_t index)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+    if (git_stash_apply(r.get(), index, nullptr) != 0)
+        return std::unexpected(last_error());
+    return {};
+}
+
+std::expected<void, error> stash_drop(std::string repo, std::size_t index)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+    if (git_stash_drop(r.get(), index) != 0)
+        return std::unexpected(last_error());
+    return {};
+}
+
+std::expected<void, error> checkout_branch(std::string repo, std::string name)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    git_reference *raw_ref = nullptr;
+    if (git_branch_lookup(&raw_ref, r.get(), name.c_str(), GIT_BRANCH_LOCAL) != 0)
+        return std::unexpected(last_error());
+    detail::ref_ptr ref(raw_ref);
+
+    git_object *raw_tree = nullptr;
+    if (git_reference_peel(&raw_tree, ref.get(), GIT_OBJECT_TREE) != 0)
+        return std::unexpected(last_error());
+    detail::object_ptr tree(raw_tree);
+
+    // SAFE refuses to clobber conflicting local edits (surfaced as an error).
+    git_checkout_options opts;
+    git_checkout_options_init(&opts, GIT_CHECKOUT_OPTIONS_VERSION);
+    opts.checkout_strategy = GIT_CHECKOUT_SAFE;
+    if (git_checkout_tree(r.get(), tree.get(), &opts) != 0)
+        return std::unexpected(last_error());
+
+    if (git_repository_set_head(r.get(), git_reference_name(ref.get())) != 0)
+        return std::unexpected(last_error());
+    return {};
 }
 
 std::expected<void, error> stage(std::string repo, std::string file)

@@ -38,6 +38,8 @@ static int	magit_visit(int, int);
 static int	magit_help(int, int);
 static int	magit_next_section(int, int);
 static int	magit_prev_section(int, int);
+static int	magit_stash_apply(int, int);
+static int	magit_checkout(int, int);
 
 /*
  * line -> {kind, hunk, path} map for the most recent render of *magit-status*.
@@ -59,6 +61,8 @@ static PF magit_tab[] = { magit_toggle_expand };
 static PF magit_ret[] = { magit_visit };
 static PF magit_esc[] = { NULL };		/* ESC -> meta prefix */
 static PF magit_qmark[] = { magit_help };
+static PF magit_a[] = { magit_stash_apply };
+static PF magit_b[] = { magit_checkout };
 static PF magit_c[] = { magit_commit };
 static PF magit_g[] = { magit_refresh };
 static PF magit_k[] = { magit_discard };
@@ -84,9 +88,9 @@ static struct KEYMAPE (2) magit_metamap = {
 };
 
 /* Entries MUST stay in ascending key order -- doscan() relies on it. */
-static struct KEYMAPE (10) magitmap = {
-	10,
-	10,
+static struct KEYMAPE (12) magitmap = {
+	12,
+	12,
 	rescan,
 	{
 		{ CCHR('I'), CCHR('I'), magit_tab, NULL },	/* TAB: expand/collapse */
@@ -94,6 +98,8 @@ static struct KEYMAPE (10) magitmap = {
 		{ CCHR('['), CCHR('['), magit_esc,		/* ESC: meta prefix */
 		    (KEYMAP *)&magit_metamap },
 		{ '?', '?', magit_qmark, NULL },		/* ?: key help */
+		{ 'a', 'a', magit_a, NULL },			/* a: apply stash */
+		{ 'b', 'b', magit_b, NULL },			/* b: checkout branch */
 		{ 'c', 'c', magit_c, NULL },
 		{ 'g', 'g', magit_g, NULL },
 		{ 'k', 'k', magit_k, NULL },
@@ -353,15 +359,18 @@ magit_help(int f, int n)
 	static const char *const keys[] = {
 		"magit-status key bindings",
 		"",
-		"  TAB  expand / collapse the inline diff",
-		"  RET  visit the file at point (other window)",
-		"  s    stage the file or hunk at point",
-		"  u    unstage the file or hunk at point",
-		"  k    discard changes at point",
-		"  c    commit the staged changes",
-		"  g    refresh",
-		"  q    quit this window",
-		"  ?    this help",
+		"  TAB      expand / collapse the inline diff",
+		"  RET      visit the file at point (other window)",
+		"  M-n/M-p  next / previous section",
+		"  s        stage the file or hunk at point",
+		"  u        unstage the file or hunk at point",
+		"  k        discard changes / drop the stash at point",
+		"  a        apply the stash at point",
+		"  b        check out the branch at point",
+		"  c        commit the staged changes",
+		"  g        refresh",
+		"  q        quit this window",
+		"  ?        this help",
 	};
 	struct buffer	*bp;
 	struct mgwin	*wp;
@@ -443,6 +452,50 @@ magit_prev_section(int f, int n)
 	return (magit_section_move(-1));
 }
 
+/* a: reapply the stash at point (keeps it in the stash list). */
+static int
+magit_stash_apply(int f, int n)
+{
+	char	*path = NULL;
+	char	 cwd[PATH_MAX];
+	int	 kind, hunk;
+
+	kind = magit_at_point(&path, &hunk);
+	if (kind != MG_LINE_STASH) {
+		ewprintf("Not on a stash");
+		return (FALSE);
+	}
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	if (mg_magit_stash_apply(cwd, hunk) != 1) {	/* hunk holds the index */
+		ewprintf("Stash apply failed");
+		return (FALSE);
+	}
+	return (magit_refresh(f, n));
+}
+
+/* b: check out the branch at point. */
+static int
+magit_checkout(int f, int n)
+{
+	char	*path = NULL;
+	char	 cwd[PATH_MAX];
+	int	 kind, hunk;
+
+	kind = magit_at_point(&path, &hunk);
+	if (kind != MG_LINE_BRANCH) {
+		ewprintf("Not on a branch");
+		return (FALSE);
+	}
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	if (mg_magit_checkout(cwd, path) != 1) {	/* path holds the name */
+		ewprintf("Checkout failed");
+		return (FALSE);
+	}
+	return (magit_refresh(f, n));
+}
+
 static int
 magit_stage(int f, int n)
 {
@@ -510,6 +563,19 @@ magit_discard(int f, int n)
 	int	 kind, hunk;
 
 	kind = magit_at_point(&path, &hunk);
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	/* On a stash line, k drops the stash; on a file line, it discards edits. */
+	if (kind == MG_LINE_STASH) {
+		(void)snprintf(prompt, sizeof(prompt), "Drop stash@{%d}", hunk);
+		if (eyesno(prompt) != TRUE)
+			return (FALSE);
+		if (mg_magit_stash_drop(cwd, hunk) != 1) {
+			ewprintf("Stash drop failed");
+			return (FALSE);
+		}
+		return (magit_refresh(f, n));
+	}
 	if (kind != MG_LINE_UNTRACKED && kind != MG_LINE_UNSTAGED &&
 	    kind != MG_LINE_STAGED) {
 		ewprintf("Nothing to discard on this line");
@@ -517,8 +583,6 @@ magit_discard(int f, int n)
 	}
 	(void)snprintf(prompt, sizeof(prompt), "Discard changes to %s", path);
 	if (eyesno(prompt) != TRUE)
-		return (FALSE);
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
 		return (FALSE);
 	if (mg_magit_discard(cwd, path) != 1) {
 		ewprintf("Discard failed");

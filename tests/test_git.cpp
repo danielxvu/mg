@@ -469,6 +469,33 @@ TEST_CASE("stashes() on a repo with no stashes is empty (not an error)")
     fs::remove_all(dir);
 }
 
+TEST_CASE("stash_apply reapplies a stashed change, keeping the stash")
+{
+    auto dir = make_repo_with_stash("WIP"); // a.txt reverted to "content"
+    REQUIRE(mg::git::stash_apply(dir.string(), 0).has_value());
+
+    std::ifstream in(dir / "a.txt");
+    std::string content;
+    std::getline(in, content);
+    CHECK(content == "content changed"); // change is back in the worktree
+
+    auto s = mg::git::stashes(dir.string());
+    REQUIRE(s.has_value());
+    CHECK(s->size() == 1); // apply does not drop
+    fs::remove_all(dir);
+}
+
+TEST_CASE("stash_drop removes the stash")
+{
+    auto dir = make_repo_with_stash("WIP");
+    REQUIRE(mg::git::stash_drop(dir.string(), 0).has_value());
+
+    auto s = mg::git::stashes(dir.string());
+    REQUIRE(s.has_value());
+    CHECK(s->empty());
+    fs::remove_all(dir);
+}
+
 TEST_CASE("branches() lists local branches and flags HEAD")
 {
     auto dir = make_repo_with_branch("feature");
@@ -489,6 +516,17 @@ TEST_CASE("branches() lists local branches and flags HEAD")
     CHECK(saw_feature);
     CHECK(head_flagged);
     CHECK(head_count == 1); // exactly one current branch
+    fs::remove_all(dir);
+}
+
+TEST_CASE("checkout_branch switches HEAD to the named branch")
+{
+    auto dir = make_repo_with_branch("feature");
+    REQUIRE(mg::git::checkout_branch(dir.string(), "feature").has_value());
+
+    auto h = mg::git::read_head(dir.string());
+    REQUIRE(h.has_value());
+    CHECK(h->branch == "feature");
     fs::remove_all(dir);
 }
 

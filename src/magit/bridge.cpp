@@ -224,7 +224,7 @@ extern "C" int mg_magit_status_buffer(const char *repo_path,
             MG_LINE_SECTION);
         for (const auto &s : *stashes)
             out("  stash@{" + std::to_string(s.index) + "} " + s.message,
-                MG_LINE_STASH);
+                MG_LINE_STASH, nullptr, static_cast<int>(s.index));
     }
 
     if (auto commits = mg::git::recent_commits(repo_path, 10);
@@ -241,7 +241,8 @@ extern "C" int mg_magit_status_buffer(const char *repo_path,
         out("Branches (" + std::to_string(branches->size()) + ")",
             MG_LINE_SECTION);
         for (const auto &b : *branches)
-            out(std::string(b.is_head ? "* " : "  ") + b.name, MG_LINE_BRANCH);
+            out(std::string(b.is_head ? "* " : "  ") + b.name, MG_LINE_BRANCH,
+                b.name.c_str());
     }
 
     return n;
@@ -289,4 +290,25 @@ extern "C" int mg_magit_unstage_hunk(const char *repo_path, const char *path,
     if (repo_path == nullptr || path == nullptr || hunk < 0)
         return 0;
     return mg::git::unstage_hunk(repo_path, path, hunk).has_value() ? 1 : 0;
+}
+
+extern "C" int mg_magit_stash_apply(const char *repo_path, int index)
+{
+    if (repo_path == nullptr || index < 0)
+        return 0;
+    return mg::git::stash_apply(repo_path, index).has_value() ? 1 : 0;
+}
+
+extern "C" int mg_magit_stash_drop(const char *repo_path, int index)
+{
+    if (repo_path == nullptr || index < 0)
+        return 0;
+    return mg::git::stash_drop(repo_path, index).has_value() ? 1 : 0;
+}
+
+extern "C" int mg_magit_checkout(const char *repo_path, const char *name)
+{
+    if (repo_path == nullptr || name == nullptr)
+        return 0;
+    return mg::git::checkout_branch(repo_path, name).has_value() ? 1 : 0;
 }
