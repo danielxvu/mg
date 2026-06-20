@@ -52,6 +52,14 @@ if(ENABLE_NATIVE_MAGIT AND NOT ENABLE_CPP_UPGRADES)
         "ENABLE_NATIVE_MAGIT requires ENABLE_CPP_UPGRADES=ON (it is a C++ engine).")
 endif()
 
+# Core C++23 modules (task C-series). Built whenever the upgrades are on --
+# independent of the native-magit feature, since these replace legacy core
+# subsystems. mg.io is a standalone, tested module (not yet wired into the C
+# core), so it only needs to exist for the test suite to link it.
+if(ENABLE_CPP_UPGRADES)
+    add_subdirectory(src/io)
+endif()
+
 # Native Git engine (C++20 modules). Configured before tests so its module
 # library exists when the test suite links test_magit against it.
 if(ENABLE_NATIVE_MAGIT)
