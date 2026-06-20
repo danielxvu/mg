@@ -163,6 +163,38 @@ fs::path make_repo_stash_branch()
 }
 } // namespace
 
+TEST_CASE("mg_magit_commit_amend / reword / head_message through the bridge")
+{
+    auto dir = make_temp_dir();
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_init(&repo, dir.string().c_str(), 0) == 0);
+    git_config *cfg = nullptr;
+    REQUIRE(git_repository_config(&cfg, repo) == 0);
+    git_config_set_string(cfg, "user.name", "T");
+    git_config_set_string(cfg, "user.email", "t@t");
+    git_config_free(cfg);
+    std::ofstream(dir / "f.txt") << "x";
+    git_index *idx = nullptr;
+    REQUIRE(git_repository_index(&idx, repo) == 0);
+    REQUIRE(git_index_add_bypath(idx, "f.txt") == 0);
+    REQUIRE(git_index_write(idx) == 0);
+    git_index_free(idx);
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+
+    REQUIRE(mg_magit_commit(dir.string().c_str(), "original") == 1);
+    // reword changes the message in place
+    CHECK(mg_magit_commit_reword(dir.string().c_str(), "reworded") == 1);
+
+    char buf[256] = {0};
+    int len = mg_magit_head_message(dir.string().c_str(), buf, sizeof buf);
+    CHECK(len > 0);
+    CHECK(std::string(buf).find("reworded") != std::string::npos);
+
+    fs::remove_all(dir);
+}
+
 TEST_CASE("mg_magit_checkout and mg_magit_stash_drop act through the bridge")
 {
     auto dir = make_repo_stash_branch(); // 1 stash + branch "feature"

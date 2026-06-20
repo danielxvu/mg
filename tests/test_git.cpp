@@ -103,6 +103,21 @@ fs::path make_repo_with_two_hunks()
     return dir;
 }
 
+// Set user.name/user.email so git_signature_default works (amend/commit).
+void set_test_config(const fs::path &dir)
+{
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_open(&repo, dir.string().c_str()) == 0);
+    git_config *cfg = nullptr;
+    REQUIRE(git_repository_config(&cfg, repo) == 0);
+    git_config_set_string(cfg, "user.name", "Test");
+    git_config_set_string(cfg, "user.email", "t@example.com");
+    git_config_free(cfg);
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+}
+
 // A repo with a single commit on HEAD (built with libgit2).
 fs::path make_repo_with_commit(const char *message)
 {
@@ -317,6 +332,76 @@ TEST_CASE("discard() deletes an untracked file")
     REQUIRE(st.has_value());
     for (const auto &e : *st)
         CHECK(e.path != "untracked.txt");
+    fs::remove_all(dir);
+}
+
+TEST_CASE("commit_amend replaces HEAD with the staged tree and new message")
+{
+    auto dir = make_repo_with_commit("first commit"); // a.txt = "content"
+    set_test_config(dir);
+    std::ofstream(dir / "a.txt") << "amended content";
+    REQUIRE(mg::git::stage(dir.string(), "a.txt").has_value());
+
+    auto r = mg::git::commit_amend(dir.string(), "amended message");
+    REQUIRE(r.has_value());
+
+    auto h = mg::git::read_head(dir.string());
+    REQUIRE(h.has_value());
+    CHECK(h->summary == "amended message");
+    auto c = mg::git::recent_commits(dir.string(), 5);
+    REQUIRE(c.has_value());
+    CHECK(c->size() == 1); // amended in place, not a new commit
+
+    std::ifstream in(dir / "a.txt");
+    std::string content;
+    std::getline(in, content);
+    CHECK(content == "amended content"); // worktree unchanged
+    fs::remove_all(dir);
+}
+
+TEST_CASE("commit_extend keeps HEAD's message, adds the staged change")
+{
+    auto dir = make_repo_with_commit("keep this message");
+    set_test_config(dir);
+    std::ofstream(dir / "b.txt") << "new file";
+    REQUIRE(mg::git::stage(dir.string(), "b.txt").has_value());
+
+    REQUIRE(mg::git::commit_extend(dir.string()).has_value());
+
+    auto h = mg::git::read_head(dir.string());
+    REQUIRE(h.has_value());
+    CHECK(h->summary == "keep this message"); // message preserved
+    auto c = mg::git::recent_commits(dir.string(), 5);
+    REQUIRE(c->size() == 1);
+    auto st = mg::git::repo_status(dir.string());
+    REQUIRE(st.has_value());
+    for (const auto &e : *st)
+        CHECK(e.path != "b.txt"); // b.txt is now committed
+    fs::remove_all(dir);
+}
+
+TEST_CASE("commit_reword changes only HEAD's message")
+{
+    auto dir = make_repo_with_commit("typo mesage");
+    set_test_config(dir);
+
+    REQUIRE(mg::git::commit_reword(dir.string(), "fixed message").has_value());
+
+    auto h = mg::git::read_head(dir.string());
+    REQUIRE(h.has_value());
+    CHECK(h->summary == "fixed message");
+    auto c = mg::git::recent_commits(dir.string(), 5);
+    REQUIRE(c->size() == 1);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("head_message returns HEAD's full commit message")
+{
+    auto dir = make_repo_with_commit("subject line\n\nbody text here");
+    auto m = mg::git::head_message(dir.string());
+    REQUIRE(m.has_value());
+    CHECK(m->find("subject line") != std::string::npos);
+    CHECK(m->find("body text here") != std::string::npos);
     fs::remove_all(dir);
 }
 

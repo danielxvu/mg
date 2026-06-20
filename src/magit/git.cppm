@@ -192,6 +192,21 @@ std::expected<void, error> discard(std::string repo, std::string file);
 // Commit the staged tree with `message`; returns the new commit's short oid.
 std::expected<std::string, error> commit(std::string repo, std::string message);
 
+// Amend HEAD: replace it with a commit of the current index tree and `message`,
+// keeping HEAD's parents. Returns the amended commit's short oid.
+std::expected<std::string, error>
+commit_amend(std::string repo, std::string message);
+
+// Extend HEAD: amend in the staged changes but keep HEAD's message.
+std::expected<std::string, error> commit_extend(std::string repo);
+
+// Reword HEAD: change only HEAD's message (keep its tree).
+std::expected<std::string, error>
+commit_reword(std::string repo, std::string message);
+
+// HEAD commit's full message (for pre-filling an amend/reword buffer).
+std::expected<std::string, error> head_message(std::string repo);
+
 // The hunks of `path`'s diff: unstaged (workdir vs index) or staged (index vs HEAD).
 std::expected<std::vector<hunk>, error>
 file_diff(std::string repo, std::string path, bool staged);
@@ -561,6 +576,89 @@ std::expected<std::string, error> commit(std::string repo, std::string message)
         return std::unexpected(last_error());
 
     return detail::short_oid(&commit_oid);
+}
+
+// Shared amend over HEAD: `message` (NULL keeps HEAD's), and the current index
+// tree when `use_index_tree` (else keep HEAD's tree). Author is preserved; the
+// committer is refreshed. update_ref = "HEAD" moves the branch.
+static std::expected<std::string, error>
+amend_impl(std::string repo, const char *message, bool use_index_tree)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    git_oid head_oid;
+    if (git_reference_name_to_id(&head_oid, r.get(), "HEAD") != 0)
+        return std::unexpected(last_error());
+    git_commit *raw_head = nullptr;
+    if (git_commit_lookup(&raw_head, r.get(), &head_oid) != 0)
+        return std::unexpected(last_error());
+    detail::commit_ptr head(raw_head);
+
+    git_signature *raw_sig = nullptr;
+    if (git_signature_default(&raw_sig, r.get()) != 0)
+        return std::unexpected(last_error()); // user.name/user.email unset
+    detail::sig_ptr sig(raw_sig);
+
+    detail::tree_ptr tree;
+    if (use_index_tree) {
+        git_index *raw_idx = nullptr;
+        if (git_repository_index(&raw_idx, r.get()) != 0)
+            return std::unexpected(last_error());
+        detail::index_ptr idx(raw_idx);
+        git_oid tree_oid;
+        if (git_index_write_tree(&tree_oid, idx.get()) != 0)
+            return std::unexpected(last_error());
+        git_tree *raw_tree = nullptr;
+        if (git_tree_lookup(&raw_tree, r.get(), &tree_oid) != 0)
+            return std::unexpected(last_error());
+        tree.reset(raw_tree);
+    }
+
+    git_oid out;
+    if (git_commit_amend(&out, head.get(), "HEAD", nullptr, sig.get(), nullptr,
+                         message, tree.get()) != 0)
+        return std::unexpected(last_error());
+    return detail::short_oid(&out);
+}
+
+std::expected<std::string, error>
+commit_amend(std::string repo, std::string message)
+{
+    return amend_impl(std::move(repo), message.c_str(), true);
+}
+
+std::expected<std::string, error> commit_extend(std::string repo)
+{
+    return amend_impl(std::move(repo), nullptr, true);
+}
+
+std::expected<std::string, error>
+commit_reword(std::string repo, std::string message)
+{
+    return amend_impl(std::move(repo), message.c_str(), false);
+}
+
+std::expected<std::string, error> head_message(std::string repo)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    git_oid head_oid;
+    if (git_reference_name_to_id(&head_oid, r.get(), "HEAD") != 0)
+        return std::unexpected(last_error());
+    git_commit *raw_c = nullptr;
+    if (git_commit_lookup(&raw_c, r.get(), &head_oid) != 0)
+        return std::unexpected(last_error());
+    detail::commit_ptr c(raw_c);
+    const char *m = git_commit_message(c.get());
+    return std::string(m != nullptr ? m : "");
 }
 
 std::expected<std::vector<hunk>, error>

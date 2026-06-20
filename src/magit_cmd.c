@@ -31,6 +31,9 @@ static int	magit_stage(int, int);
 static int	magit_unstage(int, int);
 static int	magit_discard(int, int);
 static int	magit_commit(int, int);
+static int	magit_commit_amend(int, int);
+static int	magit_commit_extend(int, int);
+static int	magit_commit_reword(int, int);
 static int	magit_commit_finish(int, int);
 static int	magit_commit_abort(int, int);
 static int	magit_toggle_expand(int, int);
@@ -63,7 +66,7 @@ static PF magit_esc[] = { NULL };		/* ESC -> meta prefix */
 static PF magit_qmark[] = { magit_help };
 static PF magit_a[] = { magit_stash_apply };
 static PF magit_b[] = { magit_checkout };
-static PF magit_c[] = { magit_commit };
+static PF magit_c[] = { NULL };			/* c -> commit menu prefix */
 static PF magit_g[] = { magit_refresh };
 static PF magit_k[] = { magit_discard };
 static PF magit_q[] = { delwind };
@@ -87,6 +90,27 @@ static struct KEYMAPE (2) magit_metamap = {
 	}
 };
 
+/*
+ * Commit menu: `c` in the status buffer prefixes into this (magit's commit
+ * transient). c=commit, a=amend, e=extend, w=reword. Entries ascending.
+ */
+static PF commit_c[] = { magit_commit };
+static PF commit_a[] = { magit_commit_amend };
+static PF commit_e[] = { magit_commit_extend };
+static PF commit_w[] = { magit_commit_reword };
+
+static struct KEYMAPE (4) magit_commitmenu = {
+	4,
+	4,
+	rescan,
+	{
+		{ 'a', 'a', commit_a, NULL },	/* c a: amend */
+		{ 'c', 'c', commit_c, NULL },	/* c c: commit */
+		{ 'e', 'e', commit_e, NULL },	/* c e: extend */
+		{ 'w', 'w', commit_w, NULL }	/* c w: reword */
+	}
+};
+
 /* Entries MUST stay in ascending key order -- doscan() relies on it. */
 static struct KEYMAPE (12) magitmap = {
 	12,
@@ -100,7 +124,7 @@ static struct KEYMAPE (12) magitmap = {
 		{ '?', '?', magit_qmark, NULL },		/* ?: key help */
 		{ 'a', 'a', magit_a, NULL },			/* a: apply stash */
 		{ 'b', 'b', magit_b, NULL },			/* b: checkout branch */
-		{ 'c', 'c', magit_c, NULL },
+		{ 'c', 'c', magit_c, (KEYMAP *)&magit_commitmenu }, /* c: commit menu */
 		{ 'g', 'g', magit_g, NULL },
 		{ 'k', 'k', magit_k, NULL },
 		{ 'q', 'q', magit_q, NULL },
@@ -367,7 +391,7 @@ magit_help(int f, int n)
 		"  k        discard changes / drop the stash at point",
 		"  a        apply the stash at point",
 		"  b        check out the branch at point",
-		"  c        commit the staged changes",
+		"  c c/a/e/w  commit / amend / extend / reword",
 		"  g        refresh",
 		"  q        quit this window",
 		"  ?        this help",
@@ -591,12 +615,23 @@ magit_discard(int f, int n)
 	return (magit_refresh(f, n));
 }
 
-/* c: open an editable *magit-commit* buffer to compose the message. */
+/* Which commit operation C-c C-c performs in the message buffer. */
+#define MG_COMMIT_NEW		0
+#define MG_COMMIT_AMEND		1
+#define MG_COMMIT_REWORD	2
+static int	magit_commit_op = MG_COMMIT_NEW;
+
+/*
+ * Open the editable *magit-commit* buffer for commit operation `op`. For amend
+ * and reword the buffer is pre-filled with HEAD's message; C-c C-c then runs
+ * the right operation (see magit_commit_finish).
+ */
 static int
-magit_commit(int f, int n)
+magit_open_commit_buffer(int op)
 {
 	static int	 initialized = 0;
 	struct buffer	*bp;
+	char		 cwd[PATH_MAX];
 
 	if (!initialized) {
 		maps_add((KEYMAP *)&commitmap, "magit-commit-mode");
@@ -610,10 +645,66 @@ magit_commit(int f, int n)
 	bp->b_flag &= ~BFREADONLY;	/* editable */
 	bp->b_modes[1] = name_mode("magit-commit-mode");
 	bp->b_nmodes = 1;
+	magit_commit_op = op;
 	if (showbuffer(bp, curwp, WFFULL) != TRUE)
 		return (FALSE);
 	curbp = bp;
+
+	/* Pre-fill HEAD's message for amend/reword. */
+	if (op != MG_COMMIT_NEW && getcwd(cwd, sizeof(cwd)) != NULL) {
+		char	msg[4096];
+		int	i, len;
+
+		len = mg_magit_head_message(cwd, msg, sizeof(msg));
+		for (i = 0; i < len; i++) {
+			if (msg[i] == '\n')
+				(void)lnewline();
+			else
+				(void)linsert(1, (unsigned char)msg[i]);
+		}
+		curwp->w_dotp = bfirstlp(curbp);	/* edit from the top */
+		curwp->w_doto = 0;
+		curwp->w_rflag |= WFFULL;
+	}
 	ewprintf("Commit message; C-c C-c to commit, C-c C-k to abort");
+	return (TRUE);
+}
+
+/* c c: compose a new commit. */
+static int
+magit_commit(int f, int n)
+{
+	return (magit_open_commit_buffer(MG_COMMIT_NEW));
+}
+
+/* c a: amend HEAD (edit the pre-filled message; staged changes are included). */
+static int
+magit_commit_amend(int f, int n)
+{
+	return (magit_open_commit_buffer(MG_COMMIT_AMEND));
+}
+
+/* c w: reword HEAD's message (its tree is unchanged). */
+static int
+magit_commit_reword(int f, int n)
+{
+	return (magit_open_commit_buffer(MG_COMMIT_REWORD));
+}
+
+/* c e: extend HEAD with the staged changes, keeping its message (no edit). */
+static int
+magit_commit_extend(int f, int n)
+{
+	char	cwd[PATH_MAX];
+
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	if (mg_magit_commit_extend(cwd) != 1) {
+		ewprintf("Extend failed (is user.name/user.email set?)");
+		return (FALSE);
+	}
+	(void)magit_refresh(f, n);
+	ewprintf("Extended HEAD commit");
 	return (TRUE);
 }
 
@@ -666,12 +757,23 @@ magit_commit_finish(int f, int n)
 	}
 	if (getcwd(cwd, sizeof(cwd)) == NULL)
 		return (FALSE);
-	if (mg_magit_commit(cwd, msg) != 1) {
+	switch (magit_commit_op) {
+	case MG_COMMIT_AMEND:
+		ll = mg_magit_commit_amend(cwd, msg);
+		break;
+	case MG_COMMIT_REWORD:
+		ll = mg_magit_commit_reword(cwd, msg);
+		break;
+	default:
+		ll = mg_magit_commit(cwd, msg);
+		break;
+	}
+	if (ll != 1) {
 		ewprintf("Commit failed (is user.name/user.email set?)");
 		return (FALSE);
 	}
 	magit_commit_leave(cbp, TRUE);
-	ewprintf("Committed");
+	ewprintf(magit_commit_op == MG_COMMIT_NEW ? "Committed" : "Amended");
 	return (TRUE);
 }
 

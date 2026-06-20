@@ -276,6 +276,43 @@ extern "C" int mg_magit_commit(const char *repo_path, const char *message)
     return mg::git::commit(repo_path, message).has_value() ? 1 : 0;
 }
 
+extern "C" int mg_magit_commit_amend(const char *repo_path, const char *message)
+{
+    if (repo_path == nullptr || message == nullptr)
+        return 0;
+    return mg::git::commit_amend(repo_path, message).has_value() ? 1 : 0;
+}
+
+extern "C" int mg_magit_commit_extend(const char *repo_path)
+{
+    if (repo_path == nullptr)
+        return 0;
+    return mg::git::commit_extend(repo_path).has_value() ? 1 : 0;
+}
+
+extern "C" int mg_magit_commit_reword(const char *repo_path, const char *message)
+{
+    if (repo_path == nullptr || message == nullptr)
+        return 0;
+    return mg::git::commit_reword(repo_path, message).has_value() ? 1 : 0;
+}
+
+extern "C" int mg_magit_head_message(const char *repo_path, char *buf,
+                                     size_t buflen)
+{
+    if (repo_path == nullptr || buf == nullptr || buflen == 0)
+        return 0;
+    auto m = mg::git::head_message(repo_path);
+    if (!m)
+        return 0;
+    std::size_t len = m->size();
+    if (len >= buflen)
+        len = buflen - 1;
+    std::memcpy(buf, m->data(), len);
+    buf[len] = '\0';
+    return static_cast<int>(len);
+}
+
 extern "C" int mg_magit_stage_hunk(const char *repo_path, const char *path,
                                    int hunk)
 {
