@@ -154,23 +154,25 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
 
 ## ▶ RESUME HERE (next session)
 
-**🎉 C3.5 COMPLETE — first C++-replaces-C wire-in** (`fileio.c` `fisdir` →
-`mg.io`, PR #20, branch `c3_5-fisdir`). The "modern module serving a real C-core
-path under `#ifdef ENABLE_CPP_UPGRADES`, OFF build untouched" mechanism is now
-proven for I/O. ⚠ **OFF build dir is `build-c`** (not `build-c-legacy`) — verify
-symbols there. Directions:
-- **C1.5 — wire `mg.text` in**: route `chrdef.h` `ISWORD`/etc. (or `word.c`
-  callers) through the `mg.text` bridge under `#ifdef`, retiring the mutable
-  `cinfo[]` global for the upgraded build. Same template as C3.5; small.
-- **Widen C3.5** — route more `fileio.c` calls through `mg.io` (`fchecktime`/
-  `fupdstat` stat checks are next-safest; the `ffropen`/`ffgetline` read loop is
-  the bigger, riskier prize). Each one shrinks the legacy surface.
-- **C2 — opaque `struct line` → piece table** (the epic): `struct line` public
-  (`def.h:229`), ~24 `.c` files poke `l_text`/`l_used`/`lforw`. (a) accessor API
-  making it opaque across all files, THEN (b) piece-table storage. Spec first;
-  weigh the **UTF-8 goal** (see Future goals) as a design axis here.
-Recommend **C1.5** (quick, completes the "both modules wired" story) or widening
-C3.5. Build: `cmake --preset cpp && ctest --preset cpp`. Freeze on `c3_5-fisdir`.
+**🎉 C1.5 COMPLETE — both core modules now wired in** (`chrdef.h` classification
+→ `mg.text`, `cinfo[]` retired, PR #21, branch `c1_5-text`). `mg.io` (C3.5) and
+`mg.text` (C1.5) both serve real C-core paths under `#ifdef ENABLE_CPP_UPGRADES`;
+OFF build byte-for-byte upstream. ⚠ **OFF build dir is `build-c`.** Directions:
+- **C2 — opaque `struct line` → piece table** (the big one, recommended next):
+  `struct line` is public (`def.h:229`) and ~24 `.c` files poke
+  `l_text`/`l_used`/`l_size`/`lforw`/`lback` directly. Phase (a): introduce an
+  accessor API (`ltext`/`llength` macros already exist — extend to a full
+  get/set surface) and make `struct line` opaque across all 24 files. Phase (b):
+  only THEN swap storage to a piece table behind that API. Spec carefully;
+  weigh the **UTF-8 goal** (Future goals) — line storage + column math need
+  multi-byte awareness. This is multi-iteration; do phase (a) discovery first.
+- **Widen the wire-ins** (lower-risk filler): route `fchecktime`/`fupdstat`
+  (stat) through `mg.io`; wire `next_tabstop`/`word.c` helpers via `mg.text`.
+- **C3 file-IO depth**: route the `ffropen`/`ffgetline` read loop through
+  `mg.io` (bigger, riskier — real replacement of the hot path).
+Recommend **starting C2 phase (a)** — it's the project's structural centerpiece
+and everything else is now warmed up. Build: `cmake --preset cpp &&
+ctest --preset cpp`. Freeze the next branch on `c1_5-text`.
 
 ## Future goals (not yet scheduled)
 - **UTF-8 support** (user, 2026-06-20). mg is byte-oriented Latin-1 today (C1
@@ -194,8 +196,8 @@ C3.5. Build: `cmake --preset cpp && ctest --preset cpp`. Freeze on `c3_5-fisdir`
   `m8-nav`→m7-hunks (#14), `m8-sections`→m8-nav (#15),
   `m8-nav2`→m8-sections (#16), `m9-actions`→m8-nav2 (#17),
   `c3-io`→m9-actions (#18), `c1-text`→c3-io (#19),
-  `c3_5-fisdir`→c1-text (#20).
-  Next milestone (C1.5 / widen-C3.5) freezes its branch on `c3_5-fisdir`.
+  `c3_5-fisdir`→c1-text (#20), `c1_5-text`→c3_5-fisdir (#21).
+  Next milestone (C2 phase a) freezes its branch on `c1_5-text`.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
