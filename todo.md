@@ -146,18 +146,22 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
 
 ## ▶ RESUME HERE (next session)
 
-**🎉 M8 COMPLETE** (PR #16, branch `m8-nav2`). Pick the next milestone and spec
-it first (the established rhythm). Two live directions:
-- **M9 — magit actions on the new sections** (builds straight on M8-3): act on
-  stashes/branches — `k`/`a` on a stash → drop/apply (`git_stash_drop`/`apply`),
-  `b`/`RET` on a branch → checkout (`git_checkout_tree` + set HEAD). New
-  `mg.git` ops + bridge + `magit_cmd.c` keys keyed off `MG_LINE_STASH`/`_BRANCH`.
-  Also candidate: remotes section + fetch/push, or a `*magit-log*` buffer.
-- **Core engine (C1/C3)** — pivot back to the C++23 refactor proper: C3 is the
-  cleanest (a `std::expected` file-IO layer over `fileio.c`); C1 (pure leaf
-  text utils) is small; C2 (opaque `struct line` → piece table) is the epic.
-Recommend **M9 stash/branch actions** for continuity, then revisit core engine.
-Build: `cmake --preset cpp && ctest --preset cpp`. Freeze next branch on `m8-nav2`.
+**🎉 M9 COMPLETE** (stash/branch actions, PR #17, branch `m9-actions`). Magit is
+now a usable status/stage/commit/diff/stash/branch tool. Pick the next milestone
+and spec it first:
+- **Magit depth (M10)** — remotes section + `f` fetch / `P` push
+  (`git_remote_*`), or a dedicated `*magit-log*` buffer (`RET` on a commit shows
+  it), or branch create/delete. All build on the existing libgit2 wrapper.
+- **Core engine (recommended pivot)** — return to the C++23 refactor proper,
+  which is the project's actual thesis. Cleanest entry is **C3**: a
+  `std::expected` file-IO layer over `fileio.c` (open/read/write/stat →
+  `expected<…, io_error>`, chained `.and_then()`/`.or_else()`). C1 (pure leaf
+  text utils) is a small warm-up; C2 (opaque `struct line` → piece table) is
+  the multi-iteration epic — 24 files touch line guts, needs an accessor API
+  first. See the "Core engine" task section above.
+Recommend **pivoting to C3** now that magit has proven the module+bridge+TDD
+pipeline end-to-end. Build: `cmake --preset cpp && ctest --preset cpp`. Freeze
+the next milestone branch on `m9-actions`.
 
 ## Notes for the next iteration
 - **Branch / PR workflow:** ongoing work rides the rolling `cpp-refactor` tip
@@ -171,8 +175,8 @@ Build: `cmake --preset cpp && ctest --preset cpp`. Freeze next branch on `m8-nav
   `m6-commit`→m5-discard (#11),
   `m7-diffs`→m6-commit (#12), `m7-hunks`→m7-diffs (#13),
   `m8-nav`→m7-hunks (#14), `m8-sections`→m8-nav (#15),
-  `m8-nav2`→m8-sections (#16).
-  Next milestone (M9 / core engine) freezes its branch on `m8-nav2`.
+  `m8-nav2`→m8-sections (#16), `m9-actions`→m8-nav2 (#17).
+  Next milestone (M10 / core-engine C3) freezes its branch on `m9-actions`.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
@@ -234,9 +238,15 @@ Build: `cmake --preset cpp && ctest --preset cpp`. Freeze next branch on `m8-nav
   `docs/superpowers/specs/2026-06-19-m8-magit-breadth-design.md`.
   ⚠ magit keymap entries MUST stay in ascending key order (`doscan` scan) —
   now enforced: `magit_assert_keymap_sorted()` panics on first `C-x g` if not.
+- **🎉 M9 COMPLETE — act on stashes/branches.** `a` apply / `k` drop a stash,
+  `b` check out a branch. `mg.git` `stash_apply`/`stash_drop`/`checkout_branch`;
+  emit carries the stash index (hunk field) + branch name (path); bridge
+  `mg_magit_stash_apply`/`stash_drop`/`checkout`. Spec:
+  `docs/superpowers/specs/2026-06-20-m9-magit-actions-design.md`.
 - **Magit roadmap:** ✅ M5 discard (`k`) · ✅ M6 commit (`c`) · ✅ M7 inline
-  diffs + hunk staging · ✅ M8 breadth (RET/?/stash+branches/section-nav).
-  Next: M9 (act on stashes/branches; remotes; log view) or pivot to core engine.
+  diffs + hunk staging · ✅ M8 breadth (RET/?/stash+branches/section-nav) ·
+  ✅ M9 act on stashes/branches (a/b/k). Next: M10 (remotes/log) or pivot to
+  the core C++23 engine (C3 file-IO recommended).
 - **Other:** live-while-idle modeline; auto-refresh the status buffer on fs
   events; merge the PR stack (#1–#8).
 - Follow-ups (when needed): C-quoted/special-char paths, `-z` NUL format,
