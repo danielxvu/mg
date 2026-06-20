@@ -157,24 +157,31 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
 
 ## ▶ RESUME HERE (next session)
 
-**🎉 C2 phase (a) COMPLETE — `struct line` is opaque** (PRs #22/#23/#24). The
-full struct lives in line.c alone; def.h has only `struct line;` + accessor
-function decls. Any direct member access outside line.c is now a *compile error*
-(proven by injecting `->l_used` → "incomplete definition of type 'struct line'").
-The accessor API (`lforw`/`lback`/`lgetc`/`lputc`/`llength`/`ltext`/`lsize`/
-`lsetlen`/`lsettext`/`lsetforw`/`lsetback`) is the sealed seam. ⚠ **OFF dir is
-`build-c`.** Next — **C2 phase (b): piece-table storage** (the original goal):
-- Spec it carefully first. The line's content (`l_text`/`l_used`/`l_size`) is
-  now reachable ONLY via `lgetc`/`lputc`/`llength`/`ltext`/`lsize`/`lsetlen`/
-  `lsettext`; reimplement those over a piece table inside line.c (the links
-  `lforw`/`lback` stay pointer-based). ⚠ **`ltext` returns a contiguous `char*`**
-  — many callers index/scan it directly, so a piece table must still materialize
-  a contiguous buffer for `ltext` (or those callers must move to `lgetc`/a span
-  API first). Weigh this + the **UTF-8 goal** (Future goals) when designing.
-- Consider whether phase (b) is a C++ module (`mg.line`) wired in under
-  `#ifdef`, or stays C in line.c. The opaque seam supports either.
+**C2 phase (b) IN PROGRESS — `mg.line` C++ storage** (user chose the std::string/
+`vector<char>` C++ module option). Spec:
+`docs/superpowers/specs/2026-06-20-c2b-mgline-storage-design.md`. ✅ phase (a)
+done (PRs #22-24, struct line opaque + compile-enforced). ✅ **C2b-1 done**
+(PR #25, branch `c2b1-line`): line.c's editor layer fully on accessors; only the
+**storage core** (lalloc init `84-86`, lrealloc `99-103`, lfree's
+`free(l_text)` `146`) still touches members. ⚠ **OFF dir is `build-c`.**
+Next — **C2b-2 (the swap):**
+- New `src/line/` → `mg.line` module + `extern "C"` bridge over the layout
+  `{ line *l_fp,*l_bp; int used; std::vector<char> buf; }` (`buf.size()`==l_size,
+  `used`==l_used, `buf.data()`==l_text contiguous). Bridge provides `lalloc`/
+  `lrealloc`/`lfreestore` + the 11 accessors.
+- In line.c, `#ifdef ENABLE_CPP_UPGRADES`: the storage core comes from the
+  bridge — do NOT define `struct line`, the accessors, `lalloc`, or `lrealloc`
+  here; lfree's `free(lp->l_text); free(lp)` becomes `lfreestore(lp)` (C++
+  delete). `#else` keeps today's C storage. Root CMake links `mg→mg_line`.
+- ⚠ A C++ `struct line` is `new`/`delete`d, NOT malloc/free — lalloc/lfreestore
+  cross the bridge; lfree's editor fixups stay C. `vector::resize` zero-fills
+  (C realloc didn't) — harmless. ldelnewline's `free(lp2)`/`free(lp1)` (struct
+  only) must also become `lfreestore` under #ifdef (and the C++ dtor frees buf,
+  fixing the original l_text leak — a benign improvement).
+- Verify: ON uses vector<char> (no malloc of l_text), OFF unchanged, identical
+  behavior, 0 warnings. Weigh the **UTF-8 goal** for the eventual codepoint API.
 Build each slice: `cmake --build --preset cpp && ctest --preset cpp` +
-`cmake --build --preset c-legacy` (0 warnings). Freeze next branch on `c2a3-line`.
+`cmake --build --preset c-legacy` (0 warnings). Freeze next branch on `c2b1-line`.
 
 ## Future goals (not yet scheduled)
 - **UTF-8 support** (user, 2026-06-20). mg is byte-oriented Latin-1 today (C1
@@ -200,8 +207,8 @@ Build each slice: `cmake --build --preset cpp && ctest --preset cpp` +
   `c3-io`→m9-actions (#18), `c1-text`→c3-io (#19),
   `c3_5-fisdir`→c1-text (#20), `c1_5-text`→c3_5-fisdir (#21),
   `c2a1-line`→c1_5-text (#22), `c2a2-line`→c2a1-line (#23),
-  `c2a3-line`→c2a2-line (#24).
-  Next milestone (C2 phase b) freezes its branch on `c2a3-line`.
+  `c2a3-line`→c2a2-line (#24), `c2b1-line`→c2a3-line (#25).
+  Next slice (C2b-2, the C++ swap) freezes its branch on `c2b1-line`.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
