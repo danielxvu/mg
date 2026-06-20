@@ -253,15 +253,19 @@ TEST_CASE("mg_magit_status_buffer composes branch, sections, and commits")
     CHECK(any_line_has(lines, "Recent commits"));
 
     // The file rows carry the right kind + path for staging.
-    bool untracked_ok = false, staged_ok = false;
+    bool untracked_ok = false, staged_ok = false, section_ok = false;
     for (const auto &r : rows) {
         if (r.kind == MG_LINE_UNTRACKED && r.path == "untracked.txt")
             untracked_ok = true;
         if (r.kind == MG_LINE_STAGED && r.path == "staged.txt")
             staged_ok = true;
+        // Section headers are tagged MG_LINE_SECTION for M-n/M-p navigation.
+        if (r.kind == MG_LINE_SECTION && r.line.find("Staged changes") != std::string::npos)
+            section_ok = true;
     }
     CHECK(untracked_ok);
     CHECK(staged_ok);
+    CHECK(section_ok);
 
     fs::remove_all(dir);
 }

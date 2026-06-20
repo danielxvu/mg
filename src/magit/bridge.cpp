@@ -199,7 +199,8 @@ extern "C" int mg_magit_status_buffer(const char *repo_path,
             if (v.empty())
                 return;
             out("");
-            out(std::string(title) + " (" + std::to_string(v.size()) + ")");
+            out(std::string(title) + " (" + std::to_string(v.size()) + ")",
+                MG_LINE_SECTION);
             for (const auto *e : v) {
                 std::string text =
                     labeled ? "  " + std::string(state_word(use_index ? e->index
@@ -219,7 +220,8 @@ extern "C" int mg_magit_status_buffer(const char *repo_path,
     if (auto stashes = mg::git::stashes(repo_path);
         stashes && !stashes->empty()) {
         out("");
-        out("Stashes (" + std::to_string(stashes->size()) + ")");
+        out("Stashes (" + std::to_string(stashes->size()) + ")",
+            MG_LINE_SECTION);
         for (const auto &s : *stashes)
             out("  stash@{" + std::to_string(s.index) + "} " + s.message,
                 MG_LINE_STASH);
@@ -228,7 +230,7 @@ extern "C" int mg_magit_status_buffer(const char *repo_path,
     if (auto commits = mg::git::recent_commits(repo_path, 10);
         commits && !commits->empty()) {
         out("");
-        out("Recent commits");
+        out("Recent commits", MG_LINE_SECTION);
         for (const auto &c : *commits)
             out("  " + c.short_oid + " " + c.summary);
     }
@@ -236,7 +238,8 @@ extern "C" int mg_magit_status_buffer(const char *repo_path,
     if (auto branches = mg::git::branches(repo_path);
         branches && !branches->empty()) {
         out("");
-        out("Branches (" + std::to_string(branches->size()) + ")");
+        out("Branches (" + std::to_string(branches->size()) + ")",
+            MG_LINE_SECTION);
         for (const auto &b : *branches)
             out(std::string(b.is_head ? "* " : "  ") + b.name, MG_LINE_BRANCH);
     }

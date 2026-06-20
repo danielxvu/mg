@@ -36,6 +36,8 @@ static int	magit_commit_abort(int, int);
 static int	magit_toggle_expand(int, int);
 static int	magit_visit(int, int);
 static int	magit_help(int, int);
+static int	magit_next_section(int, int);
+static int	magit_prev_section(int, int);
 
 /*
  * line -> {kind, hunk, path} map for the most recent render of *magit-status*.
@@ -55,6 +57,7 @@ static int	magit_expanded_count;
 
 static PF magit_tab[] = { magit_toggle_expand };
 static PF magit_ret[] = { magit_visit };
+static PF magit_esc[] = { NULL };		/* ESC -> meta prefix */
 static PF magit_qmark[] = { magit_help };
 static PF magit_c[] = { magit_commit };
 static PF magit_g[] = { magit_refresh };
@@ -63,14 +66,33 @@ static PF magit_q[] = { delwind };
 static PF magit_s[] = { magit_stage };
 static PF magit_u[] = { magit_unstage };
 
+/*
+ * ESC submap: M-n / M-p jump between section headers. map_default is rescan, so
+ * any other meta key (e.g. M-x) falls through to the global keymap unchanged.
+ */
+static PF magit_meta_n[] = { magit_next_section };
+static PF magit_meta_p[] = { magit_prev_section };
+
+static struct KEYMAPE (2) magit_metamap = {
+	2,
+	2,
+	rescan,
+	{
+		{ 'n', 'n', magit_meta_n, NULL },	/* M-n: next section */
+		{ 'p', 'p', magit_meta_p, NULL }	/* M-p: previous section */
+	}
+};
+
 /* Entries MUST stay in ascending key order -- doscan() relies on it. */
-static struct KEYMAPE (9) magitmap = {
-	9,
-	9,
+static struct KEYMAPE (10) magitmap = {
+	10,
+	10,
 	rescan,
 	{
 		{ CCHR('I'), CCHR('I'), magit_tab, NULL },	/* TAB: expand/collapse */
 		{ CCHR('M'), CCHR('M'), magit_ret, NULL },	/* RET: visit file */
+		{ CCHR('['), CCHR('['), magit_esc,		/* ESC: meta prefix */
+		    (KEYMAP *)&magit_metamap },
 		{ '?', '?', magit_qmark, NULL },		/* ?: key help */
 		{ 'c', 'c', magit_c, NULL },
 		{ 'g', 'g', magit_g, NULL },
@@ -362,6 +384,63 @@ magit_help(int f, int n)
 	wp->w_dotp = bp->b_dotp;
 	wp->w_doto = 0;
 	return (TRUE);
+}
+
+/* Index of the line at point in the current window (0-based), or -1. */
+static int
+magit_line_index(void)
+{
+	struct line	*lp;
+	int		 idx = 0;
+
+	for (lp = bfirstlp(curbp);
+	    lp != curwp->w_dotp && lp != curbp->b_headp; lp = lforw(lp))
+		idx++;
+	return (lp == curwp->w_dotp ? idx : -1);
+}
+
+/* Move point to line index `idx` (0-based) in the current window. */
+static void
+magit_goto_index(int idx)
+{
+	struct line	*lp = bfirstlp(curbp);
+	int		 i;
+
+	for (i = 0; i < idx && lforw(lp) != curbp->b_headp; i++)
+		lp = lforw(lp);
+	curwp->w_dotp = lp;
+	curwp->w_doto = 0;
+	curwp->w_rflag |= WFMOVE;
+}
+
+/* M-n / M-p: move point to the next / previous section header (MG_LINE_SECTION). */
+static int
+magit_section_move(int dir)
+{
+	int	cur, i;
+
+	if ((cur = magit_line_index()) < 0)
+		return (FALSE);
+	for (i = cur + dir; i >= 0 && i < magit_meta_count; i += dir) {
+		if (magit_meta[i].kind == MG_LINE_SECTION) {
+			magit_goto_index(i);
+			return (TRUE);
+		}
+	}
+	ewprintf("No more sections");
+	return (FALSE);
+}
+
+static int
+magit_next_section(int f, int n)
+{
+	return (magit_section_move(1));
+}
+
+static int
+magit_prev_section(int f, int n)
+{
+	return (magit_section_move(-1));
 }
 
 static int
