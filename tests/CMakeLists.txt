@@ -54,6 +54,10 @@ add_executable(test_io_bridge test_io_bridge.cpp)
 target_link_libraries(test_io_bridge PRIVATE doctest::doctest mg_io)
 doctest_discover_tests(test_io_bridge)
 
+add_executable(test_text_bridge test_text_bridge.cpp)
+target_link_libraries(test_text_bridge PRIVATE doctest::doctest mg_text)
+doctest_discover_tests(test_text_bridge)
+
 # Magit module tests: import mg.magit from the mg_magit module library.
 if(ENABLE_NATIVE_MAGIT)
     add_executable(test_magit test_magit.cpp)

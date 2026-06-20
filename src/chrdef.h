@@ -26,12 +26,24 @@
 #define _MG_P	0x10		/* end of sentence punctuation	 */
 #define	_MG_D	0x20		/* is decimal digit		 */
 
+#ifdef ENABLE_CPP_UPGRADES
+/* Route classification through the modern mg.text module (task C1.5); the
+ * runtime-mutable cinfo[] global is retired in the upgraded build. */
+#include "text/bridge.h"
+#define ISWORD(c)	(mg_text_is_word(c))
+#define ISCTRL(c)	(mg_text_is_ctrl(c))
+#define ISUPPER(c)	(mg_text_is_upper(c))
+#define ISLOWER(c)	(mg_text_is_lower(c))
+#define ISEOSP(c)	(mg_text_is_eosp(c))
+#define ISDIGIT(c)	(mg_text_is_digit(c))
+#else
 #define ISWORD(c)	((cinfo[CHARMASK(c)]&_MG_W)!=0)
 #define ISCTRL(c)	((cinfo[CHARMASK(c)]&_MG_C)!=0)
 #define ISUPPER(c)	((cinfo[CHARMASK(c)]&_MG_U)!=0)
 #define ISLOWER(c)	((cinfo[CHARMASK(c)]&_MG_L)!=0)
 #define ISEOSP(c)	((cinfo[CHARMASK(c)]&_MG_P)!=0)
 #define	ISDIGIT(c)	((cinfo[CHARMASK(c)]&_MG_D)!=0)
+#endif
 #define TOUPPER(c)	((c)-0x20)
 #define TOLOWER(c)	((c)+0x20)
 

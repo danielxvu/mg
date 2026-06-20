@@ -29,6 +29,7 @@
  * ctags word traversing, '_' character's value is changed on 
  * the fly in ctags mode, hence non-const.
  */
+#ifndef ENABLE_CPP_UPGRADES	/* table retired; classification via mg.text (C1.5) */
 char cinfo[256] = {
 	_MG_C, _MG_C, _MG_C, _MG_C,				      /* 0x0X */
 	_MG_C, _MG_C, _MG_C, _MG_C,
@@ -95,6 +96,7 @@ char cinfo[256] = {
 	_MG_L | _MG_W, _MG_L | _MG_W, _MG_L | _MG_W, _MG_L | _MG_W,
 	_MG_L | _MG_W, _MG_L | _MG_W, 0, 0
 };
+#endif /* !ENABLE_CPP_UPGRADES */
 
 /*
  * Find the name of a keystroke.  Needs to be changed to handle 8-bit printing

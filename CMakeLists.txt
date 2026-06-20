@@ -60,10 +60,10 @@ if(ENABLE_CPP_UPGRADES)
     add_subdirectory(src/io)
     add_subdirectory(src/text)
 
-    # Wire mg.io into the legacy core: fileio.c's fisdir routes through the
-    # mg_io extern "C" bridge under #ifdef ENABLE_CPP_UPGRADES (C3.5). mg now
-    # links a C++ library, so the final link uses the C++ driver.
-    target_link_libraries(mg PRIVATE mg_io)
+    # Wire the modern modules into the legacy core under ENABLE_CPP_UPGRADES:
+    # fileio.c's fisdir -> mg_io (C3.5); chrdef.h's ISWORD/etc. -> mg_text
+    # (C1.5). mg now links C++ libraries, so the final link uses the C++ driver.
+    target_link_libraries(mg PRIVATE mg_io mg_text)
     target_compile_definitions(mg PRIVATE ENABLE_CPP_UPGRADES)
     set_target_properties(mg PROPERTIES LINKER_LANGUAGE CXX)
 endif()

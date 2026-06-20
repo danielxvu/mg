@@ -425,16 +425,21 @@ curtoken(int f, int n, char *token)
 {
 	struct line *odotp;
 	int odoto, tdoto, odotline, size, r;
+#ifndef ENABLE_CPP_UPGRADES
 	char c;
-	
+#endif
+
 	/* Underscore character is to be treated as "inword" while
-	 * processing tokens unlike mg's default word traversal. Save
-	 * and restore its cinfo value so that tag matching works for
-	 * identifier with underscore.
+	 * processing tokens unlike mg's default word traversal, so tag
+	 * matching works for identifiers with underscore.
 	 */
+#ifdef ENABLE_CPP_UPGRADES
+	mg_text_set_underscore_word(1);
+#else
 	c = cinfo['_'];
 	cinfo['_'] = _MG_W;
-	
+#endif
+
 	odotp = curwp->w_dotp;
 	odoto = curwp->w_doto;
 	odotline = curwp->w_dotline;
@@ -467,7 +472,11 @@ curtoken(int f, int n, char *token)
 	r = TRUE;
 	
 cleanup:
+#ifdef ENABLE_CPP_UPGRADES
+	mg_text_set_underscore_word(0);
+#else
 	cinfo['_'] = c;
+#endif
 	curwp->w_dotp = odotp;
 	curwp->w_doto = odoto;
 	curwp->w_dotline = odotline;

@@ -871,7 +871,9 @@ extern int		 dovisiblebell;
 extern int		 dblspace;
 extern int		 allbro;
 extern int		 batch;
-extern char	 	 cinfo[];
+#ifndef ENABLE_CPP_UPGRADES
+extern char	 	 cinfo[];	/* retired under ENABLE_CPP_UPGRADES (C1.5) */
+#endif
 extern char		*keystrings[];
 extern char		 pat[NPAT];
 extern char		 prompt[];
