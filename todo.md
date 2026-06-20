@@ -154,24 +154,23 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
 
 ## ▶ RESUME HERE (next session)
 
-**🎉 C1 + C3 COMPLETE** — two core modules landed (`mg.text` PR #19, `mg.io`
-PR #18), both greenfield/tested/not-yet-wired. The pattern is proven; the next
-step that actually advances the refactor is to **wire a modern module into the
-C core** (so far everything is parallel + dormant). Directions:
-- **C3.5 — wire `mg.io` in** (recommended): give `mg.io` an `extern "C"` bridge
-  and route ONE safe `fileio.c` read through it under `#ifdef ENABLE_CPP_UPGRADES`
-  (e.g. `startupfile`/config reads, or a slurp helper) — proving the modern
-  layer can replace legacy I/O without disturbing the OFF build. The magit work
-  (main.c/display.c under `#ifdef`) is the template. Smaller, high-signal.
-- **C1.5 — wire `mg.text` in**: route `chrdef.h`'s `ISWORD`/etc. (or `word.c`
-  call sites) through `mg.text` under `#ifdef`, retiring the mutable global for
-  the upgraded build.
+**🎉 C3.5 COMPLETE — first C++-replaces-C wire-in** (`fileio.c` `fisdir` →
+`mg.io`, PR #20, branch `c3_5-fisdir`). The "modern module serving a real C-core
+path under `#ifdef ENABLE_CPP_UPGRADES`, OFF build untouched" mechanism is now
+proven for I/O. ⚠ **OFF build dir is `build-c`** (not `build-c-legacy`) — verify
+symbols there. Directions:
+- **C1.5 — wire `mg.text` in**: route `chrdef.h` `ISWORD`/etc. (or `word.c`
+  callers) through the `mg.text` bridge under `#ifdef`, retiring the mutable
+  `cinfo[]` global for the upgraded build. Same template as C3.5; small.
+- **Widen C3.5** — route more `fileio.c` calls through `mg.io` (`fchecktime`/
+  `fupdstat` stat checks are next-safest; the `ffropen`/`ffgetline` read loop is
+  the bigger, riskier prize). Each one shrinks the legacy surface.
 - **C2 — opaque `struct line` → piece table** (the epic): `struct line` public
   (`def.h:229`), ~24 `.c` files poke `l_text`/`l_used`/`lforw`. (a) accessor API
-  making it opaque across all files, THEN (b) piece-table storage. Spec first.
-Recommend **C3.5** — it converts a dormant module into a real replacement and
-de-risks the whole "C++ replaces C" thesis. Build: `cmake --preset cpp &&
-ctest --preset cpp`. Freeze the next branch on `c1-text`.
+  making it opaque across all files, THEN (b) piece-table storage. Spec first;
+  weigh the **UTF-8 goal** (see Future goals) as a design axis here.
+Recommend **C1.5** (quick, completes the "both modules wired" story) or widening
+C3.5. Build: `cmake --preset cpp && ctest --preset cpp`. Freeze on `c3_5-fisdir`.
 
 ## Future goals (not yet scheduled)
 - **UTF-8 support** (user, 2026-06-20). mg is byte-oriented Latin-1 today (C1
@@ -194,8 +193,9 @@ ctest --preset cpp`. Freeze the next branch on `c1-text`.
   `m7-diffs`→m6-commit (#12), `m7-hunks`→m7-diffs (#13),
   `m8-nav`→m7-hunks (#14), `m8-sections`→m8-nav (#15),
   `m8-nav2`→m8-sections (#16), `m9-actions`→m8-nav2 (#17),
-  `c3-io`→m9-actions (#18), `c1-text`→c3-io (#19).
-  Next milestone (C3.5 / wire-in) freezes its branch on `c1-text`.
+  `c3-io`→m9-actions (#18), `c1-text`→c3-io (#19),
+  `c3_5-fisdir`→c1-text (#20).
+  Next milestone (C1.5 / widen-C3.5) freezes its branch on `c3_5-fisdir`.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
