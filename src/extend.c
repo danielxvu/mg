@@ -39,14 +39,14 @@ insert(int f, int n)
 
 	if (inmacro) {
 		while (--n >= 0) {
-			for (count = 0; count < maclcur->l_used; count++) {
-				if ((((c = maclcur->l_text[count]) ==
+			for (count = 0; count < llength(maclcur); count++) {
+				if ((((c = ltext(maclcur)[count]) ==
 				    *curbp->b_nlchr)
 				    ? lnewline() : linsert(1, c)) != TRUE)
 					return (FALSE);
 			}
 		}
-		maclcur = maclcur->l_fp;
+		maclcur = lforw(maclcur);
 		return (TRUE);
 	}
 	if (n == 1)
@@ -332,16 +332,16 @@ dobind(KEYMAP *curmap, const char *p, int unbind)
 		return (dobeep_msg("Can't rebind key in macro"));
 	}
 	if (inmacro) {
-		for (s = 0; s < maclcur->l_used - 1; s++) {
-			if (doscan(curmap, c = CHARMASK(maclcur->l_text[s]), &curmap)
+		for (s = 0; s < llength(maclcur) - 1; s++) {
+			if (doscan(curmap, c = lgetc(maclcur, s), &curmap)
 			    != NULL) {
 				if (remap(curmap, c, NULL, NULL)
 				    != TRUE)
 					return (FALSE);
 			}
 		}
-		(void)doscan(curmap, c = maclcur->l_text[s], NULL);
-		maclcur = maclcur->l_fp;
+		(void)doscan(curmap, c = ltext(maclcur)[s], NULL);
+		maclcur = lforw(maclcur);
 	} else {
 		size_t	 n;
 
@@ -539,8 +539,8 @@ extend(int f, int n)
 		if (macrodef) {
 			struct line	*lp = maclcur;
 			macro[macrocount - 1].m_funct = funct;
-			maclcur = lp->l_bp;
-			maclcur->l_fp = lp->l_fp;
+			maclcur = lback(lp);
+			lsetforw(maclcur, lforw(lp));
 			free(lp);
 		}
 		return ((*funct)(f, n));
@@ -743,7 +743,9 @@ excline(char *line, int llen, int lnum)
 	/* Pack away all the args now... */
 	if ((np = lalloc(0)) == FALSE)
 		return (FALSE);
-	np->l_fp = np->l_bp = maclcur = np;
+	maclcur = np;
+	lsetforw(np, np);
+	lsetback(np, np);
 	while (*line != '\0') {
 		argp = skipwhite(line);
 		if (*argp == '\0')
@@ -759,7 +761,7 @@ excline(char *line, int llen, int lnum)
 			}
 			bcopy(argp, ltext(lp), (int)(line - argp));
 			/* don't count BINDEXT */
-			lp->l_used--;
+			lsetlen(lp, llength(lp) - 1);
 			if (bind == BINDARG)
 				bind = BINDNO;
 		} else {
@@ -771,7 +773,7 @@ excline(char *line, int llen, int lnum)
 					status = FALSE;
 					goto cleanup;
 				}
-				lp->l_used = 0;
+				lsetlen(lp, 0);
 			} else
 				key.k_count = 0;
 			while (*argp != '"' && *argp != '\0') {
@@ -848,8 +850,10 @@ excline(char *line, int llen, int lnum)
 				}
 				if (bind == BINDARG)
 					key.k_chars[key.k_count++] = c;
-				else
-					lp->l_text[lp->l_used++] = c;
+				else {
+					lputc(lp, llength(lp), c);
+					lsetlen(lp, llength(lp) + 1);
+				}
 			}
 			if (*line)
 				line++;
@@ -859,9 +863,9 @@ excline(char *line, int llen, int lnum)
 			bind = BINDDO;
 			break;
 		case BINDNEXT:
-			lp->l_text[lp->l_used] = '\0';
-			if ((curmap = name_map(lp->l_text)) == NULL) {
-				(void)dobeep_msgs("No such mode:", lp->l_text);
+			lputc(lp, llength(lp), '\0');
+			if ((curmap = name_map(ltext(lp))) == NULL) {
+				(void)dobeep_msgs("No such mode:", ltext(lp));
 				status = FALSE;
 				free(lp);
 				goto cleanup;
@@ -870,9 +874,9 @@ excline(char *line, int llen, int lnum)
 			bind = BINDARG;
 			break;
 		default:
-			lp->l_fp = np->l_fp;
-			lp->l_bp = np;
-			np->l_fp = lp;
+			lsetforw(lp, lforw(np));
+			lsetback(lp, np);
+			lsetforw(np, lp);
 			np = lp;
 		}
 	}
@@ -887,8 +891,8 @@ excline(char *line, int llen, int lnum)
 				status = FALSE;
 				goto cleanup;
 			}
-			lp->l_text[lp->l_used] = '\0';
-			status = bindkey(&curmap, lp->l_text, key.k_chars,
+			lputc(lp, llength(lp), '\0');
+			status = bindkey(&curmap, ltext(lp), key.k_chars,
 			    key.k_count);
 		} else
 			status = bindkey(&curmap, NULL, key.k_chars,
@@ -896,14 +900,14 @@ excline(char *line, int llen, int lnum)
 		break;
 	case BINDNO:
 		inmacro = TRUE;
-		maclcur = maclcur->l_fp;
+		maclcur = lforw(maclcur);
 		status = (*fp)(f, n);
 		inmacro = FALSE;
 	}
 cleanup:
-	lp = maclcur->l_fp;
+	lp = lforw(maclcur);
 	while (lp != maclcur) {
-		np = lp->l_fp;
+		np = lforw(lp);
 		free(lp);
 		lp = np;
 	}

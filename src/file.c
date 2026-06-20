@@ -402,10 +402,10 @@ retry:
 			}
 			bcopy(line, &ltext(lp1)[0], nbytes);
 			lp2 = lback(curwp->w_dotp);
-			lp2->l_fp = lp1;
-			lp1->l_fp = curwp->w_dotp;
-			lp1->l_bp = lp2;
-			curwp->w_dotp->l_bp = lp1;
+			lsetforw(lp2, lp1);
+			lsetforw(lp1, curwp->w_dotp);
+			lsetback(lp1, lp2);
+			lsetback(curwp->w_dotp, lp1);
 			if (s == FIOEOF) {
 				undo_add_insert(olp, opos, siz - 1);
 				goto endoffile;

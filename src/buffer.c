@@ -444,13 +444,13 @@ listbuf_goto_buffer_helper(int f, int n, int only)
 	char		*line = NULL;
 	int		 i, ret = FALSE;
 
-	if (curwp->w_dotp->l_text[listbuf_ncol/2 - 1] == '$')
+	if (ltext(curwp->w_dotp)[listbuf_ncol/2 - 1] == '$')
 		return(dobeep_msg("buffer name truncated"));
 
 	if ((line = malloc(listbuf_ncol/2)) == NULL)
 		return (FALSE);
 
-	memcpy(line, curwp->w_dotp->l_text + 4, listbuf_ncol/2 - 5);
+	memcpy(line, ltext(curwp->w_dotp) + 4, listbuf_ncol/2 - 5);
 	for (i = listbuf_ncol/2 - 6; i > 0; i--) {
 		if (line[i] != ' ') {
 			line[i + 1] = '\0';
@@ -493,22 +493,24 @@ addlinef(struct buffer *bp, char *fmt, ...)
 {
 	va_list		 ap;
 	struct line	*lp;
+	char		*txt;
 
 	if ((lp = lalloc(0)) == NULL)
 		return (FALSE);
 	va_start(ap, fmt);
-	if (vasprintf(&lp->l_text, fmt, ap) == -1) {
+	if (vasprintf(&txt, fmt, ap) == -1) {
 		lfree(lp);
 		va_end(ap);
 		return (FALSE);
 	}
-	lp->l_used = strlen(lp->l_text);
+	lsettext(lp, txt);
+	lsetlen(lp, strlen(txt));
 	va_end(ap);
 
-	bp->b_headp->l_bp->l_fp = lp;		/* Hook onto the end	 */
-	lp->l_bp = bp->b_headp->l_bp;
-	bp->b_headp->l_bp = lp;
-	lp->l_fp = bp->b_headp;
+	lsetforw(lback(bp->b_headp), lp);	/* Hook onto the end	 */
+	lsetback(lp, lback(bp->b_headp));
+	lsetback(bp->b_headp, lp);
+	lsetforw(lp, bp->b_headp);
 	bp->b_lines++;
 
 	return (TRUE);
@@ -625,8 +627,8 @@ bnew(const char *bname)
 	bp->b_fname[0] = '\0';
 	bp->b_cwd[0] = '\0';
 	bzero(&bp->b_fi, sizeof(bp->b_fi));
-	lp->l_fp = lp;
-	lp->l_bp = lp;
+	lsetforw(lp, lp);
+	lsetback(lp, lp);
 	bp->b_bufp = bheadp;
 	bheadp = bp;
 	bp->b_dotline = bp->b_markline = 1;

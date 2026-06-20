@@ -845,7 +845,7 @@ d_makename(struct line *lp, char *fn, size_t len)
 
 	if (d_warpdot(lp, &start) == FALSE)
 		return (ABORT);
-	namep = &lp->l_text[start];
+	namep = &ltext(lp)[start];
 	nlen = llength(lp) - start;
 
 	ret = snprintf(fn, len, "%s%.*s", curbp->b_fname, nlen, namep);
@@ -861,7 +861,7 @@ d_makename(struct line *lp, char *fn, size_t len)
 static int
 d_warpdot(struct line *dotp, int *doto)
 {
-	char *tp = dotp->l_text;
+	char *tp = ltext(dotp);
 	int off = 0, field = 0, len;
 
 	/*
@@ -1072,7 +1072,7 @@ createlist(struct buffer *bp)
 		 * Check if the line has 'D' on the first char and if a valid
 		 * filename can be extracted from it.
 		 */
-		if (((lp->l_text[0] != DDELCHAR)) ||
+		if (((ltext(lp)[0] != DDELCHAR)) ||
 		    ((p = findfname(lp, p)) == NULL)) {
 			nlp = lforw(lp);
 			continue;
@@ -1224,6 +1224,6 @@ findfname(struct line *lp, char *fn)
 	(void)d_warpdot(lp, &start);
 	if (start < 1)
 		return NULL;
-	fn = &lp->l_text[start];
+	fn = &ltext(lp)[start];
 	return fn;
 }

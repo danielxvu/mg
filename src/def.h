@@ -252,6 +252,7 @@ struct line {
  * (task C2a). These become the seam a piece-table swaps behind. */
 #define lsize(lp)	((lp)->l_size)
 #define lsetlen(lp, n)	((lp)->l_used = (n))
+#define lsettext(lp, s)	((lp)->l_text = (s))
 #define lsetforw(lp, lq) ((lp)->l_fp = (lq))
 #define lsetback(lp, lq) ((lp)->l_bp = (lq))
 

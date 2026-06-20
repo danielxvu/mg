@@ -356,26 +356,26 @@ selfinsert(int f, int n)
 		if (lastflag & CFINS) {
 			macrocount--;
 			/* Ensure the line can handle the new characters */
-			if (maclcur->l_size < maclcur->l_used + n) {
-				if (lrealloc(maclcur, maclcur->l_used + n) ==
+			if (lsize(maclcur) < llength(maclcur) + n) {
+				if (lrealloc(maclcur, llength(maclcur) + n) ==
 				    FALSE)
 					return (FALSE);
 			}
-			maclcur->l_used += n;
+			lsetlen(maclcur, llength(maclcur) + n);
 			/* Copy in the new data */
-			for (count = maclcur->l_used - n;
-			    count < maclcur->l_used; count++)
-				maclcur->l_text[count] = c;
+			for (count = llength(maclcur) - n;
+			    count < llength(maclcur); count++)
+				lputc(maclcur, count, c);
 		} else {
 			macro[macrocount - 1].m_funct = insert;
 			if ((lp = lalloc(n)) == NULL)
 				return (FALSE);
-			lp->l_bp = maclcur;
-			lp->l_fp = maclcur->l_fp;
-			maclcur->l_fp = lp;
+			lsetback(lp, maclcur);
+			lsetforw(lp, lforw(maclcur));
+			lsetforw(maclcur, lp);
 			maclcur = lp;
 			for (count = 0; count < n; count++)
-				lp->l_text[count] = c;
+				lputc(lp, count, c);
 		}
 		thisflag |= CFINS;
 	}

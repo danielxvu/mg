@@ -37,8 +37,8 @@ definemacro(int f, int n)
 
 	/* free lines allocated for string arguments */
 	if (maclhead != NULL) {
-		for (lp1 = maclhead->l_fp; lp1 != maclhead; lp1 = lp2) {
-			lp2 = lp1->l_fp;
+		for (lp1 = lforw(maclhead); lp1 != maclhead; lp1 = lp2) {
+			lp2 = lforw(lp1);
 			free(lp1);
 		}
 		free(lp1);
@@ -48,7 +48,9 @@ definemacro(int f, int n)
 		return (FALSE);
 
 	ewprintf("Defining Keyboard Macro...");
-	maclcur = lp1->l_fp = lp1->l_bp = lp1;
+	lsetforw(lp1, lp1);
+	lsetback(lp1, lp1);
+	maclcur = lp1;
 	return (macrodef = TRUE);
 }
 
@@ -83,7 +85,7 @@ executemacro(int f, int n)
 	inmacro = TRUE;
 
 	for (i = n; i > 0; i--) {
-		maclcur = maclhead->l_fp;
+		maclcur = lforw(maclhead);
 		flag = 0;
 		num = 1;
 		for (j = 0; j < macrocount - 1; j++) {

@@ -162,8 +162,8 @@ eyesno(const char *sp)
 			if (macrodef) {
 				struct line	*lp = maclcur;
 
-				maclcur = lp->l_bp;
-				maclcur->l_fp = lp->l_fp;
+				maclcur = lback(lp);
+				lsetforw(maclcur, lforw(lp));
 				free(lp);
 			}
 			if (strcasecmp(rep, "yes") == 0) {
@@ -221,13 +221,13 @@ veread(const char *fp, char *buf, size_t nbuf, int flag, va_list ap)
 
 	if (inmacro) {
 		if (dynbuf) {
-			if ((buf = malloc(maclcur->l_used + 1)) == NULL)
+			if ((buf = malloc(llength(maclcur) + 1)) == NULL)
 				return (NULL);
-		} else if ((size_t)maclcur->l_used >= nbuf)
+		} else if ((size_t)llength(maclcur) >= nbuf)
 			return (NULL);
-		bcopy(maclcur->l_text, buf, maclcur->l_used);
-		buf[maclcur->l_used] = '\0';
-		maclcur = maclcur->l_fp;
+		bcopy(ltext(maclcur), buf, llength(maclcur));
+		buf[llength(maclcur)] = '\0';
+		maclcur = lforw(maclcur);
 		return (buf);
 	}
 	epos = cpos = 0;
@@ -429,11 +429,11 @@ veread(const char *fp, char *buf, size_t nbuf, int flag, va_list ap)
 
 				if ((lp = lalloc(cpos)) == NULL)
 					goto memfail;
-				lp->l_fp = maclcur->l_fp;
-				maclcur->l_fp = lp;
-				lp->l_bp = maclcur;
+				lsetforw(lp, lforw(maclcur));
+				lsetforw(maclcur, lp);
+				lsetback(lp, maclcur);
 				maclcur = lp;
-				bcopy(buf, lp->l_text, cpos);
+				bcopy(buf, ltext(lp), cpos);
 			}
 			ret = buf;
 			goto done;

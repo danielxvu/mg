@@ -220,25 +220,25 @@ mglog_lines(PF funct)
 		o = ' ';
 		if (i == curwp->w_dotline) {
 			curline = ">";
-			if (lp->l_used > 0 && curwp->w_doto < lp->l_used)
-				o = lp->l_text[curwp->w_doto];
+			if (llength(lp) > 0 && curwp->w_doto < llength(lp))
+				o = ltext(lp)[curwp->w_doto];
 			else
 				o = '-';
 		}
-		if (lp->l_size == 0)
+		if (lsize(lp) == 0)
 			tmp = " ";
 		else
-			tmp = lp->l_text;
+			tmp = ltext(lp);
 
 		/* segv on fprintf below with long lines */
 		fprintf(fd_lines, "%s%p b^%p f.%p %d %d\t%c|%s\n", curline,
-		    lp, lp->l_bp, lp->l_fp,
-		    lp->l_size, lp->l_used, o, tmp);
+		    lp, lback(lp), lforw(lp),
+		    lsize(lp), llength(lp), o, tmp);
 
 		lp = lforw(lp);
 		if (lp == curbp->b_headp) {
 			fprintf(fd_lines, " %p b^%p f.%p [bhead]\n(EOB)\n",
-			    lp, lp->l_bp, lp->l_fp);
+			    lp, lback(lp), lforw(lp));
 
 			fprintf(fd_lines, "lines:raw:%d buf:%d wdot:%d\n\n",
 			    i, curbp->b_lines, curwp->w_dotline);
