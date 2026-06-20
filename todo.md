@@ -155,8 +155,29 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
 
 ## ▶ RESUME HERE (next session)
 
-**UTF-8 support IN PROGRESS** (engine: utf8proc; ship Display+nav first, extend
-to Full). Spec: `docs/superpowers/specs/2026-06-20-u1-utf8-foundation-design.md`.
+**Full Magit IN PROGRESS** (user: "full magit; complete what we have first, then
+most valuable"). Roadmap + gap analysis vs real magit:
+`docs/superpowers/specs/2026-06-20-fm-full-magit-roadmap.md`. Magit source cloned
+to `/tmp/magit-src` (re-clone if gone: `git clone --depth 1
+https://github.com/magit/magit`). ✅ **FM-C done** (PR #31, branch `fm-c-commit`):
+`c` is a commit menu — `c c` commit / `c a` amend / `c e` extend / `c w` reword
+(mg.git `commit_amend`/`extend`/`reword`/`head_message`; message buffer prefills
++ dispatches). Next, in priority order (Phase A — complete existing):
+- **FM-S — line/region staging** (magit's signature) + stage-all (S)/unstage-all
+  (U). Region = a one-hunk patch with only the marked +/- lines as changes,
+  others context; `git_apply` to index. Needs the status buffer to track a
+  selected line range; start with stage-all/unstage-all (easy: `git_index_add_all`
+  / reset all) then region.
+- **FM-T — status sections**: unpushed/unpulled (ahead/behind upstream),
+  push/pull remote in headers, TAB folding on ANY section header.
+- **FM-B — branch create/delete/rename**; **FM-Z — stash push/pop/show**.
+Phase B (new, highest value): **FM-L log buffer**, **FM-R push/pull/fetch**
+(⚠ network — verify libssh2/TLS transports first), **FM-X reset/revert/merge**.
+Per-slice TDD (test_git → test_bridge → magit_cmd.c → pty) + stacked PR.
+
+---
+**UTF-8 support — Display+nav COMPLETE** (U1–U4, PRs #27–#30). Spec:
+`docs/superpowers/specs/2026-06-20-u1-utf8-foundation-design.md`.
 ✅ **U1 done** (PR #27, branch `u1-utf8`): `mg.utf8` C++ codepoint layer over
 utf8proc — `decode_first`(→cp/bytes/width), `char_width`, `is_word`, `is_space`
 + `extern "C"` bridge (`mg_utf8_decode`/`char_width`/`is_word`). Tested
@@ -208,8 +229,8 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `c2a3-line`→c2a2-line (#24), `c2b1-line`→c2a3-line (#25),
   `c2b2-line`→c2b1-line (#26), `u1-utf8`→c2b2-line (#27),
   `u2-display`→u1-utf8 (#28), `u3-cursor`→u2-display (#29),
-  `u4-classify`→u3-cursor (#30).
-  Next (UTF-8 Full extras, or a new direction) freezes on `u4-classify`.
+  `u4-classify`→u3-cursor (#30), `fm-c-commit`→u4-classify (#31).
+  Next Full-Magit slice (FM-S) freezes on `fm-c-commit`.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
