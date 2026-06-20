@@ -166,10 +166,9 @@ Next slices (each `#ifdef`-gated, OFF unchanged):
   typedef) — `display.c` renders UTF-8 glyphs at correct width, cursor column is
   display-width-based. ⚠ extended (horizontally-scrolled) lines still byte-wise
   (`updext`/`vtpute`) — a documented follow-up.
-- **U3 — cursor/delete by char:** `basic.c` `forwchar`/`backchar` and delete
-  step whole codepoints (use `mg_utf8_decode` forward; for backward, scan back
-  over UTF-8 continuation bytes `0x80–0xBF`). Verify cursor lands on char
-  boundaries; backspace removes a whole char.
+- ✅ **U3 done** (PR #29, branch `u3-cursor`): `forwchar`/`backchar` step whole
+  codepoints; `forwdel`/`backdel` delete the byte span of n chars (whole-char
+  delete). ASCII byte-identical; UTF-8 verified.
 - **U4 — classification:** in `chrdef.h`/word.c, ASCII keeps the `mg.text` byte
   table; for lead bytes ≥0x80 decode + use `mg_utf8_is_word`. Reconciles the
   byte vs codepoint word rule (see U1 spec note).
@@ -204,8 +203,8 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `c2a1-line`→c1_5-text (#22), `c2a2-line`→c2a1-line (#23),
   `c2a3-line`→c2a2-line (#24), `c2b1-line`→c2a3-line (#25),
   `c2b2-line`→c2b1-line (#26), `u1-utf8`→c2b2-line (#27),
-  `u2-display`→u1-utf8 (#28).
-  Next slice (U3 cursor/delete by char) freezes its branch on `u2-display`.
+  `u2-display`→u1-utf8 (#28), `u3-cursor`→u2-display (#29).
+  Next slice (U4 classification) freezes its branch on `u3-cursor`.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
