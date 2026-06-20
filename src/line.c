@@ -26,6 +26,34 @@
 
 #include "def.h"
 
+/*
+ * The private storage layout of a line (task C2a-3). The rest of the editor
+ * sees only an incomplete `struct line;` in def.h and reaches lines through the
+ * accessors below, so this representation can change -- e.g. to a piece table
+ * (C2 phase b) -- without a ripple. Each line holds the used size, the size of
+ * the text array, and the text; the end-of-line is implied, not stored.
+ */
+struct line {
+	struct line	*l_fp;		/* Link to the next line	 */
+	struct line	*l_bp;		/* Link to the previous line	 */
+	int		 l_size;	/* Allocated size		 */
+	int		 l_used;	/* Used size			 */
+	char		*l_text;	/* Content of the line		 */
+};
+
+/* The line accessors, out of line so the layout above stays private. */
+struct line *lforw(const struct line *lp)	{ return (lp->l_fp); }
+struct line *lback(const struct line *lp)	{ return (lp->l_bp); }
+int	lgetc(const struct line *lp, int n)	{ return (CHARMASK(lp->l_text[n])); }
+void	lputc(struct line *lp, int n, int c)	{ lp->l_text[n] = c; }
+int	llength(const struct line *lp)		{ return (lp->l_used); }
+char	*ltext(const struct line *lp)		{ return (lp->l_text); }
+int	lsize(const struct line *lp)		{ return (lp->l_size); }
+void	lsetlen(struct line *lp, int n)	{ lp->l_used = n; }
+void	lsettext(struct line *lp, char *s) { lp->l_text = s; }
+void	lsetforw(struct line *lp, struct line *lq) { lp->l_fp = lq; }
+void	lsetback(struct line *lp, struct line *lq) { lp->l_bp = lq; }
+
 int	casereplace = TRUE;
 
 /*

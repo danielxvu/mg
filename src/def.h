@@ -226,35 +226,26 @@ struct region {
  * additions will include update hints, and a
  * list of marks into the line.
  */
-struct line {
-	struct line	*l_fp;		/* Link to the next line	 */
-	struct line	*l_bp;		/* Link to the previous line	 */
-	int		 l_size;	/* Allocated size		 */
-	int		 l_used;	/* Used size			 */
-	char		*l_text;	/* Content of the line		 */
-};
-
 /*
- * The rationale behind these macros is that you
- * could (with some editing, like changing the type of a line
- * link from a "struct line *" to a "REFLINE", and fixing the commands
- * like file reading that break the rules) change the actual
- * storage representation of lines to use something fancy on
- * machines with small address spaces.
+ * struct line is opaque: its storage layout is private to line.c (task C2a-3).
+ * Everyone else goes through the accessors below, so the representation can be
+ * swapped (e.g. for a piece table) without touching the rest of the editor --
+ * exactly the change the old accessor macros were written to anticipate
+ * ("change the actual storage representation of lines to use something fancy").
  */
-#define lforw(lp)	((lp)->l_fp)
-#define lback(lp)	((lp)->l_bp)
-#define lgetc(lp, n)	(CHARMASK((lp)->l_text[(n)]))
-#define lputc(lp, n, c) ((lp)->l_text[(n)]=(c))
-#define llength(lp)	((lp)->l_used)
-#define ltext(lp)	((lp)->l_text)
-/* Accessors completing the set, so callers never touch members directly
- * (task C2a). These become the seam a piece-table swaps behind. */
-#define lsize(lp)	((lp)->l_size)
-#define lsetlen(lp, n)	((lp)->l_used = (n))
-#define lsettext(lp, s)	((lp)->l_text = (s))
-#define lsetforw(lp, lq) ((lp)->l_fp = (lq))
-#define lsetback(lp, lq) ((lp)->l_bp = (lq))
+struct line;
+
+struct line	*lforw(const struct line *lp);
+struct line	*lback(const struct line *lp);
+int		 lgetc(const struct line *lp, int n);
+void		 lputc(struct line *lp, int n, int c);
+int		 llength(const struct line *lp);
+char		*ltext(const struct line *lp);
+int		 lsize(const struct line *lp);
+void		 lsetlen(struct line *lp, int n);
+void		 lsettext(struct line *lp, char *s);
+void		 lsetforw(struct line *lp, struct line *lq);
+void		 lsetback(struct line *lp, struct line *lq);
 
 /*
  * All repeated structures are kept as linked lists of structures.
