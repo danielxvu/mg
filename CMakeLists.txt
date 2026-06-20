@@ -60,6 +60,8 @@ if(ENABLE_CPP_UPGRADES)
     add_subdirectory(src/io)
     add_subdirectory(src/text)
     add_subdirectory(src/line)
+    add_subdirectory(src/utf8)	# UTF-8 codepoint layer (U1); wired into the
+				# C core by later slices (U2+).
 
     # Wire the modern modules into the legacy core under ENABLE_CPP_UPGRADES:
     # fileio.c's fisdir -> mg_io (C3.5); chrdef.h's ISWORD/etc. -> mg_text

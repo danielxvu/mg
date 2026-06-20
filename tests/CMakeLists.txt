@@ -58,6 +58,10 @@ add_executable(test_text_bridge test_text_bridge.cpp)
 target_link_libraries(test_text_bridge PRIVATE doctest::doctest mg_text)
 doctest_discover_tests(test_text_bridge)
 
+add_executable(test_utf8 test_utf8.cpp)
+target_link_libraries(test_utf8 PRIVATE doctest::doctest mg_utf8)
+doctest_discover_tests(test_utf8)
+
 # Magit module tests: import mg.magit from the mg_magit module library.
 if(ENABLE_NATIVE_MAGIT)
     add_executable(test_magit test_magit.cpp)
