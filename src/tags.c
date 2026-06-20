@@ -241,7 +241,7 @@ poptag(int f, int n)
 	 */
 	dotp = curwp->w_bufp->b_headp;
 	while (s->dotline--)
-		dotp = dotp->l_fp;
+		dotp = lforw(dotp);
 	
 	curwp->w_dotp = dotp;
 	free(s->bname);
@@ -411,8 +411,8 @@ atbow(void)
 {
 	if (curwp->w_doto == 0)
 		return (TRUE);
-	if (ISWORD(curwp->w_dotp->l_text[curwp->w_doto]) &&
-	    !ISWORD(curwp->w_dotp->l_text[curwp->w_doto - 1]))
+	if (ISWORD(ltext(curwp->w_dotp)[curwp->w_doto]) &&
+	    !ISWORD(ltext(curwp->w_dotp)[curwp->w_doto - 1]))
 	    	return (TRUE);
 	return (FALSE);
 }

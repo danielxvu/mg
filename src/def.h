@@ -248,6 +248,12 @@ struct line {
 #define lputc(lp, n, c) ((lp)->l_text[(n)]=(c))
 #define llength(lp)	((lp)->l_used)
 #define ltext(lp)	((lp)->l_text)
+/* Accessors completing the set, so callers never touch members directly
+ * (task C2a). These become the seam a piece-table swaps behind. */
+#define lsize(lp)	((lp)->l_size)
+#define lsetlen(lp, n)	((lp)->l_used = (n))
+#define lsetforw(lp, lq) ((lp)->l_fp = (lq))
+#define lsetback(lp, lq) ((lp)->l_bp = (lq))
 
 /*
  * All repeated structures are kept as linked lists of structures.

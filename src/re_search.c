@@ -299,7 +299,7 @@ re_doreplace(RSIZE plen, char *st)
 				k = regex_match[num].rm_eo - regex_match[num].rm_so;
 				if (j + k >= REPLEN)
 					return (FALSE);
-				bcopy(&(clp->l_text[regex_match[num].rm_so]),
+				bcopy(&(ltext(clp)[regex_match[num].rm_so]),
 				    &repstr[j], k);
 				j += k;
 				if (*st == '\0')
@@ -341,7 +341,7 @@ re_forwsrch(void)
 	tbo = curwp->w_doto;
 	tdotline = curwp->w_dotline;
 
-	if (tbo == clp->l_used)
+	if (tbo == llength(clp))
 		/*
 		 * Don't start matching past end of line -- must move to
 		 * beginning of next line, unless line is empty or at

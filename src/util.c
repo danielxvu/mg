@@ -94,7 +94,7 @@ showcpos(int f, int n)
 	ewprintf("%s %c (0%o)  point=%ld(%d%%)  line=%d  row=%d  col=%d" \
             "  (blines=%d rlines=%d l_size=%d)", msg,
 	    cbyte, cbyte, cchar, ratio, cline, row, getcolpos(curwp),
-	    curbp->b_lines, nline, clp->l_size);
+	    curbp->b_lines, nline, lsize(clp));
 	return (TRUE);
 }
 
