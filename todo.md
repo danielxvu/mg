@@ -124,15 +124,13 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
       wired in. _(commit: C1, PR #19)_ Spec:
       `docs/superpowers/specs/2026-06-20-c1-text-utils-design.md`. ⚠ word.c/
       util.c editor commands remain in C (coupled to `curwp`/`curbp`).
-- [~] **C2 — EPIC (multi-iteration): opaque lines, then PieceTable.**
-      ✅ **(a) DONE** — accessor API + `struct line` opaque (PRs #22/#23/#24).
-      Measured 189 accesses/13 files (not 24); converted all 12 non-owner files
-      to accessors, then moved the struct into line.c + flipped macros→functions
-      so the incomplete type compile-enforces the boundary. ⏳ **(b) TODO** —
-      swap storage to a piece table behind the now-sealed accessors. ⚠ `ltext`
-      returns a contiguous `char*` that callers scan directly — phase (b) must
-      still materialize a contiguous buffer for it (or migrate those callers
-      first). Weigh the UTF-8 goal in the design.
+- [x] **C2 — EPIC: opaque lines, then modern storage. DONE.**
+      ✅ **(a)** accessor API + `struct line` opaque, compile-enforced (PRs
+      #22/#23/#24). ✅ **(b)** storage swapped to the `mg.line` C++ library
+      (`std::vector<char>`, RAII) under `ENABLE_CPP_UPGRADES`, behind the sealed
+      accessors (C2b-1 #25, C2b-2 #26). OFF stays faithful C. User chose the C++
+      module over a literal piece table (ltext-contiguous requirement made the
+      piece table a poor fit). The line storage is now the home for UTF-8 ops.
 - [x] **C3 — `std::expected` file-IO layer** (`mg.io`). `stat_file`/`read_file`/
       `write_file` → `expected<…, io_error>` (errno-faithful, POSIX + RAII fd
       guard); `read_lines`/`copy_file` compose via `.and_then()`, tests cover
@@ -157,31 +155,23 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
 
 ## ▶ RESUME HERE (next session)
 
-**C2 phase (b) IN PROGRESS — `mg.line` C++ storage** (user chose the std::string/
-`vector<char>` C++ module option). Spec:
-`docs/superpowers/specs/2026-06-20-c2b-mgline-storage-design.md`. ✅ phase (a)
-done (PRs #22-24, struct line opaque + compile-enforced). ✅ **C2b-1 done**
-(PR #25, branch `c2b1-line`): line.c's editor layer fully on accessors; only the
-**storage core** (lalloc init `84-86`, lrealloc `99-103`, lfree's
-`free(l_text)` `146`) still touches members. ⚠ **OFF dir is `build-c`.**
-Next — **C2b-2 (the swap):**
-- New `src/line/` → `mg.line` module + `extern "C"` bridge over the layout
-  `{ line *l_fp,*l_bp; int used; std::vector<char> buf; }` (`buf.size()`==l_size,
-  `used`==l_used, `buf.data()`==l_text contiguous). Bridge provides `lalloc`/
-  `lrealloc`/`lfreestore` + the 11 accessors.
-- In line.c, `#ifdef ENABLE_CPP_UPGRADES`: the storage core comes from the
-  bridge — do NOT define `struct line`, the accessors, `lalloc`, or `lrealloc`
-  here; lfree's `free(lp->l_text); free(lp)` becomes `lfreestore(lp)` (C++
-  delete). `#else` keeps today's C storage. Root CMake links `mg→mg_line`.
-- ⚠ A C++ `struct line` is `new`/`delete`d, NOT malloc/free — lalloc/lfreestore
-  cross the bridge; lfree's editor fixups stay C. `vector::resize` zero-fills
-  (C realloc didn't) — harmless. ldelnewline's `free(lp2)`/`free(lp1)` (struct
-  only) must also become `lfreestore` under #ifdef (and the C++ dtor frees buf,
-  fixing the original l_text leak — a benign improvement).
-- Verify: ON uses vector<char> (no malloc of l_text), OFF unchanged, identical
-  behavior, 0 warnings. Weigh the **UTF-8 goal** for the eventual codepoint API.
-Build each slice: `cmake --build --preset cpp && ctest --preset cpp` +
-`cmake --build --preset c-legacy` (0 warnings). Freeze next branch on `c2b1-line`.
+**🎉 C2 COMPLETE — `struct line` opaque + C++ `vector<char>` storage** (PRs
+#22-#26). The editor's central data structure now runs on RAII C++ storage
+(`mg.line`, `src/line/storage.cpp`) under `ENABLE_CPP_UPGRADES`, behind the
+compile-enforced accessor seam; OFF is faithful C. With C1/C1.5, C3/C3.5, and C2
+done, the three core subsystems (text classification, file I/O, line storage)
+all have modern C++ implementations wired in. ⚠ **OFF dir is `build-c`.**
+Candidate next milestones — pick & spec one:
+- **UTF-8 support** (the user's stated goal — see Future goals). Now well-placed:
+  `mg.text` gets a codepoint-aware classification + display-width API (beside the
+  byte table), and `mg.line`/column math gain multi-byte awareness. Big; spec in
+  slices (decode/iterate → width → classification → cursor/column → display).
+- **Widen the wire-ins**: route the `fileio.c` read loop (`ffropen`/`ffgetline`)
+  through `mg.io`; more `mg.text` call sites.
+- **C++ buffer/window structures** (next core type after line): apply the same
+  opaque-seam → C++ pattern to `struct buffer` or `struct mgwin`.
+Build: `cmake --build --preset cpp && ctest --preset cpp` +
+`cmake --build --preset c-legacy` (0 warnings). Freeze next branch on `c2b2-line`.
 
 ## Future goals (not yet scheduled)
 - **UTF-8 support** (user, 2026-06-20). mg is byte-oriented Latin-1 today (C1
@@ -207,8 +197,9 @@ Build each slice: `cmake --build --preset cpp && ctest --preset cpp` +
   `c3-io`→m9-actions (#18), `c1-text`→c3-io (#19),
   `c3_5-fisdir`→c1-text (#20), `c1_5-text`→c3_5-fisdir (#21),
   `c2a1-line`→c1_5-text (#22), `c2a2-line`→c2a1-line (#23),
-  `c2a3-line`→c2a2-line (#24), `c2b1-line`→c2a3-line (#25).
-  Next slice (C2b-2, the C++ swap) freezes its branch on `c2b1-line`.
+  `c2a3-line`→c2a2-line (#24), `c2b1-line`→c2a3-line (#25),
+  `c2b2-line`→c2b1-line (#26).
+  Next milestone freezes its branch on `c2b2-line`.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
