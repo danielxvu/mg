@@ -146,19 +146,18 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
 
 ## ▶ RESUME HERE (next session)
 
-**M8-4 — section navigation (`M-n`/`M-p`).** M8-1/M8-2 (PR #14) and M8-3
-(stash/branches sections, PR #15, branch `m8-sections`) are done. Last M8
-slice (spec: `docs/superpowers/specs/2026-06-19-m8-magit-breadth-design.md`):
-- In `magit_cmd.c`, bind `M-n`/`M-p` to jump to the next/previous **section
-  header** line. Section headers are the lines like "Unstaged changes (N)" /
-  "Stashes (N)" / "Branches (N)": emitted with kind `MG_LINE_OTHER` and an
-  empty path, NOT blank, and followed by content. Simplest robust approach:
-  tag headers with a new `MG_LINE_SECTION` kind in the bridge emit, then the C
-  side walks `magit_meta[]` for the next/prev row of that kind and moves point.
-- `M-n` is `ESC n` / `CCHR('[')` prefix in mg — check how other meta-bindings
-  are registered (metamap / `ESC` prefix). Pure C, no engine. Build:
-  `cmake --preset cpp && ctest --preset cpp`. Freeze `m8-nav2` on `m8-sections`.
-  After M8-4, **M8 is complete** — pick the next milestone (M9?) and spec it.
+**🎉 M8 COMPLETE** (PR #16, branch `m8-nav2`). Pick the next milestone and spec
+it first (the established rhythm). Two live directions:
+- **M9 — magit actions on the new sections** (builds straight on M8-3): act on
+  stashes/branches — `k`/`a` on a stash → drop/apply (`git_stash_drop`/`apply`),
+  `b`/`RET` on a branch → checkout (`git_checkout_tree` + set HEAD). New
+  `mg.git` ops + bridge + `magit_cmd.c` keys keyed off `MG_LINE_STASH`/`_BRANCH`.
+  Also candidate: remotes section + fetch/push, or a `*magit-log*` buffer.
+- **Core engine (C1/C3)** — pivot back to the C++23 refactor proper: C3 is the
+  cleanest (a `std::expected` file-IO layer over `fileio.c`); C1 (pure leaf
+  text utils) is small; C2 (opaque `struct line` → piece table) is the epic.
+Recommend **M9 stash/branch actions** for continuity, then revisit core engine.
+Build: `cmake --preset cpp && ctest --preset cpp`. Freeze next branch on `m8-nav2`.
 
 ## Notes for the next iteration
 - **Branch / PR workflow:** ongoing work rides the rolling `cpp-refactor` tip
@@ -171,8 +170,9 @@ slice (spec: `docs/superpowers/specs/2026-06-19-m8-magit-breadth-design.md`):
   `m3-status-buffer`→m2d2-modeline (#8), `m4-staging`→m3-status-buffer (#9), `m5-discard`→m4-staging (#10),
   `m6-commit`→m5-discard (#11),
   `m7-diffs`→m6-commit (#12), `m7-hunks`→m7-diffs (#13),
-  `m8-nav`→m7-hunks (#14), `m8-sections`→m8-nav (#15).
-  Next slice (M8-4) freezes `m8-nav2` on `m8-sections`.
+  `m8-nav`→m7-hunks (#14), `m8-sections`→m8-nav (#15),
+  `m8-nav2`→m8-sections (#16).
+  Next milestone (M9 / core engine) freezes its branch on `m8-nav2`.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
@@ -225,17 +225,18 @@ slice (spec: `docs/superpowers/specs/2026-06-19-m8-magit-breadth-design.md`):
   `unstage_hunk`; `magit_cmd.c` routes `s`/`u` on `MG_LINE_HUNK`/`MG_LINE_DIFF`
   to the hunk ops. Verified end-to-end via pty (staged b→B, left k→K unstaged).
   Spec: `docs/superpowers/specs/2026-06-19-m7-diffs-hunks-design.md`.
-- **M8 (breadth) in progress** — ✅ M8-1 `RET` visits the file at point (other
+- **🎉 M8 COMPLETE (breadth)** — ✅ M8-1 `RET` visits the file at point (other
   window; pure C, non-prompting twin of poptofile) · ✅ M8-2 `?` pops a
   read-only `*magit-help*` key legend · ✅ M8-3 stash/branches sections
   (`mg.git` `stashes`/`branches` libgit2 listers; `MG_LINE_STASH`/`_BRANCH`) ·
-  ⏳ M8-4 section nav (`M-n`/`M-p`). Spec:
+  ✅ M8-4 section nav `M-n`/`M-p` (`ESC` meta-prefix submap; headers tagged
+  `MG_LINE_SECTION`; other meta keys fall through via `rescan`). Spec:
   `docs/superpowers/specs/2026-06-19-m8-magit-breadth-design.md`.
   ⚠ magit keymap entries MUST stay in ascending key order (`doscan` scan) —
   now enforced: `magit_assert_keymap_sorted()` panics on first `C-x g` if not.
 - **Magit roadmap:** ✅ M5 discard (`k`) · ✅ M6 commit (`c`) · ✅ M7 inline
-  diffs + hunk staging (`TAB`/`s`/`u` on a hunk) · ⏳ M8 breadth (M8-1/M8-2
-  done; M8-3 stash/branches + M8-4 nav remain).
+  diffs + hunk staging · ✅ M8 breadth (RET/?/stash+branches/section-nav).
+  Next: M9 (act on stashes/branches; remotes; log view) or pivot to core engine.
 - **Other:** live-while-idle modeline; auto-refresh the status buffer on fs
   events; merge the PR stack (#1–#8).
 - Follow-ups (when needed): C-quoted/special-char paths, `-z` NUL format,
