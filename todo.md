@@ -126,8 +126,12 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
       behind, so this is NOT a drop-in module swap. Sub-tasks: (a) introduce an
       accessor API + make `struct line` opaque across all 24 files; (b) only then
       swap the storage model to a piece-table behind that API.
-- [ ] **C3 — `std::expected` file-IO layer** over `fileio.c`: open/read/write/stat
-      returning `expected<…, mg::io_error>`, chained with `.and_then()`/`.or_else()`.
+- [x] **C3 — `std::expected` file-IO layer** (`mg.io`). `stat_file`/`read_file`/
+      `write_file` → `expected<…, io_error>` (errno-faithful, POSIX + RAII fd
+      guard); `read_lines`/`copy_file` compose via `.and_then()`, tests cover
+      `.or_else()`. Greenfield `mg_io` module gated by `ENABLE_CPP_UPGRADES`,
+      not yet wired into `fileio.c`. 10 doctest cases. _(commit: C3, PR #18)_
+      Spec: `docs/superpowers/specs/2026-06-20-c3-expected-fileio-design.md`.
 
 ## Review log
 - **2026-06-19 (post-F1 review):** verified toolchain & milestones against source.
@@ -146,22 +150,22 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
 
 ## ▶ RESUME HERE (next session)
 
-**🎉 M9 COMPLETE** (stash/branch actions, PR #17, branch `m9-actions`). Magit is
-now a usable status/stage/commit/diff/stash/branch tool. Pick the next milestone
-and spec it first:
-- **Magit depth (M10)** — remotes section + `f` fetch / `P` push
-  (`git_remote_*`), or a dedicated `*magit-log*` buffer (`RET` on a commit shows
-  it), or branch create/delete. All build on the existing libgit2 wrapper.
-- **Core engine (recommended pivot)** — return to the C++23 refactor proper,
-  which is the project's actual thesis. Cleanest entry is **C3**: a
-  `std::expected` file-IO layer over `fileio.c` (open/read/write/stat →
-  `expected<…, io_error>`, chained `.and_then()`/`.or_else()`). C1 (pure leaf
-  text utils) is a small warm-up; C2 (opaque `struct line` → piece table) is
-  the multi-iteration epic — 24 files touch line guts, needs an accessor API
-  first. See the "Core engine" task section above.
-Recommend **pivoting to C3** now that magit has proven the module+bridge+TDD
-pipeline end-to-end. Build: `cmake --preset cpp && ctest --preset cpp`. Freeze
-the next milestone branch on `m9-actions`.
+**🎉 C3 COMPLETE** (`mg.io` file-IO layer, PR #18, branch `c3-io`). First core
+engine module landed. Two live directions:
+- **Wire `mg.io` in (C3.5)** — give `mg.io` an `extern "C"` bridge and route a
+  *safe* `fileio.c` read path (e.g. `ffropen`+slurp, or `startupfile` reads)
+  through it under `#ifdef ENABLE_CPP_UPGRADES`, proving the modern layer can
+  replace legacy I/O without disturbing the OFF build. Smaller, high-signal.
+- **C1 — `mg.text` pure leaf utils** (small warm-up): only genuinely free
+  helpers (split/trim/char-class) that take NO editor state. ⚠ most of
+  `word.c`/`util.c` is coupled to `curwp`/`curbp` — extract only the pure bits.
+- **C2 — opaque `struct line` → piece table** (the epic): `struct line` is
+  public (`def.h:229`) and ~24 `.c` files poke `l_text`/`l_used`/`lforw` directly.
+  Needs (a) an accessor API making `struct line` opaque across all files, THEN
+  (b) swapping storage to a piece table. Multi-iteration; spec carefully first.
+Recommend **C1** next (quick win, same module pattern) or **C3.5** (proves the
+bridge-replace path). Build: `cmake --preset cpp && ctest --preset cpp`. Freeze
+the next branch on `c3-io`.
 
 ## Notes for the next iteration
 - **Branch / PR workflow:** ongoing work rides the rolling `cpp-refactor` tip
@@ -175,8 +179,9 @@ the next milestone branch on `m9-actions`.
   `m6-commit`→m5-discard (#11),
   `m7-diffs`→m6-commit (#12), `m7-hunks`→m7-diffs (#13),
   `m8-nav`→m7-hunks (#14), `m8-sections`→m8-nav (#15),
-  `m8-nav2`→m8-sections (#16), `m9-actions`→m8-nav2 (#17).
-  Next milestone (M10 / core-engine C3) freezes its branch on `m9-actions`.
+  `m8-nav2`→m8-sections (#16), `m9-actions`→m8-nav2 (#17),
+  `c3-io`→m9-actions (#18).
+  Next milestone (C1 / C3.5) freezes its branch on `c3-io`.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
