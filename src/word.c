@@ -16,8 +16,50 @@
 
 #include "def.h"
 
+#ifdef ENABLE_CPP_UPGRADES
+#include "utf8/bridge.h"	/* word motion/classification over codepoints (U4) */
+/*
+ * Case conversion only applies to ASCII letters: a multibyte char's lead byte
+ * may look lower/upper in the Latin-1 byte table, and writing it would corrupt
+ * the sequence. forwchar steps over the whole char, so it is just skipped.
+ * (Non-ASCII case mapping is a later slice.)
+ */
+#define ASCII_LETTER(c)		((unsigned int)(c) < 0x80)
+#else
+#define ASCII_LETTER(c)		1
+#endif
+
 RSIZE	countfword(void);
 int	grabword(char **);
+
+/*
+ * Move one character forward/backward and return the number of *bytes* moved
+ * (-1 on failure). forwchar/backchar step whole codepoints (U3), so word
+ * counters add this rather than 1 to get byte counts for ldelete/undo. In the
+ * plain-C build a character is one byte, so this is always 1 -- identical
+ * behaviour.
+ */
+static int
+fwd_bytes(void)
+{
+	struct line	*olp = curwp->w_dotp;
+	int		 od = curwp->w_doto;
+
+	if (forwchar(FFRAND, 1) == FALSE)
+		return (-1);
+	return (curwp->w_dotp == olp ? curwp->w_doto - od : 1);
+}
+
+static int
+bwd_bytes(void)
+{
+	struct line	*olp = curwp->w_dotp;
+	int		 od = curwp->w_doto;
+
+	if (backchar(FFRAND, 1) == FALSE)
+		return (-1);
+	return (curwp->w_dotp == olp ? od - curwp->w_doto : 1);
+}
 
 /*
  * Move the cursor backward by "n" words. All of the details of motion are
@@ -202,6 +244,32 @@ transposeword(int f, int n)
 int
 grabword(char **word)
 {
+#ifdef ENABLE_CPP_UPGRADES
+	while (inword() == TRUE) {
+		/* Copy the whole (possibly multibyte) character, then delete it. */
+		struct line	*lp = curwp->w_dotp;
+		int		 doto = curwp->w_doto;
+		unsigned int	 cp;
+		int		 w, nb;
+		char		 ch[8], *tmp;
+
+		nb = mg_utf8_decode(&ltext(lp)[doto], llength(lp) - doto, &cp, &w);
+		if (nb <= 0 || nb >= (int)sizeof(ch))
+			nb = 1;
+		memcpy(ch, &ltext(lp)[doto], nb);
+		ch[nb] = '\0';
+		if (*word == NULL) {
+			if (asprintf(word, "%s", ch) == -1)
+				return (errno);
+		} else {
+			if (asprintf(&tmp, "%s%s", *word, ch) == -1)
+				return (errno);
+			free(*word);
+			*word = tmp;
+		}
+		(void)forwdel(FFRAND, 1);
+	}
+#else
 	int c;
 
 	while (inword() == TRUE) {
@@ -215,6 +283,7 @@ grabword(char **word)
 		}
 		(void)forwdel(FFRAND, 1);
 	}
+#endif
 	if (*word == NULL)
 		return (ABORT);
 	return (TRUE);
@@ -250,7 +319,7 @@ upperword(int f, int n)
 
 		while (inword() != FALSE) {
 			c = lgetc(curwp->w_dotp, curwp->w_doto);
-			if (ISLOWER(c) != FALSE) {
+			if (ASCII_LETTER(c) && ISLOWER(c) != FALSE) {
 				c = TOUPPER(c);
 				lputc(curwp->w_dotp, curwp->w_doto, c);
 				lchange(WFFULL);
@@ -291,7 +360,7 @@ lowerword(int f, int n)
 
 		while (inword() != FALSE) {
 			c = lgetc(curwp->w_dotp, curwp->w_doto);
-			if (ISUPPER(c) != FALSE) {
+			if (ASCII_LETTER(c) && ISUPPER(c) != FALSE) {
 				c = TOLOWER(c);
 				lputc(curwp->w_dotp, curwp->w_doto, c);
 				lchange(WFFULL);
@@ -335,7 +404,7 @@ capword(int f, int n)
 
 		if (inword() != FALSE) {
 			c = lgetc(curwp->w_dotp, curwp->w_doto);
-			if (ISLOWER(c) != FALSE) {
+			if (ASCII_LETTER(c) && ISLOWER(c) != FALSE) {
 				c = TOUPPER(c);
 				lputc(curwp->w_dotp, curwp->w_doto, c);
 				lchange(WFFULL);
@@ -344,7 +413,7 @@ capword(int f, int n)
 				return (TRUE);
 			while (inword() != FALSE) {
 				c = lgetc(curwp->w_dotp, curwp->w_doto);
-				if (ISUPPER(c) != FALSE) {
+				if (ASCII_LETTER(c) && ISUPPER(c) != FALSE) {
 					c = TOLOWER(c);
 					lputc(curwp->w_dotp, curwp->w_doto, c);
 					lchange(WFFULL);
@@ -372,10 +441,12 @@ countfword()
 	size = 0;
 
 	while (inword() != FALSE) {
-		if (forwchar(FFRAND, 1) == FALSE)
+		int	nb = fwd_bytes();
+
+		if (nb < 0)
 			/* hit the end of the buffer */
 			goto out;
-		++size;
+		size += nb;
 	}
 out:
 	curwp->w_dotp = dotp;
@@ -416,16 +487,20 @@ delfword(int f, int n)
 
 	while (n--) {
 		while (inword() == FALSE) {
-			if (forwchar(FFRAND, 1) == FALSE)
+			int	nb = fwd_bytes();
+
+			if (nb < 0)
 				/* hit the end of the buffer */
 				goto out;
-			++size;
+			size += nb;
 		}
 		while (inword() != FALSE) {
-			if (forwchar(FFRAND, 1) == FALSE)
+			int	nb = fwd_bytes();
+
+			if (nb < 0)
 				/* hit the end of the buffer */
 				goto out;
-			++size;
+			size += nb;
 		}
 	}
 out:
@@ -447,7 +522,7 @@ int
 delbword(int f, int n)
 {
 	RSIZE	size;
-	int s;
+	int s, nb;
 
 	if ((s = checkdirty(curbp)) != TRUE)
 		return (s);
@@ -464,31 +539,31 @@ delbword(int f, int n)
 	if ((lastflag & CFKILL) == 0)
 		kdelete();
 	thisflag |= CFKILL;
-	if (backchar(FFRAND, 1) == FALSE)
+	if ((nb = bwd_bytes()) < 0)
 		/* hit buffer start */
 		return (TRUE);
 
 	/* one deleted */
-	size = 1;
+	size = nb;
 	while (n--) {
 		while (inword() == FALSE) {
-			if (backchar(FFRAND, 1) == FALSE)
+			if ((nb = bwd_bytes()) < 0)
 				/* hit buffer start */
 				goto out;
-			++size;
+			size += nb;
 		}
 		while (inword() != FALSE) {
-			if (backchar(FFRAND, 1) == FALSE)
+			if ((nb = bwd_bytes()) < 0)
 				/* hit buffer start */
 				goto out;
-			++size;
+			size += nb;
 		}
 	}
-	if (forwchar(FFRAND, 1) == FALSE)
+	if ((nb = fwd_bytes()) < 0)
 		return (FALSE);
 
 	/* undo assumed delete */
-	--size;
+	size -= nb;
 out:
 	return (ldelete(size, KBACK));
 }
@@ -500,7 +575,25 @@ out:
 int
 inword(void)
 {
+	if (curwp->w_doto == llength(curwp->w_dotp))
+		return (FALSE);
+#ifdef ENABLE_CPP_UPGRADES
+	{
+		/* ASCII -> mg.text byte table; non-ASCII -> codepoint class. */
+		unsigned char b = ltext(curwp->w_dotp)[curwp->w_doto];
+
+		if (b >= 0x80) {
+			unsigned int cp;
+			int w;
+
+			(void)mg_utf8_decode(&ltext(curwp->w_dotp)[curwp->w_doto],
+			    llength(curwp->w_dotp) - curwp->w_doto, &cp, &w);
+			return (mg_utf8_is_word(cp));
+		}
+		return (ISWORD(b));
+	}
+#else
 	/* can't use lgetc in ISWORD due to bug in OSK cpp */
-	return (curwp->w_doto != llength(curwp->w_dotp) &&
-	    ISWORD(ltext(curwp->w_dotp)[curwp->w_doto]));
+	return (ISWORD(ltext(curwp->w_dotp)[curwp->w_doto]));
+#endif
 }
