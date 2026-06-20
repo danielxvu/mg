@@ -59,6 +59,13 @@ endif()
 if(ENABLE_CPP_UPGRADES)
     add_subdirectory(src/io)
     add_subdirectory(src/text)
+
+    # Wire mg.io into the legacy core: fileio.c's fisdir routes through the
+    # mg_io extern "C" bridge under #ifdef ENABLE_CPP_UPGRADES (C3.5). mg now
+    # links a C++ library, so the final link uses the C++ driver.
+    target_link_libraries(mg PRIVATE mg_io)
+    target_compile_definitions(mg PRIVATE ENABLE_CPP_UPGRADES)
+    set_target_properties(mg PROPERTIES LINKER_LANGUAGE CXX)
 endif()
 
 # Native Git engine (C++20 modules). Configured before tests so its module

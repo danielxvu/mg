@@ -5,4 +5,7 @@
 # a PUBLIC CXX_MODULES file set so linking targets get the BMI scan.
 add_library(mg_io)
 target_sources(mg_io PUBLIC FILE_SET CXX_MODULES FILES io.cppm)
+# bridge.cpp is a regular TU (imports mg.io) exposing the extern "C" API in
+# bridge.h to the legacy C core (task C3.5).
+target_sources(mg_io PRIVATE bridge.cpp)
 target_include_directories(mg_io PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

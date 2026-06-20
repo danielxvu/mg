@@ -26,6 +26,10 @@
 #include "kbd.h"
 #include "pathnames.h"
 
+#ifdef ENABLE_CPP_UPGRADES
+#include "io/bridge.h"		/* fisdir routes through the mg.io layer (C3.5) */
+#endif
+
 #ifndef MAXNAMLEN
 #define MAXNAMLEN 255
 #endif
@@ -610,6 +614,18 @@ make_file_list(char *buf)
 int
 fisdir(const char *fname)
 {
+#ifdef ENABLE_CPP_UPGRADES
+	/* Route through the modern std::expected layer (mg.io). The bridge's
+	 * 1/0/-1 maps onto fisdir's TRUE/FALSE/ABORT contract. */
+	switch (mg_io_isdir(fname)) {
+	case 1:
+		return (TRUE);
+	case 0:
+		return (FALSE);
+	default:
+		return (ABORT);
+	}
+#else
 	struct stat	statbuf;
 
 	if (stat(fname, &statbuf) != 0)
@@ -619,6 +635,7 @@ fisdir(const char *fname)
 		return (TRUE);
 
 	return (FALSE);
+#endif
 }
 #endif
 
