@@ -116,10 +116,14 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
           pty-driven temp repo; OFF `mg` has 0 `mg_magit` symbols. _(commit: M2d-2)_
 
 ### Core engine (later — honestly scoped after review)
-- [ ] **C1 — `mg.text` pure leaf utilities.** Only genuinely free-standing
-      helpers (split/trim/char-class) that take **no** editor state. ⚠ Most of
-      `word.c`/`util.c` is coupled to `curwp`/`curbp` + line internals — do NOT
-      claim a clean lift of those; extract only the pure bits.
+- [x] **C1 — `mg.text` pure leaf utilities.** `constexpr` char classification
+      (`is_word`/`is_ctrl`/`is_upper`/`is_lower`/`is_eosp`/`is_digit`) over a
+      256-byte table transcribed byte-for-byte from `cinfo.c` (verified all 256
+      identical, quirks preserved) + `next_tabstop` (`ntabstop`). No mutable
+      global; usable in constant expressions. Greenfield `mg_text`, not yet
+      wired in. _(commit: C1, PR #19)_ Spec:
+      `docs/superpowers/specs/2026-06-20-c1-text-utils-design.md`. ⚠ word.c/
+      util.c editor commands remain in C (coupled to `curwp`/`curbp`).
 - [ ] **C2 — EPIC (multi-iteration): opaque lines, then PieceTable.** ⚠ Review
       found `struct line` is **public** (`def.h:229`) and **24 of ~30 `.c` files**
       poke `l_text/l_used/l_size/lforw/lback` directly — there is no API to hide
@@ -150,22 +154,24 @@ cmake --preset c-legacy && cmake --build --preset c-legacy
 
 ## ▶ RESUME HERE (next session)
 
-**🎉 C3 COMPLETE** (`mg.io` file-IO layer, PR #18, branch `c3-io`). First core
-engine module landed. Two live directions:
-- **Wire `mg.io` in (C3.5)** — give `mg.io` an `extern "C"` bridge and route a
-  *safe* `fileio.c` read path (e.g. `ffropen`+slurp, or `startupfile` reads)
-  through it under `#ifdef ENABLE_CPP_UPGRADES`, proving the modern layer can
-  replace legacy I/O without disturbing the OFF build. Smaller, high-signal.
-- **C1 — `mg.text` pure leaf utils** (small warm-up): only genuinely free
-  helpers (split/trim/char-class) that take NO editor state. ⚠ most of
-  `word.c`/`util.c` is coupled to `curwp`/`curbp` — extract only the pure bits.
-- **C2 — opaque `struct line` → piece table** (the epic): `struct line` is
-  public (`def.h:229`) and ~24 `.c` files poke `l_text`/`l_used`/`lforw` directly.
-  Needs (a) an accessor API making `struct line` opaque across all files, THEN
-  (b) swapping storage to a piece table. Multi-iteration; spec carefully first.
-Recommend **C1** next (quick win, same module pattern) or **C3.5** (proves the
-bridge-replace path). Build: `cmake --preset cpp && ctest --preset cpp`. Freeze
-the next branch on `c3-io`.
+**🎉 C1 + C3 COMPLETE** — two core modules landed (`mg.text` PR #19, `mg.io`
+PR #18), both greenfield/tested/not-yet-wired. The pattern is proven; the next
+step that actually advances the refactor is to **wire a modern module into the
+C core** (so far everything is parallel + dormant). Directions:
+- **C3.5 — wire `mg.io` in** (recommended): give `mg.io` an `extern "C"` bridge
+  and route ONE safe `fileio.c` read through it under `#ifdef ENABLE_CPP_UPGRADES`
+  (e.g. `startupfile`/config reads, or a slurp helper) — proving the modern
+  layer can replace legacy I/O without disturbing the OFF build. The magit work
+  (main.c/display.c under `#ifdef`) is the template. Smaller, high-signal.
+- **C1.5 — wire `mg.text` in**: route `chrdef.h`'s `ISWORD`/etc. (or `word.c`
+  call sites) through `mg.text` under `#ifdef`, retiring the mutable global for
+  the upgraded build.
+- **C2 — opaque `struct line` → piece table** (the epic): `struct line` public
+  (`def.h:229`), ~24 `.c` files poke `l_text`/`l_used`/`lforw`. (a) accessor API
+  making it opaque across all files, THEN (b) piece-table storage. Spec first.
+Recommend **C3.5** — it converts a dormant module into a real replacement and
+de-risks the whole "C++ replaces C" thesis. Build: `cmake --preset cpp &&
+ctest --preset cpp`. Freeze the next branch on `c1-text`.
 
 ## Notes for the next iteration
 - **Branch / PR workflow:** ongoing work rides the rolling `cpp-refactor` tip
@@ -180,8 +186,8 @@ the next branch on `c3-io`.
   `m7-diffs`→m6-commit (#12), `m7-hunks`→m7-diffs (#13),
   `m8-nav`→m7-hunks (#14), `m8-sections`→m8-nav (#15),
   `m8-nav2`→m8-sections (#16), `m9-actions`→m8-nav2 (#17),
-  `c3-io`→m9-actions (#18).
-  Next milestone (C1 / C3.5) freezes its branch on `c3-io`.
+  `c3-io`→m9-actions (#18), `c1-text`→c3-io (#19).
+  Next milestone (C3.5 / wire-in) freezes its branch on `c1-text`.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
