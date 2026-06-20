@@ -173,6 +173,14 @@ Recommend **C3.5** — it converts a dormant module into a real replacement and
 de-risks the whole "C++ replaces C" thesis. Build: `cmake --preset cpp &&
 ctest --preset cpp`. Freeze the next branch on `c1-text`.
 
+## Future goals (not yet scheduled)
+- **UTF-8 support** (user, 2026-06-20). mg is byte-oriented Latin-1 today (C1
+  `mg.text` ships a faithful 256-byte table). Eventually needs codepoint-aware
+  classification + display width in `mg.text` (a NEW API beside the byte table,
+  don't retrofit C1) and multi-byte awareness in column math + the C2 line
+  storage. `mg.io` is byte-transparent, unaffected. Flag as a design axis when
+  speccing C2.
+
 ## Notes for the next iteration
 - **Branch / PR workflow:** ongoing work rides the rolling `cpp-refactor` tip
   (NOT `master`); commit atomically per iteration. At each milestone, freeze a
