@@ -202,6 +202,11 @@ int mg_magit_tag_delete(const char *repo_path, const char *name);
 /* Append `pattern` to the repo's top-level .gitignore. 1 ok, 0 fail. */
 int mg_magit_ignore(const char *repo_path, const char *pattern);
 
+/* Emit a blame of `path`: one "<oid> <author> <line>" per source line. Returns
+ * the line count, 0 on error. (Seeds the *magit-blame* buffer.) */
+int mg_magit_blame_file(const char *repo_path, const char *path,
+                        mg_magit_emit_fn emit, void *ctx);
+
 /* Set / remove the git note on commit `rev`. 1 ok, 0 fail. (The note, if any,
  * is shown in the *magit-commit* view.) */
 int mg_magit_note_set(const char *repo_path, const char *rev,

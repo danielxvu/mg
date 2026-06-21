@@ -61,7 +61,9 @@ static int	magit_ignore(int, int);
 static int	magit_region(int *, char **, int *, int *);
 static int	magit_line_index(void);
 static const char *magit_log_oid_at_point(void);
+static int	magit_at_point(char **, int *);
 static int	magit_log(int, int);
+static int	magit_blame(int, int);
 static int	magit_cherrypick(int, int);
 static int	magit_log_visit(int, int);
 static int	magit_log_refresh(int, int);
@@ -140,6 +142,7 @@ static PF magit_ret[] = { magit_visit };
 static PF magit_esc[] = { NULL };		/* ESC -> meta prefix */
 static PF magit_qmark[] = { magit_help };
 static PF magit_A[] = { magit_cherrypick };
+static PF magit_B[] = { magit_blame };
 static PF magit_F[] = { NULL };			/* F -> pull menu prefix */
 static PF magit_P[] = { NULL };			/* P -> push menu prefix */
 
@@ -434,9 +437,9 @@ static struct KEYMAPE (4) magit_commitmenu = {
 };
 
 /* Entries MUST stay in ascending key order -- doscan() relies on it. */
-static struct KEYMAPE (27) magitmap = {
-	27,
-	27,
+static struct KEYMAPE (28) magitmap = {
+	28,
+	28,
 	rescan,
 	{
 		{ CCHR('I'), CCHR('I'), magit_tab, NULL },	/* TAB: expand/collapse */
@@ -445,6 +448,7 @@ static struct KEYMAPE (27) magitmap = {
 		    (KEYMAP *)&magit_metamap },
 		{ '?', '?', magit_qmark, NULL },		/* ?: key help */
 		{ 'A', 'A', magit_A, NULL },			/* A: cherry-pick */
+		{ 'B', 'B', magit_B, NULL },			/* B: blame file at point */
 		{ 'F', 'F', magit_F, (KEYMAP *)&magit_pullmenu }, /* F: pull menu */
 		{ 'P', 'P', magit_P, (KEYMAP *)&magit_pushmenu }, /* P: push menu */
 		{ 'S', 'S', magit_S, NULL },			/* S: stage all */
@@ -761,6 +765,46 @@ magit_log_refresh(int f, int n)
 	if ((bp = bfind("*magit-log*", TRUE)) == NULL)
 		return (FALSE);
 	return (magit_log_build(bp));
+}
+
+/* B: blame the file at point in a read-only *magit-blame* buffer. */
+static int
+magit_blame(int f, int n)
+{
+	struct buffer	*bp;
+	struct mgwin	*wp;
+	char		*path = NULL, cwd[PATH_MAX];
+	int		 kind, hunk;
+
+	kind = magit_at_point(&path, &hunk);
+	if ((kind != MG_LINE_UNTRACKED && kind != MG_LINE_UNSTAGED &&
+	    kind != MG_LINE_STAGED) || path == NULL || path[0] == '\0') {
+		ewprintf("Not on a file");
+		return (FALSE);
+	}
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	if ((bp = bfind("*magit-blame*", TRUE)) == NULL)
+		return (FALSE);
+	bp->b_flag |= BFIGNDIRTY;
+	if (bclear(bp) != TRUE)
+		return (FALSE);
+	bp->b_flag |= BFREADONLY;
+	if (mg_magit_blame_file(cwd, path, magit_plain_emit, bp) == 0) {
+		ewprintf("Blame failed (untracked or binary?)");
+		return (FALSE);
+	}
+	bp->b_dotp = bfirstlp(bp);
+	bp->b_doto = 0;
+	if ((wp = popbuf(bp, WNONE)) == NULL)
+		return (FALSE);
+	curwp = wp;
+	curbp = bp;
+	wp->w_dotp = bp->b_dotp;
+	wp->w_doto = bp->b_doto;
+	bp->b_modes[1] = name_mode("magit-commit-view-mode"); /* q closes */
+	bp->b_nmodes = 1;
+	return (TRUE);
 }
 
 /* The full oid of the commit at point in *magit-log*, or NULL. */
@@ -1101,6 +1145,7 @@ magit_help(int f, int n)
 		"  k        discard changes / region / drop the stash at point",
 		"  a        apply the stash at point",
 		"  A        cherry-pick (commit at point in the log, else prompt)",
+		"  B        blame the file at point",
 		"  b b/c/k/m  branch: checkout / create / delete / rename",
 		"  t t/a/k  tag: lightweight / annotated / delete",
 		"  W a/k    worktree: add / delete",

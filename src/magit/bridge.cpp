@@ -627,6 +627,27 @@ extern "C" int mg_magit_tag_delete(const char *repo_path, const char *name)
     return mg::git::delete_tag(repo_path, name).has_value() ? 1 : 0;
 }
 
+extern "C" int mg_magit_blame_file(const char *repo_path, const char *path,
+                                   mg_magit_emit_fn emit, void *ctx)
+{
+    if (repo_path == nullptr || path == nullptr || emit == nullptr)
+        return 0;
+    auto bl = mg::git::blame_file(repo_path, path);
+    if (!bl)
+        return 0;
+    int n = 0;
+    for (const auto &l : *bl) {
+        std::string author = l.author;
+        if (author.size() > 16)
+            author.resize(16);
+        author.resize(16, ' '); // pad for column alignment
+        emit(ctx, (l.short_oid + " " + author + " " + l.text).c_str(),
+             MG_LINE_OTHER, nullptr, -1);
+        ++n;
+    }
+    return n;
+}
+
 extern "C" int mg_magit_ignore(const char *repo_path, const char *pattern)
 {
     if (repo_path == nullptr || pattern == nullptr || pattern[0] == '\0')

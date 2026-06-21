@@ -160,6 +160,13 @@ struct worktree_entry {
     std::string path;
 };
 
+// One source line annotated with the commit that last touched it.
+struct blame_line {
+    std::string short_oid;
+    std::string author;
+    std::string text;
+};
+
 struct upstream_info {
     bool has_upstream;       // false when the current branch tracks nothing
     std::string name;        // upstream shorthand, e.g. "origin/master"
@@ -340,6 +347,11 @@ std::expected<std::vector<std::string>, error> tags(std::string repo);
 
 // Append `pattern` as a line to the repository's top-level .gitignore.
 std::expected<void, error> ignore_path(std::string repo, std::string pattern);
+
+// Blame `path` (workdir version): one entry per line, in file order, naming the
+// commit + author that last touched it.
+std::expected<std::vector<blame_line>, error>
+blame_file(std::string repo, std::string path);
 
 // The repository's linked worktrees (name + absolute path).
 std::expected<std::vector<worktree_entry>, error> worktrees(std::string repo);
@@ -1083,6 +1095,50 @@ std::expected<void, error> remove_worktree(std::string repo, std::string name)
     if (git_worktree_prune(wt.get(), &popts) != 0)
         return std::unexpected(last_error());
     return {};
+}
+
+std::expected<std::vector<blame_line>, error>
+blame_file(std::string repo, std::string path)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    git_blame_options opts;
+    git_blame_options_init(&opts, GIT_BLAME_OPTIONS_VERSION);
+    git_blame *raw_blame = nullptr;
+    if (git_blame_file(&raw_blame, r.get(), path.c_str(), &opts) != 0)
+        return std::unexpected(last_error());
+    std::unique_ptr<git_blame, decltype(&git_blame_free)> blame(raw_blame,
+                                                                git_blame_free);
+
+    // Read the working-tree file so we can pair each line with its hunk.
+    const char *wd = git_repository_workdir(r.get());
+    if (wd == nullptr)
+        return std::unexpected(error{0, "no work tree"});
+    std::ifstream f(std::filesystem::path(wd) / path);
+    if (!f)
+        return std::unexpected(error{0, "cannot read file"});
+
+    std::vector<blame_line> out;
+    std::string text;
+    std::size_t lineno = 1;
+    while (std::getline(f, text)) {
+        blame_line bl;
+        bl.text = text;
+        const git_blame_hunk *h =
+            git_blame_get_hunk_byline(blame.get(), lineno);
+        if (h != nullptr) {
+            bl.short_oid = detail::short_oid(&h->final_commit_id);
+            if (h->final_signature != nullptr && h->final_signature->name)
+                bl.author = h->final_signature->name;
+        }
+        out.push_back(std::move(bl));
+        ++lineno;
+    }
+    return out;
 }
 
 std::expected<void, error> ignore_path(std::string repo, std::string pattern)

@@ -1521,6 +1521,25 @@ TEST_CASE("set_note / read_note / remove_note round-trip")
     fs::remove_all(dir);
 }
 
+TEST_CASE("blame_file annotates each line with its commit and author")
+{
+    auto dir = make_repo_with_commit("C1");
+    commit_file(dir, "a.txt", "line one\n", "C2");            // line 1 settled
+    commit_file(dir, "a.txt", "line one\nline two\n", "C3");  // adds line 2
+
+    auto bl = mg::git::blame_file(dir.string(), "a.txt");
+    REQUIRE(bl.has_value());
+    REQUIRE(bl->size() == 2);
+    CHECK((*bl)[0].text == "line one");
+    CHECK((*bl)[1].text == "line two");
+    // Each line names the commit + author (Test signature from commit_file).
+    CHECK((*bl)[0].short_oid.size() == 8);
+    CHECK((*bl)[0].author == "Test");
+    // The two lines came from different commits.
+    CHECK((*bl)[0].short_oid != (*bl)[1].short_oid);
+    fs::remove_all(dir);
+}
+
 TEST_CASE("ignore_path appends a pattern to .gitignore")
 {
     auto dir = make_repo_with_commit("base");
