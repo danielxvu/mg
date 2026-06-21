@@ -591,6 +591,55 @@ TEST_CASE("pull_remote fast-forwards HEAD onto upstream changes")
     fs::remove_all(fx.bare);
 }
 
+TEST_CASE("push_remote set_upstream records the branch's upstream")
+{
+    auto fx = make_repo_with_remote();
+    set_test_config(fx.work);
+
+    REQUIRE(mg::git::push_remote(fx.work.string(), "origin", false, true)
+                .has_value());
+    auto up = mg::git::upstream_status(fx.work.string());
+    REQUIRE(up.has_value());
+    CHECK(up->has_upstream);
+    CHECK(up->name == "origin/" + fx.branch);
+    fs::remove_all(fx.work);
+    fs::remove_all(fx.bare);
+}
+
+TEST_CASE("push_remote force pushes a rewritten history that a plain push rejects")
+{
+    auto fx = make_repo_with_remote();
+    set_test_config(fx.work);
+    // Rewrite local history so it diverges from what the remote has.
+    REQUIRE(mg::git::commit_amend(fx.work.string(), "amended C1").has_value());
+
+    CHECK_FALSE(mg::git::push_remote(fx.work.string(), "origin").has_value());
+    REQUIRE(mg::git::push_remote(fx.work.string(), "origin", true).has_value());
+
+    // The bare repo's branch now matches the rewritten local HEAD.
+    auto h = mg::git::read_head(fx.work.string());
+    REQUIRE(h.has_value());
+    CHECK(h->summary == "amended C1");
+    fs::remove_all(fx.work);
+    fs::remove_all(fx.bare);
+}
+
+TEST_CASE("pull_rebase brings the branch up to the remote")
+{
+    auto fx = make_repo_with_remote();
+    set_test_config(fx.work);
+    advance_ref(fx.bare, "refs/heads/" + fx.branch, "C2 upstream"); // bare ahead
+
+    auto r = mg::git::pull_rebase(fx.work.string(), "origin");
+    REQUIRE(r.has_value());
+    CHECK(*r == mg::git::rebase_result::done);
+    auto h = mg::git::read_head(fx.work.string());
+    REQUIRE(h.has_value());
+    CHECK(h->summary == "C2 upstream");
+    fs::remove_all(fx.work);
+    fs::remove_all(fx.bare);
+}
+
 TEST_CASE("rebase_onto replays the branch's commits on top of upstream")
 {
     auto dir = make_repo_for_rebase(); // HEAD=feature (C1->C3); master=C1->C2

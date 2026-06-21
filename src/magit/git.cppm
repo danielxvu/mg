@@ -295,12 +295,20 @@ resolve_userpass(const char *username_from_url, cred_prompt prompt, void *udata)
 // Fetch from `remote` (default refspecs), updating remote-tracking refs.
 std::expected<void, error> fetch_remote(std::string repo, std::string remote);
 
-// Push the current branch to `remote` (same-named ref).
-std::expected<void, error> push_remote(std::string repo, std::string remote);
+// Push the current branch to `remote` (same-named ref). `force` uses a +refspec
+// (force-push); `set_upstream` records remote/branch as the branch's upstream.
+std::expected<void, error>
+push_remote(std::string repo, std::string remote, bool force = false,
+            bool set_upstream = false);
 
 // Fetch `remote`, then merge the current branch's remote-tracking ref into HEAD
 // (fast-forward or merge commit; conflicts abort). Magit's pull.
 std::expected<void, error> pull_remote(std::string repo, std::string remote);
+
+// Fetch `remote`, then rebase the current branch onto its remote-tracking ref
+// (pull --rebase). May pause on conflict (like rebase_onto).
+std::expected<rebase_result, error>
+pull_rebase(std::string repo, std::string remote);
 
 // Create local branch `name` at HEAD (does not switch to it).
 std::expected<void, error> create_branch(std::string repo, std::string name);
@@ -1539,7 +1547,8 @@ std::expected<void, error> fetch_remote(std::string repo, std::string remote)
     return {};
 }
 
-std::expected<void, error> push_remote(std::string repo, std::string remote)
+std::expected<void, error>
+push_remote(std::string repo, std::string remote, bool force, bool set_upstream)
 {
     detail::init_guard guard;
     git_repository *raw = nullptr;
@@ -1562,7 +1571,9 @@ std::expected<void, error> push_remote(std::string repo, std::string remote)
         raw_remote, git_remote_free);
 
     std::string b(branch);
-    std::string spec = "refs/heads/" + b + ":refs/heads/" + b;
+    // A leading '+' makes it a force-push refspec.
+    std::string spec = (force ? std::string("+refs/heads/") : "refs/heads/") +
+                       b + ":refs/heads/" + b;
     char *specs[1] = {const_cast<char *>(spec.c_str())};
     git_strarray refspecs = {specs, 1};
     git_push_options opts;
@@ -1570,6 +1581,19 @@ std::expected<void, error> push_remote(std::string repo, std::string remote)
     opts.callbacks.credentials = credentials_cb;
     if (git_remote_push(rem.get(), &refspecs, &opts) != 0)
         return std::unexpected(last_error());
+
+    if (set_upstream) {
+        // Record branch.<b>.remote / .merge -- what `git push -u` writes.
+        git_config *raw_cfg = nullptr;
+        if (git_repository_config(&raw_cfg, r.get()) != 0)
+            return std::unexpected(last_error());
+        std::unique_ptr<git_config, decltype(&git_config_free)> cfg(
+            raw_cfg, git_config_free);
+        git_config_set_string(cfg.get(), ("branch." + b + ".remote").c_str(),
+                              remote.c_str());
+        git_config_set_string(cfg.get(), ("branch." + b + ".merge").c_str(),
+                              ("refs/heads/" + b).c_str());
+    }
     return {};
 }
 
@@ -1606,6 +1630,29 @@ std::expected<void, error> pull_remote(std::string repo, std::string remote)
         their(raw_their, git_annotated_commit_free);
 
     return merge_annotated(r.get(), their.get(), "Merge " + tracking);
+}
+
+std::expected<rebase_result, error>
+pull_rebase(std::string repo, std::string remote)
+{
+    if (auto fetched = fetch_remote(repo, remote); !fetched)
+        return std::unexpected(fetched.error());
+
+    // Find the current branch's remote-tracking ref, then rebase onto it.
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+    git_reference *raw_head = nullptr;
+    if (git_repository_head(&raw_head, r.get()) != 0)
+        return std::unexpected(last_error());
+    detail::ref_ptr head(raw_head);
+    const char *branch = git_reference_shorthand(head.get());
+    if (branch == nullptr)
+        return std::unexpected(error{0, "not on a branch"});
+    std::string tracking = "refs/remotes/" + remote + "/" + std::string(branch);
+    return rebase_onto(repo, tracking);
 }
 
 std::expected<void, error> stage(std::string repo, std::string file)

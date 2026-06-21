@@ -70,6 +70,10 @@ static int	magit_reset_hard(int, int);
 static int	magit_fetch(int, int);
 static int	magit_pull(int, int);
 static int	magit_push(int, int);
+static int	magit_push_force(int, int);
+static int	magit_push_upstream(int, int);
+static int	magit_pull_rebase(int, int);
+static int	magit_rebase_report(int, const char *, int, int);
 static int	magit_cred_prompt(const char *, int, char *, int);
 static int	magit_rebase_upstream(int, int);
 static int	magit_rebase_elsewhere(int, int);
@@ -131,8 +135,38 @@ static PF magit_ret[] = { magit_visit };
 static PF magit_esc[] = { NULL };		/* ESC -> meta prefix */
 static PF magit_qmark[] = { magit_help };
 static PF magit_A[] = { magit_cherrypick };
-static PF magit_F[] = { magit_pull };
-static PF magit_P[] = { magit_push };
+static PF magit_F[] = { NULL };			/* F -> pull menu prefix */
+static PF magit_P[] = { NULL };			/* P -> push menu prefix */
+
+/* Pull menu: F p pull (merge), F r pull --rebase. */
+static PF pull_p[] = { magit_pull };
+static PF pull_r[] = { magit_pull_rebase };
+
+static struct KEYMAPE (2) magit_pullmenu = {
+	2,
+	2,
+	rescan,
+	{
+		{ 'p', 'p', pull_p, NULL },	/* F p: pull (merge) */
+		{ 'r', 'r', pull_r, NULL }	/* F r: pull --rebase */
+	}
+};
+
+/* Push menu: P p push, P f force-push, P u push + set-upstream. */
+static PF push_f[] = { magit_push_force };
+static PF push_p[] = { magit_push };
+static PF push_u[] = { magit_push_upstream };
+
+static struct KEYMAPE (3) magit_pushmenu = {
+	3,
+	3,
+	rescan,
+	{
+		{ 'f', 'f', push_f, NULL },	/* P f: force-push */
+		{ 'p', 'p', push_p, NULL },	/* P p: push */
+		{ 'u', 'u', push_u, NULL }	/* P u: push + set upstream */
+	}
+};
 static PF magit_S[] = { magit_stage_all };
 static PF magit_U[] = { magit_unstage_all };
 static PF magit_V[] = { magit_revert };
@@ -386,8 +420,8 @@ static struct KEYMAPE (25) magitmap = {
 		    (KEYMAP *)&magit_metamap },
 		{ '?', '?', magit_qmark, NULL },		/* ?: key help */
 		{ 'A', 'A', magit_A, NULL },			/* A: cherry-pick */
-		{ 'F', 'F', magit_F, NULL },			/* F: pull */
-		{ 'P', 'P', magit_P, NULL },			/* P: push */
+		{ 'F', 'F', magit_F, (KEYMAP *)&magit_pullmenu }, /* F: pull menu */
+		{ 'P', 'P', magit_P, (KEYMAP *)&magit_pushmenu }, /* P: push menu */
 		{ 'S', 'S', magit_S, NULL },			/* S: stage all */
 		{ 'U', 'U', magit_U, NULL },			/* U: unstage all */
 		{ 'V', 'V', magit_V, NULL },			/* V: revert */
@@ -1023,7 +1057,9 @@ magit_help(int f, int n)
 		"  r i      interactive rebase (todo buffer)",
 		"  V        revert a commit",
 		"  X h/m/s  reset HEAD: hard / mixed / soft",
-		"  f / F / P  fetch / pull / push (origin)",
+		"  f        fetch (origin)",
+		"  F p/r    pull: merge / rebase",
+		"  P p/f/u  push / force-push / push set-upstream",
 		"  g        refresh",
 		"  q        quit this window",
 		"  ?        this help",
@@ -1458,21 +1494,54 @@ magit_pull(int f, int n)
 	return (magit_refresh(f, n));
 }
 
-/* P: push the current branch to origin. */
+/* Shared push helper: `force` / `set_upstream` map to the engine flags. */
 static int
-magit_push(int f, int n)
+magit_do_push(int force, int set_upstream, int f, int n)
 {
 	char	cwd[PATH_MAX];
 
 	if (getcwd(cwd, sizeof(cwd)) == NULL)
 		return (FALSE);
 	ewprintf("Pushing to origin...");
-	if (mg_magit_push(cwd, "origin") != 1) {
+	if (mg_magit_push(cwd, "origin", force, set_upstream) != 1) {
 		ewprintf("Push failed (no origin, non-fast-forward, or auth required)");
 		return (FALSE);
 	}
 	ewprintf("Pushed to origin");
 	return (magit_refresh(f, n));
+}
+
+/* P p: push the current branch to origin. */
+static int
+magit_push(int f, int n)
+{
+	return (magit_do_push(0, 0, f, n));
+}
+
+/* P f: force-push the current branch to origin. */
+static int
+magit_push_force(int f, int n)
+{
+	return (magit_do_push(1, 0, f, n));
+}
+
+/* P u: push the current branch and set it as upstream. */
+static int
+magit_push_upstream(int f, int n)
+{
+	return (magit_do_push(0, 1, f, n));
+}
+
+/* F r: pull --rebase (fetch then rebase onto the upstream). */
+static int
+magit_pull_rebase(int f, int n)
+{
+	char	cwd[PATH_MAX];
+
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	return (magit_rebase_report(mg_magit_pull_rebase(cwd, "origin"),
+	    "Pull --rebase", f, n));
 }
 
 /*

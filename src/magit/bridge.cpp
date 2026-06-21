@@ -23,6 +23,16 @@ import mg.fswatch;
 import mg.git;
 import mg.magit;
 
+// Map a rebase outcome to the bridge code: 1 done, 2 paused on conflicts,
+// 0 failure. (Defined here so every rebase-style bridge fn can use it.)
+static int rebase_code(
+    const std::expected<mg::git::rebase_result, mg::git::error> &r)
+{
+    if (!r)
+        return 0;
+    return *r == mg::git::rebase_result::conflicts ? 2 : 1;
+}
+
 namespace {
 
 class monitor {
@@ -528,11 +538,13 @@ extern "C" int mg_magit_fetch(const char *repo_path, const char *remote)
                : 0;
 }
 
-extern "C" int mg_magit_push(const char *repo_path, const char *remote)
+extern "C" int mg_magit_push(const char *repo_path, const char *remote,
+                             int force, int set_upstream)
 {
     if (repo_path == nullptr)
         return 0;
-    return mg::git::push_remote(repo_path, remote ? remote : "origin")
+    return mg::git::push_remote(repo_path, remote ? remote : "origin",
+                                force != 0, set_upstream != 0)
                    .has_value()
                ? 1
                : 0;
@@ -546,6 +558,13 @@ extern "C" int mg_magit_pull(const char *repo_path, const char *remote)
                    .has_value()
                ? 1
                : 0;
+}
+
+extern "C" int mg_magit_pull_rebase(const char *repo_path, const char *remote)
+{
+    if (repo_path == nullptr)
+        return 0;
+    return rebase_code(mg::git::pull_rebase(repo_path, remote ? remote : "origin"));
 }
 
 extern "C" int mg_magit_reset(const char *repo_path, const char *rev, int mode)
@@ -574,13 +593,6 @@ extern "C" int mg_magit_merge(const char *repo_path, const char *name)
 
 // Map a rebase outcome to the bridge code: 1 done, 2 paused on conflicts,
 // 0 failure.
-static int rebase_code(
-    const std::expected<mg::git::rebase_result, mg::git::error> &r)
-{
-    if (!r)
-        return 0;
-    return *r == mg::git::rebase_result::conflicts ? 2 : 1;
-}
 
 extern "C" int mg_magit_tag_create(const char *repo_path, const char *name,
                                    const char *target)

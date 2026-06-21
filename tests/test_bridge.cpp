@@ -638,7 +638,7 @@ TEST_CASE("mg_magit_push and mg_magit_pull act through the bridge")
 
     // Push the current branch to the bare remote, then a no-op pull (no new
     // upstream commits) should still succeed (already up to date).
-    CHECK(mg_magit_push(wp.c_str(), "origin") == 1);
+    CHECK(mg_magit_push(wp.c_str(), "origin", 0, 0) == 1);
     CHECK(mg_magit_pull(wp.c_str(), "origin") == 1);
 
     // The bare repo now has the branch.

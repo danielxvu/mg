@@ -134,8 +134,12 @@ void mg_magit_set_cred_prompt(mg_magit_cred_prompt_fn fn);
  * (NULL -> "origin"). Return 1 on success, 0 on failure. ssh uses the agent;
  * HTTPS user/password prompts via mg_magit_set_cred_prompt's callback. */
 int mg_magit_fetch(const char *repo_path, const char *remote);
-int mg_magit_push(const char *repo_path, const char *remote);
+int mg_magit_push(const char *repo_path, const char *remote, int force,
+                  int set_upstream);
 int mg_magit_pull(const char *repo_path, const char *remote);
+/* Pull --rebase: fetch then rebase onto the tracking ref. 1 done / 2 paused on
+ * conflict / 0 fail. */
+int mg_magit_pull_rebase(const char *repo_path, const char *remote);
 
 /* Reset HEAD to `rev` (mode 0=soft, 1=mixed, 2=hard) / revert commit `rev`
  * (records the inverse on HEAD) / merge local branch `name` into HEAD (ff or a
