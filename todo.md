@@ -303,14 +303,19 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `fm-followups`→fm-r-remotes (#40), `fm-auth`→fm-followups (#41),
   `u5-case`→fm-auth (#42), `u6-updext`→u5-case (#43),
   `u7-grapheme`→u6-updext (#44), `u8-nfc`→u7-grapheme (#45),
-  `fm-rb1-rebase`→u8-nfc (#46), `fm-rb2-seq`→fm-rb1-rebase (#47).
+  `fm-rb1-rebase`→u8-nfc (#46), `fm-rb2-seq`→fm-rb1-rebase (#47),
+  `fm-rb3a-iexec`→fm-rb2-seq (#48).
   Magit core (A+B, #31-#41) done; UTF-8 "Full" U5-U8 (#42-#45). **Phase C**
   (honest gap vs real magit; spec
   `docs/superpowers/specs/2026-06-21-fm-phase-c-roadmap.md`): ✅ FM-RB-1
   non-interactive rebase (`r e`/`r u`, #46) · ✅ FM-RB-2 sequencer (pause on
-  conflict + `r r`/`r s`/`r a` + Rebasing section, #47). Next branch freezes on
-  `fm-rb2-seq`. Up next: FM-RB-3 interactive todo buffer (the hard one), then
-  FM-A cherry-pick, FM-TAG tags, FM-LP log power, FM-PV/CV variants.
+  conflict + `r r`/`r s`/`r a` + Rebasing section, #47) · ✅ FM-RB-3a interactive
+  executor engine+bridge (`rebase_interactive` pick/drop/squash/fixup via
+  in-memory cherry-pick, #48). Next branch freezes on `fm-rb3a-iexec`. Up next:
+  **FM-RB-3b** the `*git-rebase-todo*` buffer UI (`r i`: list commits, set
+  actions p/d/s/f, reorder M-p/M-n, C-c C-c execute) — then FM-A cherry-pick,
+  FM-TAG tags, FM-LP log power, FM-PV/CV variants. (reword/edit + interactive
+  conflict-resume are later.)
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
