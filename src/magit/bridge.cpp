@@ -718,6 +718,63 @@ extern "C" int mg_magit_resolve_conflict(const char *repo_path,
     return mg::git::resolve_conflict(repo_path, path, side).has_value() ? 1 : 0;
 }
 
+extern "C" int mg_magit_conflict_hunks(const char *repo_path, const char *path,
+                                       mg_magit_emit_fn emit, void *ctx)
+{
+    if (repo_path == nullptr || path == nullptr || emit == nullptr)
+        return 0;
+    auto hs = mg::git::conflict_hunks(repo_path, path);
+    if (!hs)
+        return 0;
+
+    int n = 0;
+    auto emit_block = [&](int idx, const char *tag, const std::string &text) {
+        std::string label = std::string("  ") + tag;
+        emit(ctx, label.c_str(), MG_LINE_CONFLICT_HUNK, path, idx);
+        ++n;
+        std::size_t pos = 0;
+        while (pos < text.size()) {
+            std::size_t nl = text.find('\n', pos);
+            std::size_t end = nl == std::string::npos ? text.size() : nl;
+            std::string line = "    " + text.substr(pos, end - pos);
+            emit(ctx, line.c_str(), MG_LINE_CONFLICT_HUNK, path, idx);
+            ++n;
+            if (nl == std::string::npos)
+                break;
+            pos = nl + 1;
+        }
+    };
+    for (int i = 0; i < static_cast<int>(hs->size()); ++i) {
+        std::string header = "Conflict " + std::to_string(i + 1) + "/" +
+                             std::to_string(hs->size()) +
+                             "  (a ours / b theirs / RET both)";
+        emit(ctx, header.c_str(), MG_LINE_CONFLICT_HUNK, path, i);
+        ++n;
+        emit_block(i, "<<< ours", (*hs)[i].ours);
+        emit_block(i, "=== theirs", (*hs)[i].theirs);
+        emit(ctx, "", MG_LINE_CONFLICT_HUNK, path, i);
+        ++n;
+    }
+    return n;
+}
+
+extern "C" int mg_magit_resolve_conflict_hunk(const char *repo_path,
+                                              const char *path, int index,
+                                              int side)
+{
+    if (repo_path == nullptr || path == nullptr || path[0] == '\0' ||
+        index < 0 || side < 0 || side > 2)
+        return 0;
+    const mg::git::conflict_side s = side == 0   ? mg::git::conflict_side::ours
+                                     : side == 1 ? mg::git::conflict_side::theirs
+                                                 : mg::git::conflict_side::both;
+    return mg::git::resolve_conflict_hunk(repo_path, path,
+                                          static_cast<std::size_t>(index), s)
+                   .has_value()
+               ? 1
+               : 0;
+}
+
 extern "C" int mg_magit_note_set(const char *repo_path, const char *rev,
                                  const char *message)
 {

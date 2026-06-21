@@ -1654,6 +1654,75 @@ TEST_CASE("conflicts lists unmerged paths and resolve_conflict picks a side")
     fs::remove_all(dir);
 }
 
+TEST_CASE("conflict_hunks parses regions and resolve_conflict_hunk rewrites them")
+{
+    auto dir = make_repo_with_commit("C1");
+    // Hand-write a file with two conflict regions (2-way markers).
+    std::ofstream(dir / "f.txt")
+        << "top\n"
+        << "<<<<<<< HEAD\n" << "ours one\n" << "=======\n" << "theirs one\n"
+        << ">>>>>>> other\n"
+        << "middle\n"
+        << "<<<<<<< HEAD\n" << "ours two\n" << "=======\n" << "theirs two\n"
+        << ">>>>>>> other\n"
+        << "bottom\n";
+
+    auto hs = mg::git::conflict_hunks(dir.string(), "f.txt");
+    REQUIRE(hs.has_value());
+    REQUIRE(hs->size() == 2);
+    CHECK((*hs)[0].ours == "ours one\n");
+    CHECK((*hs)[0].theirs == "theirs one\n");
+    CHECK((*hs)[1].theirs == "theirs two\n");
+
+    // Resolve region 0 -> ours; one region remains.
+    REQUIRE(mg::git::resolve_conflict_hunk(dir.string(), "f.txt", 0,
+                                           mg::git::conflict_side::ours)
+                .has_value());
+    auto hs2 = mg::git::conflict_hunks(dir.string(), "f.txt");
+    REQUIRE(hs2.has_value());
+    REQUIRE(hs2->size() == 1);
+    CHECK((*hs2)[0].ours == "ours two\n");
+
+    // Resolve the last -> theirs; no markers remain.
+    REQUIRE(mg::git::resolve_conflict_hunk(dir.string(), "f.txt", 0,
+                                           mg::git::conflict_side::theirs)
+                .has_value());
+    auto hs3 = mg::git::conflict_hunks(dir.string(), "f.txt");
+    REQUIRE(hs3.has_value());
+    CHECK(hs3->empty());
+
+    std::ifstream in(dir / "f.txt");
+    std::string body((std::istreambuf_iterator<char>(in)),
+                     std::istreambuf_iterator<char>());
+    CHECK(body == "top\nours one\nmiddle\ntheirs two\nbottom\n");
+    fs::remove_all(dir);
+}
+
+TEST_CASE("conflict_hunks drops the diff3 base section and both keeps each side")
+{
+    auto dir = make_repo_with_commit("C1");
+    std::ofstream(dir / "f.txt")
+        << "<<<<<<< HEAD\n" << "ours\n"
+        << "||||||| base\n" << "base text\n"
+        << "=======\n" << "theirs\n"
+        << ">>>>>>> other\n";
+
+    auto hs = mg::git::conflict_hunks(dir.string(), "f.txt");
+    REQUIRE(hs.has_value());
+    REQUIRE(hs->size() == 1);
+    CHECK((*hs)[0].ours == "ours\n");       // base dropped
+    CHECK((*hs)[0].theirs == "theirs\n");
+
+    REQUIRE(mg::git::resolve_conflict_hunk(dir.string(), "f.txt", 0,
+                                           mg::git::conflict_side::both)
+                .has_value());
+    std::ifstream in(dir / "f.txt");
+    std::string body((std::istreambuf_iterator<char>(in)),
+                     std::istreambuf_iterator<char>());
+    CHECK(body == "ours\ntheirs\n"); // both sides kept, markers gone
+    fs::remove_all(dir);
+}
+
 TEST_CASE("resolve_conflict with ours keeps the current side")
 {
     auto dir = make_repo_rebase_conflict();

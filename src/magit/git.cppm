@@ -181,8 +181,14 @@ struct conflict_entry {
 
 // Which side to keep when resolving a conflict: `ours` is the current branch /
 // rebase-onto (index stage 2); `theirs` is the merged-in / replayed commit
-// (stage 3).
-enum class conflict_side { ours, theirs };
+// (stage 3); `both` keeps ours then theirs (hunk-level only).
+enum class conflict_side { ours, theirs, both };
+
+// One conflict region parsed from a working-tree file's merge markers.
+struct conflict_hunk {
+    std::string ours;
+    std::string theirs;
+};
 
 // One source line annotated with the commit that last touched it.
 struct blame_line {
@@ -424,11 +430,23 @@ submodules(std::string repo);
 // Unmerged paths in the index (empty when there is no conflict in progress).
 std::expected<std::vector<conflict_entry>, error> conflicts(std::string repo);
 
-// Resolve conflict `path` by keeping `side`: write that stage's blob to the
-// working tree and stage it (clearing the conflict). Errors if `path` is not
-// conflicted or the chosen side is absent.
+// Resolve conflict `path` by keeping `side` (ours/theirs): write that stage's
+// blob to the working tree and stage it (clearing the conflict). Errors if
+// `path` is not conflicted or the chosen side is absent.
 std::expected<void, error>
 resolve_conflict(std::string repo, std::string path, conflict_side side);
+
+// Parse the working-tree file `path`'s merge markers into conflict regions
+// (in order). Empty when the file has no markers.
+std::expected<std::vector<conflict_hunk>, error>
+conflict_hunks(std::string repo, std::string path);
+
+// Replace the `index`-th conflict region in `path` with `side` (ours / theirs /
+// both), rewriting the working-tree file. Re-parses, so call with index 0..N as
+// regions collapse. Errors if `index` is out of range.
+std::expected<void, error>
+resolve_conflict_hunk(std::string repo, std::string path, std::size_t index,
+                      conflict_side side);
 
 // Set / remove / read the (default refs/notes/commits) note on commit `rev`.
 // set overwrites any existing note; read returns "" when there is none.
@@ -1287,6 +1305,124 @@ resolve_conflict(std::string repo, std::string path, conflict_side side)
         return std::unexpected(last_error());
     if (git_index_write(idx.get()) != 0)
         return std::unexpected(last_error());
+    return {};
+}
+
+namespace {
+// One parsed conflict region: its [begin,end) line range and each side's lines.
+struct hunk_span {
+    std::size_t begin, end; // covers the <<< .. >>> block, end exclusive
+    std::vector<std::string> ours, theirs;
+};
+
+std::vector<std::string> read_lines(const std::filesystem::path &p)
+{
+    std::ifstream in(p, std::ios::binary);
+    std::vector<std::string> lines;
+    std::string line;
+    while (std::getline(in, line))
+        lines.push_back(line);
+    return lines;
+}
+
+// Parse merge-marker regions from `lines` (2-way and diff3; base is dropped).
+std::vector<hunk_span> parse_conflicts(const std::vector<std::string> &lines)
+{
+    std::vector<hunk_span> out;
+    for (std::size_t i = 0; i < lines.size(); ++i) {
+        if (lines[i].rfind("<<<<<<<", 0) != 0)
+            continue;
+        hunk_span h{i, i, {}, {}};
+        bool in_theirs = false, in_base = false;
+        std::size_t j = i + 1;
+        for (; j < lines.size(); ++j) {
+            const std::string &l = lines[j];
+            if (l.rfind(">>>>>>>", 0) == 0)
+                break;
+            if (l.rfind("|||||||", 0) == 0) {
+                in_base = true;
+                continue;
+            }
+            if (l.rfind("=======", 0) == 0) {
+                in_base = false;
+                in_theirs = true;
+                continue;
+            }
+            if (in_base)
+                continue; // diff3 base: drop
+            (in_theirs ? h.theirs : h.ours).push_back(l);
+        }
+        h.end = (j < lines.size()) ? j + 1 : j; // include the >>> line
+        out.push_back(std::move(h));
+        i = j;
+    }
+    return out;
+}
+
+std::string join_lines(const std::vector<std::string> &lines)
+{
+    std::string s;
+    for (const auto &l : lines)
+        s += l + "\n";
+    return s;
+}
+} // namespace
+
+std::expected<std::vector<conflict_hunk>, error>
+conflict_hunks(std::string repo, std::string path)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+    const char *wd = git_repository_workdir(r.get());
+    if (wd == nullptr)
+        return std::unexpected(error{0, "bare repository has no workdir"});
+
+    std::vector<conflict_hunk> out;
+    for (const auto &h :
+         parse_conflicts(read_lines(std::filesystem::path(wd) / path)))
+        out.push_back({join_lines(h.ours), join_lines(h.theirs)});
+    return out;
+}
+
+std::expected<void, error>
+resolve_conflict_hunk(std::string repo, std::string path, std::size_t index,
+                      conflict_side side)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+    const char *wd = git_repository_workdir(r.get());
+    if (wd == nullptr)
+        return std::unexpected(error{0, "bare repository has no workdir"});
+    std::filesystem::path file = std::filesystem::path(wd) / path;
+
+    std::vector<std::string> lines = read_lines(file);
+    std::vector<hunk_span> hunks = parse_conflicts(lines);
+    if (index >= hunks.size())
+        return std::unexpected(error{0, "conflict hunk index out of range"});
+    const hunk_span &h = hunks[index];
+
+    std::vector<std::string> chosen;
+    if (side == conflict_side::ours || side == conflict_side::both)
+        chosen.insert(chosen.end(), h.ours.begin(), h.ours.end());
+    if (side == conflict_side::theirs || side == conflict_side::both)
+        chosen.insert(chosen.end(), h.theirs.begin(), h.theirs.end());
+
+    std::vector<std::string> result(lines.begin(),
+                                    lines.begin() + (std::ptrdiff_t)h.begin);
+    result.insert(result.end(), chosen.begin(), chosen.end());
+    result.insert(result.end(), lines.begin() + (std::ptrdiff_t)h.end,
+                  lines.end());
+
+    std::ofstream out(file, std::ios::binary | std::ios::trunc);
+    if (!out)
+        return std::unexpected(error{0, "cannot write " + path});
+    out << join_lines(result);
     return {};
 }
 

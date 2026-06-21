@@ -1209,6 +1209,48 @@ TEST_CASE("Conflicts section + resolve, then continue the rebase via the bridge"
     fs::remove_all(dir);
 }
 
+TEST_CASE("mg_magit_conflict_hunks emits regions; resolve_conflict_hunk rewrites")
+{
+    auto dir = make_temp_dir();
+    auto repo = dir.string();
+    git_libgit2_init();
+    git_repository *r0 = nullptr;
+    REQUIRE(git_repository_init(&r0, repo.c_str(), 0) == 0);
+    git_repository_free(r0);
+    git_libgit2_shutdown();
+
+    std::ofstream(dir / "f.txt")
+        << "top\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> x\n"
+        << "mid\n<<<<<<< HEAD\nA\n=======\nB\n>>>>>>> x\nbot\n";
+
+    int headers = 0;
+    struct ctx { int *headers; } c{&headers};
+    int n = mg_magit_conflict_hunks(
+        repo.c_str(), "f.txt",
+        [](void *p, const char *line, int kind, const char *, int) {
+            if (kind == MG_LINE_CONFLICT_HUNK &&
+                std::string(line).rfind("Conflict ", 0) == 0)
+                ++*static_cast<ctx *>(p)->headers;
+        },
+        &c);
+    CHECK(n > 0);
+    CHECK(headers == 2); // two regions
+
+    // Resolve region 0 -> ours; one region remains.
+    CHECK(mg_magit_resolve_conflict_hunk(repo.c_str(), "f.txt", 0, 0) == 1);
+    headers = 0;
+    mg_magit_conflict_hunks(
+        repo.c_str(), "f.txt",
+        [](void *p, const char *line, int kind, const char *, int) {
+            if (kind == MG_LINE_CONFLICT_HUNK &&
+                std::string(line).rfind("Conflict ", 0) == 0)
+                ++*static_cast<ctx *>(p)->headers;
+        },
+        &c);
+    CHECK(headers == 1);
+    fs::remove_all(dir);
+}
+
 TEST_CASE("mg_magit_merge returns 2 (left conflicts), then commit completes it")
 {
     auto dir = make_temp_dir();

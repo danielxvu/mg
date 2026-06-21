@@ -44,6 +44,7 @@ int mg_magit_modeline(char *buf, size_t buflen);
 #define MG_LINE_WORKTREE  11  /* a worktree entry (path = worktree name) */
 #define MG_LINE_SUBMODULE 12  /* a submodule entry (path = submodule path) */
 #define MG_LINE_CONFLICT  13  /* an unmerged path (path = file path) */
+#define MG_LINE_CONFLICT_HUNK 14 /* a *magit-ediff* line; hunk = region index */
 
 /* Compose the *magit-status* buffer for the repo at `repo_path`, calling
  * `emit(ctx, line, kind, path, hunk)` once per line. Files whose path is in
@@ -218,6 +219,17 @@ int mg_magit_ignore(const char *repo_path, const char *pattern);
  * 1 on success, 0 on failure (e.g. `path` is not conflicted). */
 int mg_magit_resolve_conflict(const char *repo_path, const char *path,
                               int take_theirs);
+
+/* Emit the *magit-ediff* view of `path`'s conflict regions: per region, a header
+ * + each side's lines, all on MG_LINE_CONFLICT_HUNK with hunk = region index.
+ * Returns the number of lines emitted (0 when no conflicts remain). */
+int mg_magit_conflict_hunks(const char *repo_path, const char *path,
+                            mg_magit_emit_fn emit, void *ctx);
+
+/* Resolve conflict region `index` of `path` by keeping side 0 ours / 1 theirs /
+ * 2 both, rewriting the working-tree file. 1 ok, 0 fail. */
+int mg_magit_resolve_conflict_hunk(const char *repo_path, const char *path,
+                                   int index, int side);
 
 /* Emit a blame of `path`: one "<oid> <author> <line>" per source line. Returns
  * the line count, 0 on error. (Seeds the *magit-blame* buffer.) */

@@ -91,6 +91,12 @@ static int	magit_transient(struct magit_menu *, int, int);
 static int	magit_conflict_ours(int, int);
 static int	magit_conflict_theirs(int, int);
 static int	magit_menu_conflict(int, int);
+static int	magit_ediff(int, int);
+static int	magit_ediff_ours(int, int);
+static int	magit_ediff_theirs(int, int);
+static int	magit_ediff_both(int, int);
+static int	magit_ediff_refresh(int, int);
+static int	magit_ediff_quit(int, int);
 static int	magit_menu_pull(int, int);
 static int	magit_menu_push(int, int);
 static int	magit_menu_reset(int, int);
@@ -174,6 +180,12 @@ static char	magit_log_file_path[PATH_MAX];
 /* Max commits shown in *magit-log* -- the `-n` transient infix (see below). */
 static int	magit_log_limit = 100;
 
+/* For *magit-ediff*: the file being resolved + the conflict-region index per
+ * buffer line (-1 for header/blank lines). */
+static char	magit_ediff_path[PATH_MAX];
+static int	magit_ediff_hunk[MAGIT_MAX_LINES];
+static int	magit_ediff_count;
+
 /* Interactive-rebase plan backing the *git-rebase-todo* buffer. Each entry is
  * one commit; the buffer is a rendered view of this array (line i = entry i). */
 #define MAGIT_MAX_TODO 256
@@ -200,6 +212,7 @@ static PF magit_esc[] = { NULL };		/* ESC -> meta prefix */
 static PF magit_qmark[] = { magit_help };
 static PF magit_A[] = { magit_cherrypick };
 static PF magit_B[] = { magit_blame };
+static PF magit_E[] = { magit_ediff };		/* E -> per-region conflict resolve */
 static PF magit_F[] = { magit_menu_pull };			/* F -> pull menu prefix */
 static PF magit_P[] = { magit_menu_push };			/* P -> push menu prefix */
 
@@ -368,6 +381,26 @@ static struct KEYMAPE (6) maglogmap = {
 		{ 'V', 'V', maglog_V, NULL },			/* V: revert commit */
 		{ 'g', 'g', maglog_g, NULL },			/* g: refresh */
 		{ 'q', 'q', maglog_q, NULL }			/* q: close */
+	}
+};
+
+/* *magit-ediff* mode: RET both, a ours, b theirs, g refresh, q close. */
+static PF magediff_ret[] = { magit_ediff_both };
+static PF magediff_a[] = { magit_ediff_ours };
+static PF magediff_b[] = { magit_ediff_theirs };
+static PF magediff_g[] = { magit_ediff_refresh };
+static PF magediff_q[] = { magit_ediff_quit };
+
+static struct KEYMAPE (5) magediffmap = {
+	5,
+	5,
+	rescan,
+	{
+		{ CCHR('M'), CCHR('M'), magediff_ret, NULL },	/* RET: keep both */
+		{ 'a', 'a', magediff_a, NULL },			/* a: keep ours */
+		{ 'b', 'b', magediff_b, NULL },			/* b: keep theirs */
+		{ 'g', 'g', magediff_g, NULL },			/* g: refresh */
+		{ 'q', 'q', magediff_q, NULL }			/* q: close */
 	}
 };
 
@@ -783,9 +816,9 @@ magit_conflict_theirs(int f, int n)
 }
 
 /* Entries MUST stay in ascending key order -- doscan() relies on it. */
-static struct KEYMAPE (30) magitmap = {
-	30,
-	30,
+static struct KEYMAPE (31) magitmap = {
+	31,
+	31,
 	rescan,
 	{
 		{ CCHR('I'), CCHR('I'), magit_tab, NULL },	/* TAB: expand/collapse */
@@ -795,6 +828,7 @@ static struct KEYMAPE (30) magitmap = {
 		{ '?', '?', magit_qmark, NULL },		/* ?: key help */
 		{ 'A', 'A', magit_A, NULL },			/* A: cherry-pick */
 		{ 'B', 'B', magit_B, NULL },			/* B: blame file at point */
+		{ 'E', 'E', magit_E, NULL },			/* E: ediff conflict regions */
 		{ 'F', 'F', magit_F, NULL }, /* F: pull menu */
 		{ 'P', 'P', magit_P, NULL }, /* P: push menu */
 		{ 'S', 'S', magit_S, NULL },			/* S: stage all */
@@ -1027,6 +1061,7 @@ magit_status(int f, int n)
 		maps_add((KEYMAP *)&maglogmap, "magit-log-mode");
 		maps_add((KEYMAP *)&magcommitmap, "magit-commit-view-mode");
 		maps_add((KEYMAP *)&magit_todomap, "magit-rebase-todo-mode");
+		maps_add((KEYMAP *)&magediffmap, "magit-ediff-mode");
 		mg_magit_set_cred_prompt(magit_cred_prompt); /* HTTPS user/pass auth */
 		initialized = 1;
 	}
@@ -1114,6 +1149,172 @@ magit_log_build(struct buffer *bp)
 			wp->w_rflag |= WFFULL;
 		}
 	return (TRUE);
+}
+
+/* emit callback for *magit-ediff*: record each line's conflict-region index. */
+static void
+magit_ediff_emit(void *ctx, const char *line, int kind, const char *path,
+    int hunk)
+{
+	if (magit_ediff_count < MAGIT_MAX_LINES)
+		magit_ediff_hunk[magit_ediff_count++] =
+		    (kind == MG_LINE_CONFLICT_HUNK) ? hunk : -1;
+	(void)addlinef((struct buffer *)ctx, "%s", (char *)line);
+}
+
+/* (Re)build the *magit-ediff* buffer for magit_ediff_path + its per-line map.
+ * Returns the number of conflict regions still present. */
+static int
+magit_ediff_build(struct buffer *bp, int *nregions)
+{
+	struct mgwin	*wp;
+	char		 cwd[PATH_MAX];
+	int		 i, regions = 0;
+
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	bp->b_flag |= BFIGNDIRTY;
+	if (bclear(bp) != TRUE)
+		return (FALSE);
+	bp->b_flag |= BFREADONLY;
+
+	magit_ediff_count = 0;
+	(void)mg_magit_conflict_hunks(cwd, magit_ediff_path, magit_ediff_emit, bp);
+	for (i = 0; i < magit_ediff_count; i++)
+		if (magit_ediff_hunk[i] + 1 > regions)
+			regions = magit_ediff_hunk[i] + 1;
+	if (nregions != NULL)
+		*nregions = regions;
+
+	bp->b_dotp = bfirstlp(bp);
+	bp->b_doto = 0;
+	for (wp = wheadp; wp != NULL; wp = wp->w_wndp)
+		if (wp->w_bufp == bp) {
+			wp->w_dotp = bp->b_dotp;
+			wp->w_doto = 0;
+			wp->w_markp = NULL;
+			wp->w_marko = 0;
+			wp->w_rflag |= WFFULL;
+		}
+	return (TRUE);
+}
+
+/* The conflict-region index of the *magit-ediff* line at point, or -1. */
+static int
+magit_ediff_hunk_at_point(void)
+{
+	struct line	*lp;
+	int		 idx = 0;
+
+	for (lp = bfirstlp(curbp);
+	    lp != curwp->w_dotp && lp != curbp->b_headp; lp = lforw(lp))
+		idx++;
+	if (idx >= magit_ediff_count)
+		return (-1);
+	return (magit_ediff_hunk[idx]);
+}
+
+/* E (on a Conflicts line): open *magit-ediff* for the file at point. */
+static int
+magit_ediff(int f, int n)
+{
+	struct buffer	*bp;
+	struct mgwin	*wp;
+	char		*path = NULL;
+	int		 kind, hunk, regions = 0;
+
+	kind = magit_at_point(&path, &hunk);
+	if (kind != MG_LINE_CONFLICT || path == NULL || path[0] == '\0') {
+		ewprintf("Point is not on a conflicted file");
+		return (FALSE);
+	}
+	(void)strlcpy(magit_ediff_path, path, sizeof(magit_ediff_path));
+	if ((bp = bfind("*magit-ediff*", TRUE)) == NULL)
+		return (FALSE);
+	if (magit_ediff_build(bp, &regions) != TRUE)
+		return (FALSE);
+	if ((wp = popbuf(bp, WNONE)) == NULL)
+		return (FALSE);
+	curwp = wp;
+	curbp = bp;
+	wp->w_dotp = bp->b_dotp;
+	wp->w_doto = bp->b_doto;
+	bp->b_modes[1] = name_mode("magit-ediff-mode");
+	bp->b_nmodes = 1;
+	return (TRUE);
+}
+
+/*
+ * Resolve the region at point by keeping `side` (0 ours / 1 theirs / 2 both).
+ * Rebuild; when the last region is resolved, stage the file and report.
+ */
+static int
+magit_ediff_resolve(int side, int f, int n)
+{
+	struct buffer	*bp;
+	char		 cwd[PATH_MAX];
+	int		 region, regions = 0;
+
+	region = magit_ediff_hunk_at_point();
+	if (region < 0) {
+		ewprintf("Point is not on a conflict region");
+		return (FALSE);
+	}
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	if (mg_magit_resolve_conflict_hunk(cwd, magit_ediff_path, region, side) !=
+	    1) {
+		ewprintf("Resolve failed");
+		return (FALSE);
+	}
+	if ((bp = bfind("*magit-ediff*", FALSE)) == NULL)
+		return (FALSE);
+	if (magit_ediff_build(bp, &regions) != TRUE)
+		return (FALSE);
+	if (regions == 0) {
+		/* All regions resolved: stage the now-clean file and close. */
+		(void)mg_magit_stage(cwd, magit_ediff_path);
+		ewprintf("%s resolved", magit_ediff_path);
+		return (magit_ediff_quit(f, n));
+	}
+	ewprintf("%d conflict region%s left", regions, regions == 1 ? "" : "s");
+	return (TRUE);
+}
+
+static int
+magit_ediff_ours(int f, int n)
+{
+	return (magit_ediff_resolve(0, f, n));
+}
+
+static int
+magit_ediff_theirs(int f, int n)
+{
+	return (magit_ediff_resolve(1, f, n));
+}
+
+static int
+magit_ediff_both(int f, int n)
+{
+	return (magit_ediff_resolve(2, f, n));
+}
+
+/* g: rebuild the *magit-ediff* buffer. */
+static int
+magit_ediff_refresh(int f, int n)
+{
+	struct buffer	*bp;
+
+	if ((bp = bfind("*magit-ediff*", FALSE)) == NULL)
+		return (FALSE);
+	return (magit_ediff_build(bp, NULL));
+}
+
+/* q: close the *magit-ediff* window. */
+static int
+magit_ediff_quit(int f, int n)
+{
+	return (delwind(f, n));
 }
 
 /* Build + pop the *magit-log* buffer (honoring magit_log_file_path). */
