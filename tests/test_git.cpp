@@ -693,6 +693,63 @@ TEST_CASE("stage_region stages only the selected lines of a single hunk")
     fs::remove_all(dir);
 }
 
+TEST_CASE("create_branch makes a new branch at HEAD without checking it out")
+{
+    auto dir = make_repo_with_commit("base"); // on master
+    REQUIRE(mg::git::create_branch(dir.string(), "feature").has_value());
+
+    auto bs = mg::git::branches(dir.string());
+    REQUIRE(bs.has_value());
+    bool has_feature = false, head_still_master = false;
+    for (const auto &b : *bs) {
+        if (b.name == "feature")
+            has_feature = true;
+        if (b.is_head && b.name == "master")
+            head_still_master = true;
+    }
+    CHECK(has_feature);
+    CHECK(head_still_master); // create does not switch branches
+    fs::remove_all(dir);
+}
+
+TEST_CASE("delete_branch removes a branch")
+{
+    auto dir = make_repo_with_branch("doomed"); // master + branch "doomed"
+    REQUIRE(mg::git::delete_branch(dir.string(), "doomed").has_value());
+
+    auto bs = mg::git::branches(dir.string());
+    REQUIRE(bs.has_value());
+    for (const auto &b : *bs)
+        CHECK(b.name != "doomed");
+    fs::remove_all(dir);
+}
+
+TEST_CASE("rename_branch changes a branch's name")
+{
+    auto dir = make_repo_with_branch("old"); // master + branch "old"
+    REQUIRE(mg::git::rename_branch(dir.string(), "old", "renamed").has_value());
+
+    auto bs = mg::git::branches(dir.string());
+    REQUIRE(bs.has_value());
+    bool has_renamed = false, has_old = false;
+    for (const auto &b : *bs) {
+        if (b.name == "renamed")
+            has_renamed = true;
+        if (b.name == "old")
+            has_old = true;
+    }
+    CHECK(has_renamed);
+    CHECK_FALSE(has_old);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("delete_branch on a missing branch is an error")
+{
+    auto dir = make_repo_with_commit("base");
+    CHECK_FALSE(mg::git::delete_branch(dir.string(), "nope").has_value());
+    fs::remove_all(dir);
+}
+
 TEST_CASE("upstream_status reports the upstream name and ahead/behind counts")
 {
     auto dir = make_repo_ahead_behind(); // topic tracks master, 1 ahead/1 behind

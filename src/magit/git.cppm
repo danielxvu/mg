@@ -197,6 +197,16 @@ std::expected<void, error> stash_drop(std::string repo, std::size_t index);
 // Check out local branch `name`, moving HEAD and updating the working tree.
 std::expected<void, error> checkout_branch(std::string repo, std::string name);
 
+// Create local branch `name` at HEAD (does not switch to it).
+std::expected<void, error> create_branch(std::string repo, std::string name);
+
+// Delete local branch `name`.
+std::expected<void, error> delete_branch(std::string repo, std::string name);
+
+// Rename local branch `from` to `to`.
+std::expected<void, error>
+rename_branch(std::string repo, std::string from, std::string to);
+
 // Stage `file` (relative to the repo root) into the index.
 std::expected<void, error> stage(std::string repo, std::string file);
 
@@ -579,6 +589,68 @@ std::expected<void, error> checkout_branch(std::string repo, std::string name)
 
     if (git_repository_set_head(r.get(), git_reference_name(ref.get())) != 0)
         return std::unexpected(last_error());
+    return {};
+}
+
+std::expected<void, error> create_branch(std::string repo, std::string name)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    // Peel HEAD to the commit the new branch should point at.
+    git_object *raw_head = nullptr;
+    if (git_revparse_single(&raw_head, r.get(), "HEAD") != 0)
+        return std::unexpected(last_error());
+    detail::object_ptr head(raw_head);
+
+    git_reference *raw_branch = nullptr;
+    if (git_branch_create(&raw_branch, r.get(), name.c_str(),
+                          reinterpret_cast<git_commit *>(head.get()),
+                          /*force=*/0) != 0)
+        return std::unexpected(last_error());
+    git_reference_free(raw_branch);
+    return {};
+}
+
+std::expected<void, error> delete_branch(std::string repo, std::string name)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    git_reference *raw_ref = nullptr;
+    if (git_branch_lookup(&raw_ref, r.get(), name.c_str(), GIT_BRANCH_LOCAL) != 0)
+        return std::unexpected(last_error());
+    detail::ref_ptr ref(raw_ref);
+
+    if (git_branch_delete(ref.get()) != 0)
+        return std::unexpected(last_error());
+    return {};
+}
+
+std::expected<void, error>
+rename_branch(std::string repo, std::string from, std::string to)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    git_reference *raw_ref = nullptr;
+    if (git_branch_lookup(&raw_ref, r.get(), from.c_str(), GIT_BRANCH_LOCAL) != 0)
+        return std::unexpected(last_error());
+    detail::ref_ptr ref(raw_ref);
+
+    git_reference *raw_new = nullptr;
+    if (git_branch_move(&raw_new, ref.get(), to.c_str(), /*force=*/0) != 0)
+        return std::unexpected(last_error());
+    git_reference_free(raw_new);
     return {};
 }
 
