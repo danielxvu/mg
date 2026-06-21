@@ -316,7 +316,8 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `fm-rb-edit`→fm-ediff-2-hunks (#66),
   `fm-rb-replay-conflict`→fm-rb-edit (#67),
   `fm-ediff-3-panes`→fm-rb-replay-conflict (#68),
-  `fm-ediff-4-refine`→fm-ediff-3-panes (#69).
+  `fm-ediff-4-refine`→fm-ediff-3-panes (#69),
+  `fm-ediff-5-cell-color`→fm-ediff-4-refine (#70).
   Magit core (A+B, #31-#41) done; UTF-8 "Full" U5-U8 (#42-#45). **Phase C**
   (honest gap vs real magit; spec
   `docs/superpowers/specs/2026-06-21-fm-phase-c-roadmap.md`): ✅ FM-RB-1
@@ -355,9 +356,11 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   panes with the active region in reverse-video (ENABLE_NATIVE_MAGIT display
   hook), n/p region-step, a/b/RET resolve — the marquee "visual" piece.
   ✅ **word-level refinement** (#69): `refine_words` (word-LCS) marks the words
-  unique to each side in the ediff panes (`[-ours-]` / `{+theirs+}`) — intra-line
-  refinement, textually (per-cell color is a verified display-core limit).
-  Next branch freezes on `fm-ediff-4-refine`.
+  unique to each side in the ediff panes — intra-line refinement.
+  ✅ **per-cell color** (#70): the refined words now render in real reverse
+  video (`MG_HL_BIT` spare cell bit + a no-op-when-absent `uline` hook, all
+  `#ifdef ENABLE_NATIVE_MAGIT` so OFF stays byte-clean) — the "needs a display
+  rewrite" item, done without one. Next branch freezes on `fm-ediff-5-cell-color`.
 
   **Phase C status — implemented:** rebase (onto/sequencer/interactive +
   reword), cherry-pick, tags (lightweight+annotated+section), push/pull
@@ -378,14 +381,11 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
       conflicts resume fully, #67.)
     · submodule **add/update/sync** — clone + network (testable via a local bare
       remote, but not yet built); listing only for now.
-    · **ediff: per-CHARACTER color refinement + free line-scroll** — genuinely
-      blocked by the display core: `struct video` has one `v_color` per line and
-      `vtcell` no per-cell attribute (verified), so character-level color needs a
-      per-cell video rewrite; free scroll across full-file panes needs cross-file
-      line alignment. The *workable* forms are done: 3-pane visual ediff +
-      region highlight + region-step nav (#68), and **word-level refinement as
-      wdiff markers** (#69, `refine_words` -> `[-ours-]`/`{+theirs+}` in the
-      panes). Spec: `docs/superpowers/specs/2026-06-21-fm-ediff-4-word-refine.md`.
+    · **ediff: synchronized free (line) scrolling** across full-file panes —
+      needs cross-file line alignment (a real line-diff); region-step nav (#68)
+      covers the conflict workflow. (Per-character color refinement, once thought
+      to need a display rewrite, is DONE — #70, via a spare cell bit + a
+      no-op-when-absent uline hook, OFF byte-clean.)
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
