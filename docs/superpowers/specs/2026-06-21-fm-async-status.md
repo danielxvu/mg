@@ -66,14 +66,29 @@ ourselves) — duplicates git's status logic, fragile.
 
 The main loop checks `mg_magit_take_dirty()` once per iteration, then blocks in
 `getkey`→`ttwait`→`poll`. A snapshot that becomes ready while the UI is idle
-must redraw **without** a keypress. Add a **self-pipe**: the monitor writes one
-byte when it publishes; `ttwait`'s `poll` includes the pipe's read fd, so a
-publish wakes the poll, the loop drains the byte, sees dirty, and redraws.
+must redraw **without** a keypress: `ttwait`'s `poll` must include a wake fd the
+monitor can signal.
 
+**Use the most efficient pollable wake per platform — not a self-pipe.** The
+fswatch module already abstracts exactly this primitive for its own thread;
+expose a *pollable* wake fd from it and add it to `ttwait`'s `poll` set:
+- **Linux:** `eventfd` (1 fd, 8-byte counter, no pipe buffer) — already used by
+  the inotify backend.
+- **macOS/BSD:** a dedicated `kqueue` fd + `EVFILT_USER`, triggered with
+  `NOTE_TRIGGER`; a kqueue descriptor is itself `poll`-able, so its fd goes in
+  the set with no data-pipe. (`watcher::wake()` already triggers EVFILT_USER.)
+- A self-pipe is the portable fallback only where neither exists.
+
+This reuses the existing wake mechanism (fewer fds, no pipe buffer, no
+duplicated code) instead of inventing a self-pipe.
+
+Notes:
+- `poll()` with 2-3 fds is the right multiplexer; epoll/kqueue-as-multiplexer
+  win only at hundreds of fds, so do **not** "upgrade" `ttwait`.
 - Strictly `#ifdef ENABLE_NATIVE_MAGIT` in ttyio.c so the OFF build's `poll` set
   is byte-identical (the established gating discipline).
-- The pipe fd is created in `mg_magit_start`, exposed to ttyio via a small
-  accessor; closed in `mg_magit_stop`.
+- The wake fd is owned by the monitor (created in `mg_magit_start`, closed in
+  `mg_magit_stop`), exposed to ttyio via a small accessor.
 
 ## Invariants (must hold)
 
@@ -123,8 +138,21 @@ small repos are unaffected (snapshot ~1ms). If at phase 3–4 the wake plumbing 
 staleness UX proves fragile, phases 1–2 alone still remove the *cold-path* block
 and are shippable on their own.
 
+## Syscall ceiling (what async does and doesn't change)
+
+Async **moves** the ~37k-`lstat` `repo_status` scan off the UI thread; it does
+not make the scan itself cheaper. The real syscall-level wins git core uses --
+**fsmonitor** (query a daemon for changed paths, skipping `lstat` of unchanged
+files) and the **untracked cache** (skip dirs by unchanged mtime) -- are gated
+by libgit2 (≤1.9 has no fsmonitor; partial untracked-cache). We already set
+`GIT_STATUS_OPT_UPDATE_INDEX` (the tracked-file stat cache libgit2 does support).
+So off-thread is the lever we have; a faster scan would need libgit2 support or
+recursive worktree watching (FSEvents/fanotify) to do incremental status -- both
+separate, larger efforts.
+
 ## Out of scope
 
 - Backgrounding `blame`/`log_file` (same pattern, separate project).
 - Local snapshot patching for zero-staleness mutations.
 - A general worker pool — one monitor thread suffices.
+- A faster status *scan* (fsmonitor / incremental) — libgit2-gated; see above.
