@@ -6,6 +6,7 @@
 #include <doctest/doctest.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -362,6 +363,49 @@ TEST_CASE("bridge publishes a summarized modeline for a repo")
 
     mg_magit_stop();
     fs::remove_all(dir);
+}
+
+// FM-ASYNC-STATUS thread-safety gate. The monitor thread publishes snapshots
+// (writing current_/snapshot_/snapshot_fp_ under its mutex and poking the wake
+// pipe) while the UI thread hammers every read-side accessor the editor uses:
+// the modeline copy, the dirty flag, the snapshot replay (which also recomputes
+// the fingerprint), and the wake-pipe fd + drain. Run under ThreadSanitizer
+// (preset cpp-tsan) the real assertion is "zero races reported"; reaching the
+// end with the threads joined cleanly is the pass under a normal build.
+TEST_CASE("monitor snapshot/modeline accessors are race-free under mutation")
+{
+    auto dir = make_repo_full();
+    auto repo = dir.string();
+
+    mg_magit_start(repo.c_str());
+
+    std::atomic<bool> stop{false};
+    auto sink = [](void *, const char *, int, const char *, int) {};
+
+    std::thread ui([&] {
+        while (!stop.load(std::memory_order_relaxed)) {
+            char buf[128];
+            (void)mg_magit_modeline(buf, sizeof buf);
+            (void)mg_magit_take_dirty();
+            (void)mg_magit_status_snapshot(repo.c_str(), nullptr, 0, sink,
+                                           nullptr);
+            (void)mg_magit_wake_fd();
+            mg_magit_drain_wake();
+        }
+    });
+
+    // Keep the worker busy: each new file changes the workdir scan and the
+    // index/fingerprint, forcing repeated publishes that race the UI reads.
+    for (int i = 0; i < 60; ++i) {
+        std::ofstream(dir / ("race" + std::to_string(i) + ".txt")) << i;
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+
+    stop.store(true, std::memory_order_relaxed);
+    ui.join();
+    mg_magit_stop();
+    fs::remove_all(dir);
+    CHECK(true);
 }
 
 TEST_CASE("mg_magit_status_buffer composes branch, sections, and commits")
@@ -1582,6 +1626,18 @@ TEST_CASE("BENCH bridge buffer builds (set MG_BENCH_REPO[, MG_BENCH_FILE])")
 			return mg_magit_blame_file(repo, file, count, nullptr);
 		});
 	}
+
+	// FM-ASYNC-STATUS: with the monitor warm, the UI's status build is the
+	// snapshot replay (a vector copy + fingerprint stat/read-head + emit) --
+	// the expensive scan/revwalk/ref-enum that dominates status_buffer above
+	// has moved to the worker thread. Compare this against status_buffer.
+	mg_magit_start(repo);
+	for (int i = 0; i < 500 && !mg_magit_take_dirty(); ++i)
+		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	bench("status_snapshot (warm UI) ", [&] {
+		return mg_magit_status_snapshot(repo, nullptr, 0, count, nullptr);
+	});
+	mg_magit_stop();
 }
 
 TEST_CASE("status snapshot replay is byte-identical to the synchronous build")

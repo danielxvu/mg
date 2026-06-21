@@ -27,16 +27,34 @@
         "CMAKE_CXX_COMPILER": "/opt/local/bin/clang++-mp-21",
         "CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS": "/opt/local/libexec/llvm-21/bin/clang-scan-deps"
       }
+    },
+    {
+      "name": "cpp-tsan",
+      "displayName": "C++23 + modules under ThreadSanitizer",
+      "description": "Same toolchain as cpp, with -fsanitize=thread, to gate the FM-ASYNC-STATUS monitor thread (snapshot/modeline races) and any other concurrency.",
+      "inherits": "cpp",
+      "binaryDir": "${sourceDir}/build-tsan",
+      "cacheVariables": {
+        "CMAKE_C_FLAGS": "-fsanitize=thread -g -O1",
+        "CMAKE_CXX_FLAGS": "-fsanitize=thread -g -O1",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=thread"
+      }
     }
   ],
   "buildPresets": [
     { "name": "c-legacy", "configurePreset": "c-legacy" },
-    { "name": "cpp",       "configurePreset": "cpp" }
+    { "name": "cpp",       "configurePreset": "cpp" },
+    { "name": "cpp-tsan",  "configurePreset": "cpp-tsan" }
   ],
   "testPresets": [
     {
       "name": "cpp",
       "configurePreset": "cpp",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "cpp-tsan",
+      "configurePreset": "cpp-tsan",
       "output": { "outputOnFailure": true }
     }
   ]

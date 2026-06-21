@@ -127,6 +127,48 @@ Notes:
 4. **Self-pipe wake** — ttyio `poll` includes the pipe; idle updates redraw.
 5. **TSan + tmux validation; re-profile.**
 
+## Outcome (phases 2–5, PR #77)
+
+Shipped and validated. Two design refinements vs the original plan:
+
+- **Staleness = a cheap repo fingerprint, not a mutation epoch (phase 3).** The
+  plan's per-mutation `mutation_epoch` would mean instrumenting ~40 mutating
+  bridge functions (error-prone, easy to miss one). Instead the snapshot is
+  stamped with `repo_fingerprint()` — `.git/index` size+mtime plus HEAD's short
+  oid (~0.2ms: one `stat` + `read_head`). The UI recomputes it per render and
+  shows a `(refreshing...)` marker on mismatch. This needs *zero* mutation
+  instrumentation and catches changes from **any** source (the user's own
+  staging *and* an external `git` command), which the epoch could not.
+- **No explicit `nudge()`.** The monitor's fs watcher already fires on the
+  `.git/index` write a mutation produces, so the worker recomputes without an
+  extra poke; the wake pipe carries it to the idle UI. One mechanism, not two.
+
+The wake is a **self-pipe** owned by the monitor (created before the worker
+thread starts, closed in the dtor). `ttgetc` polls `{stdin, wake_fd}`; a wake
+returns the `MGWAKE` sentinel, consumed entirely inside `getkey()` — it never
+leaks to command code. The buffer rebuild runs only at safe points (the
+top-level command read / main loop), never while a command is suspended in a
+minibuffer prompt holding line pointers.
+
+**Re-profile (UI-thread status build, warm monitor):**
+
+| repo | sync `status_buffer` | warm `status_snapshot` |
+| --- | --- | --- |
+| roll20-private-sheets (37.5k files, 3499 refs) | 233.5 ms | **0.17 ms** |
+| d20app (61k commits, 10505 refs) | 81.8 ms | **0.30 ms** |
+
+The scan/revwalk/ref-enum moved entirely to the worker; the UI pays sub-ms.
+
+**TSan note:** the `cpp-tsan` preset is added and is the gate on Linux CI. On
+this macOS 26.5 + MacPorts clang-21 box the ThreadSanitizer *runtime* crashes at
+process startup (exit 139, **no race report**, reproduces on a trivial
+single-threaded `--version`) — a runtime/OS incompatibility, not a data race.
+Thread-safety here rests on the immutable-snapshot design (all shared state
+written/read under `mu_`; `dirty_` atomic; pipe fds set before the worker
+starts), the determinism anchor, and a new concurrency stress test that races
+every read-side accessor against the publishing worker (green under the normal
+build).
+
 ## Risk + honest call
 
 Highest-risk change in the project: shared-state concurrency + interruptible

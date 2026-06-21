@@ -269,9 +269,14 @@ notnum:
 			winch_flag = 0;
 		}
 #ifdef ENABLE_NATIVE_MAGIT
-		/* Git status changed on disk: force a modeline redraw. */
-		if (mg_magit_take_dirty())
-			sgarbf = TRUE;
+		/*
+		 * Git status changed on disk: consume the dirty flag, repaint
+		 * the modeline, and rebuild *magit-status* in place if it
+		 * exists. Safe here -- no command is in flight at the top of
+		 * the loop. (getkey() also runs this on an idle wake so the
+		 * screen updates without a keypress.)
+		 */
+		magit_idle_refresh();
 #endif
 		update(CMODE);
 		lastflag = thisflag;

@@ -1077,7 +1077,12 @@ magit_build(struct buffer *bp)
 
 		for (i = 0; i < magit_expanded_count; i++)
 			exp[i] = magit_expanded[i];
-		(void)mg_magit_status_buffer(cwd, exp, magit_expanded_count,
+		/*
+		 * Replay the monitor thread's warm snapshot (the expensive
+		 * workdir scan + revwalk + ref enumeration ran off the UI
+		 * thread); falls back to a synchronous build on cold start.
+		 */
+		(void)mg_magit_status_snapshot(cwd, exp, magit_expanded_count,
 		    magit_emit, bp);
 	}
 
@@ -1146,6 +1151,27 @@ magit_refresh(int f, int n)
 	if ((bp = bfind("*magit-status*", TRUE)) == NULL)
 		return (FALSE);
 	return (magit_build(bp));
+}
+
+/*
+ * Idle/async refresh, driven by the background git monitor: when it publishes
+ * a fresh snapshot it sets the dirty flag and pokes the wake pipe. This runs
+ * only at safe points -- the top-level input loop (main.c) and the top-level
+ * command read in getkey() -- never while a command holds line pointers into
+ * the buffer. It consumes the dirty flag, forces a modeline repaint, and (if
+ * the *magit-status* buffer exists) rebuilds it in place via the cheap snapshot
+ * replay. Like the manual `g` refresh, point returns to the top of the buffer.
+ */
+void
+magit_idle_refresh(void)
+{
+	struct buffer	*bp;
+
+	if (!mg_magit_take_dirty())
+		return;
+	sgarbf = TRUE;				/* modeline reflects new state */
+	if ((bp = bfind("*magit-status*", FALSE)) != NULL)
+		(void)magit_build(bp);
 }
 
 /* emit callback for *magit-log*: record the oid of each commit line. */

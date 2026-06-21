@@ -25,6 +25,7 @@
 
 #include "ttydef.h"
 #include "def.h"
+#include "magit/bridge.h"
 
 #define NOBUF	512			/* Output buffer size. */
 
@@ -165,6 +166,39 @@ ttgetc(void)
 	ssize_t	ret;
 
 	do {
+#ifdef ENABLE_NATIVE_MAGIT
+		int		wfd = mg_magit_wake_fd();
+
+		/*
+		 * When the git monitor is running, block in poll() on both
+		 * stdin and the monitor's wake pipe so a snapshot published
+		 * while we're idle wakes the input loop (returns MGWAKE, which
+		 * getkey() turns into a redraw with no keypress). Real input
+		 * wins: only when stdin has nothing do we report the wake.
+		 */
+		if (wfd >= 0) {
+			struct pollfd	pfd[2];
+
+			pfd[0].fd = STDIN_FILENO;
+			pfd[0].events = POLLIN;
+			pfd[0].revents = 0;
+			pfd[1].fd = wfd;
+			pfd[1].events = POLLIN;
+			pfd[1].revents = 0;
+			if (poll(pfd, 2, -1) == -1) {
+				if (errno == EINTR && winch_flag) {
+					redraw(0, 0);
+					winch_flag = 0;
+				}
+				continue;
+			}
+			if (!(pfd[0].revents & (POLLIN | POLLHUP)) &&
+			    (pfd[1].revents & (POLLIN | POLLHUP))) {
+				mg_magit_drain_wake();
+				return (MGWAKE);
+			}
+		}
+#endif
 		ret = read(STDIN_FILENO, &c, 1);
 		if (ret == -1 && errno == EINTR) {
 			if (winch_flag) {

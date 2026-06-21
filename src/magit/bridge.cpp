@@ -11,6 +11,9 @@
 #include <atomic>
 #include <cstring>
 #include <expected>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -49,10 +52,70 @@ static int apply_code(
 
 namespace {
 
+// One captured status-buffer line (the collapsed snapshot stores these).
+struct snap_line {
+    std::string line;
+    int kind;
+    std::string path;
+    int hunk;
+};
+void snap_capture(void *ctx, const char *line, int kind, const char *path,
+                  int hunk)
+{
+    static_cast<std::vector<snap_line> *>(ctx)->push_back(
+        {line ? line : "", kind, path ? path : "", hunk});
+}
+
+// A cheap fingerprint of the repo's status-affecting state: the index file's
+// size + mtime plus HEAD's short oid. The monitor stamps each snapshot with the
+// fingerprint it was built at; the UI recomputes it per render (~sub-ms) and, on
+// a mismatch, knows the snapshot predates an on-disk change (the user's own
+// mutation OR an external `git` command) and shows a "refreshing" marker until
+// the worker catches up. This needs no instrumentation of the mutating bridge
+// ops and catches changes from any source.
+std::string repo_fingerprint(const std::string &repo)
+{
+    std::string fp;
+    struct stat st {};
+    if (::stat((repo + "/.git/index").c_str(), &st) == 0) {
+        fp += std::to_string(static_cast<long long>(st.st_size));
+        fp += '.';
+#if defined(__APPLE__)
+        fp += std::to_string(st.st_mtimespec.tv_sec);
+        fp += '.';
+        fp += std::to_string(st.st_mtimespec.tv_nsec);
+#else
+        fp += std::to_string(st.st_mtim.tv_sec);
+        fp += '.';
+        fp += std::to_string(st.st_mtim.tv_nsec);
+#endif
+    }
+    if (auto head = mg::git::read_head(repo); head) {
+        fp += '.';
+        fp += head->short_oid;
+    }
+    return fp;
+}
+
 class monitor {
 public:
     explicit monitor(std::string repo) : repo_(std::move(repo))
     {
+        // Self-pipe so a freshly published snapshot can wake the UI's poll()
+        // (ttwait/ttgetc) and trigger an idle redraw with no keypress. The read
+        // end is non-blocking so the UI can drain it without ever stalling; the
+        // write end is non-blocking so the worker never blocks when the 1-byte
+        // wake is already pending (a full pipe *is* an unconsumed wake).
+        int fds[2];
+        if (::pipe(fds) == 0) {
+            wake_rd_ = fds[0];
+            wake_wr_ = fds[1];
+            for (int fd : fds) {
+                ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL) | O_NONBLOCK);
+                ::fcntl(fd, F_SETFD, FD_CLOEXEC);
+            }
+        }
+
         // Watch the worktree root and .git (catches edits, staging, commits).
         std::vector<std::string> paths{repo_, repo_ + "/.git"};
         if (auto w = mg::fswatch::watcher::create(paths))
@@ -67,12 +130,42 @@ public:
             watcher_->wake(); // release a blocked wait() immediately
         if (thread_.joinable())
             thread_.join();
+        if (wake_rd_ >= 0)
+            ::close(wake_rd_);
+        if (wake_wr_ >= 0)
+            ::close(wake_wr_);
     }
 
     monitor(const monitor &) = delete;
     monitor &operator=(const monitor &) = delete;
 
     int take_dirty() noexcept { return dirty_.exchange(false) ? 1 : 0; }
+
+    // The pollable read end of the wake pipe (-1 if the pipe failed to open).
+    int wake_fd() const noexcept { return wake_rd_; }
+
+    // Discard any pending wake bytes. Called by the UI after poll() reports the
+    // wake fd readable; the actual state is in dirty_/the snapshot, not the byte.
+    void drain_wake() noexcept
+    {
+        if (wake_rd_ < 0)
+            return;
+        char buf[64];
+        while (::read(wake_rd_, buf, sizeof buf) > 0)
+            ; // drain to empty (non-blocking; stops at EAGAIN)
+    }
+
+    // Copy the latest status snapshot + the fingerprint it was built at; false
+    // if none built yet (cold start).
+    bool copy_snapshot(std::vector<snap_line> &out, std::string &fp)
+    {
+        std::lock_guard lk(mu_);
+        if (!have_snapshot_)
+            return false;
+        out = snapshot_;
+        fp = snapshot_fp_;
+        return true;
+    }
 
     int modeline(char *buf, std::size_t n)
     {
@@ -97,11 +190,32 @@ private:
 
         auto st = mg::git::repo_status(repo_);
         line += st ? mg::magit::summarize(*st) : std::string("git ?");
+
+        // Full collapsed status snapshot, computed here on the worker thread so
+        // the UI's status build is a cheap replay. Stamp it with the fingerprint
+        // read BEFORE the scan: if a mutation lands mid-scan the snapshot looks
+        // stale and the UI just re-reconciles (never the reverse).
+        std::string fp = repo_fingerprint(repo_);
+        std::vector<snap_line> snap;
+        (void)mg_magit_status_buffer(repo_.c_str(), nullptr, 0, snap_capture,
+                                     &snap);
         {
             std::lock_guard lk(mu_);
             current_ = std::move(line);
+            snapshot_ = std::move(snap);
+            snapshot_fp_ = std::move(fp);
+            have_snapshot_ = true;
         }
         dirty_.store(true);
+
+        // Nudge the UI out of its blocking poll() so it redraws even when idle.
+        // Non-blocking: if the pipe is full the previous wake is still unread,
+        // which already means "snapshot changed", so dropping this byte is fine.
+        if (wake_wr_ >= 0) {
+            char b = 1;
+            ssize_t r = ::write(wake_wr_, &b, 1);
+            (void)r;
+        }
     }
 
     void run()
@@ -118,7 +232,12 @@ private:
     std::string repo_;
     std::mutex mu_;
     std::string current_;
+    std::vector<snap_line> snapshot_;
+    std::string snapshot_fp_;
+    bool have_snapshot_ = false;
     std::atomic<bool> dirty_{false};
+    int wake_rd_ = -1; // pollable read end of the UI wake pipe
+    int wake_wr_ = -1; // worker writes 1 byte here on each publish
     mg::stop_flag stop_;
     std::optional<mg::fswatch::watcher> watcher_;
     std::thread thread_;
@@ -152,6 +271,17 @@ extern "C" void mg_magit_stop(void) { g_monitor.reset(); }
 extern "C" int mg_magit_take_dirty(void)
 {
     return g_monitor ? g_monitor->take_dirty() : 0;
+}
+
+extern "C" int mg_magit_wake_fd(void)
+{
+    return g_monitor ? g_monitor->wake_fd() : -1;
+}
+
+extern "C" void mg_magit_drain_wake(void)
+{
+    if (g_monitor)
+        g_monitor->drain_wake();
 }
 
 extern "C" int mg_magit_modeline(char *buf, size_t buflen)
@@ -357,28 +487,20 @@ extern "C" int mg_magit_status_buffer(const char *repo_path,
     return n;
 }
 
-namespace {
-// One captured status-buffer line (the collapsed snapshot stores these).
-struct snap_line {
-    std::string line;
-    int kind;
-    std::string path;
-    int hunk;
-};
-void snap_capture(void *ctx, const char *line, int kind, const char *path,
-                  int hunk)
-{
-    static_cast<std::vector<snap_line> *>(ctx)->push_back(
-        {line ? line : "", kind, path ? path : "", hunk});
-}
-} // namespace
-
 // Render the status buffer by replaying a *collapsed* snapshot (no inline
 // diffs) and splicing each expanded file's diff back in on the fly. Output is
 // byte-identical to mg_magit_status_buffer (shared emit_file_diff + the same
-// collapsed composition); a later phase will serve the snapshot from the
-// monitor thread so the expensive scan leaves the UI thread. Phase 1 builds it
-// synchronously, so this currently matches the sync path exactly.
+// collapsed composition).
+//
+// The collapsed base comes from the monitor thread's warm snapshot, so the
+// expensive workdir scan + revwalk + ref enumeration never run on the UI
+// thread. When the monitor has no snapshot yet (cold start, or the monitor is
+// not running) we build it synchronously this once. If the snapshot predates
+// the repo's current on-disk state (the user just staged/committed, or an
+// external `git` ran) we render the latest snapshot anyway and prepend a
+// "refreshing" marker; the monitor recomputes within ~one scan and the next
+// redraw clears it. The expansions are always computed live on the UI thread
+// (cheap, and they depend on UI state, not the snapshot).
 extern "C" int mg_magit_status_snapshot(const char *repo_path,
                                         const char *const *expanded,
                                         int n_expanded, mg_magit_emit_fn emit,
@@ -388,7 +510,14 @@ extern "C" int mg_magit_status_snapshot(const char *repo_path,
         return 0;
 
     std::vector<snap_line> snap;
-    (void)mg_magit_status_buffer(repo_path, nullptr, 0, snap_capture, &snap);
+    std::string snap_fp;
+    bool stale = false;
+    if (g_monitor && g_monitor->copy_snapshot(snap, snap_fp)) {
+        stale = snap_fp != repo_fingerprint(repo_path);
+    } else {
+        // Cold start / monitor off: build the collapsed snapshot synchronously.
+        (void)mg_magit_status_buffer(repo_path, nullptr, 0, snap_capture, &snap);
+    }
 
     auto is_expanded = [&](const std::string &p) {
         for (int i = 0; i < n_expanded; ++i)
@@ -398,6 +527,10 @@ extern "C" int mg_magit_status_snapshot(const char *repo_path,
     };
 
     int n = 0;
+    if (stale) {
+        emit(ctx, "    (refreshing...)", MG_LINE_OTHER, nullptr, -1);
+        ++n;
+    }
     for (const auto &e : snap) {
         emit(ctx, e.line.c_str(), e.kind,
              e.path.empty() ? nullptr : e.path.c_str(), e.hunk);

@@ -23,6 +23,19 @@ void mg_magit_stop(void);
 /* Read-and-clear the "status changed" flag (mirrors winch_flag). */
 int mg_magit_take_dirty(void);
 
+/* Pollable read end of the monitor's wake pipe (-1 when not running). ttgetc()
+ * adds it to its poll() set so a snapshot published while the UI is idle wakes
+ * the input loop for a redraw with no keypress. */
+int mg_magit_wake_fd(void);
+
+/* Discard any pending wake bytes after poll() reports the wake fd readable. */
+void mg_magit_drain_wake(void);
+
+/* Sentinel returned by ttgetc() when the wake fd fired instead of a real key.
+ * Outside the 0..255 byte range so it can never collide with terminal input;
+ * consumed entirely inside getkey(), never seen by command code. */
+#define MGWAKE (-2)
+
 /* Copy the current modeline string into `buf` (NUL-terminated); returns its
  * length. Returns 0 when no monitor is running. */
 int mg_magit_modeline(char *buf, size_t buflen);

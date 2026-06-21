@@ -13,6 +13,7 @@
 #include "kbd.h"
 #include "key.h"
 #include "macro.h"
+#include "magit/bridge.h"
 
 #ifdef  MGLOG
 #include "log.h"
@@ -92,8 +93,27 @@ getkey(int flag)
 	if (pushed) {
 		c = pushedc;
 		pushed = FALSE;
-	} else
+	} else {
 		c = ttgetc();
+#ifdef ENABLE_NATIVE_MAGIT
+		/*
+		 * MGWAKE means the git monitor published a new snapshot while
+		 * we were blocked, not a real keystroke. At a top-level command
+		 * read (flag) no command is in flight, so it is safe to rebuild
+		 * *magit-status* and repaint; inside a nested read (a minibuffer
+		 * prompt) a command is suspended holding buffer state, so we
+		 * leave the dirty flag pending for the main loop and just keep
+		 * waiting. Either way MGWAKE never escapes getkey().
+		 */
+		while (c == MGWAKE) {
+			if (flag) {
+				magit_idle_refresh();
+				update(CMODE);
+			}
+			c = ttgetc();
+		}
+#endif
+	}
 
 	if (bs_map) {
 		if (c == CCHR('H'))
