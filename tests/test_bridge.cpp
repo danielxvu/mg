@@ -744,6 +744,41 @@ TEST_CASE("mg_magit_tag_create/delete and the Tags section through the bridge")
     fs::remove_all(dir);
 }
 
+TEST_CASE("the Submodules section lists registered submodules through the bridge")
+{
+    auto parent = make_repo_one_hunk();
+    auto sub = make_repo_one_hunk();
+    auto repo = parent.string();
+    auto status_text = [&] {
+        std::string t;
+        mg_magit_status_buffer(
+            repo.c_str(), nullptr, 0,
+            [](void *ctx, const char *line, int, const char *, int) {
+                (static_cast<std::string *>(ctx))->append(line).append("\n");
+            },
+            &t);
+        return t;
+    };
+
+    CHECK(status_text().find("Submodules") == std::string::npos); // none yet
+
+    git_libgit2_init();
+    git_repository *r = nullptr;
+    REQUIRE(git_repository_open(&r, repo.c_str()) == 0);
+    git_submodule *sm = nullptr;
+    REQUIRE(git_submodule_add_setup(&sm, r, ("file://" + sub.string()).c_str(),
+                                    "vendor/lib", 1) == 0);
+    git_submodule_free(sm);
+    git_repository_free(r);
+    git_libgit2_shutdown();
+
+    std::string s = status_text();
+    CHECK(s.find("Submodules (1)") != std::string::npos);
+    CHECK(s.find("vendor/lib") != std::string::npos);
+    fs::remove_all(parent);
+    fs::remove_all(sub);
+}
+
 TEST_CASE("mg_magit_cherrypick applies another branch's commit onto HEAD")
 {
     auto dir = make_temp_dir();

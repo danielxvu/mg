@@ -1546,6 +1546,35 @@ TEST_CASE("set_note / read_note / remove_note round-trip")
     fs::remove_all(dir);
 }
 
+TEST_CASE("submodules lists each registered submodule's name and path")
+{
+    auto parent = make_repo_with_commit("base");
+    auto sub = make_repo_with_commit("sub-base"); // a repo to embed
+
+    git_libgit2_init();
+    git_repository *r = nullptr;
+    REQUIRE(git_repository_open(&r, parent.string().c_str()) == 0);
+    git_submodule *sm = nullptr;
+    REQUIRE(git_submodule_add_setup(&sm, r, ("file://" + sub.string()).c_str(),
+                                    "libs/sub", 1) == 0);
+    git_submodule_free(sm);
+    git_repository_free(r);
+    git_libgit2_shutdown();
+
+    auto subs = mg::git::submodules(parent.string());
+    REQUIRE(subs.has_value());
+    REQUIRE(subs->size() == 1);
+    CHECK((*subs)[0].name == "libs/sub");
+    CHECK((*subs)[0].path == "libs/sub");
+
+    auto none = mg::git::submodules(sub.string()); // a repo with no submodules
+    REQUIRE(none.has_value());
+    CHECK(none->empty());
+
+    fs::remove_all(parent);
+    fs::remove_all(sub);
+}
+
 TEST_CASE("bisect narrows a linear history to the first bad commit")
 {
     // C1(good) -> C2 -> C3(bad introduced here) -> C4(bad), HEAD on the branch.

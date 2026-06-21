@@ -307,6 +307,14 @@ extern "C" int mg_magit_status_buffer(const char *repo_path,
             out("  " + w.name + "  " + w.path, MG_LINE_WORKTREE, w.name.c_str());
     }
 
+    if (auto subs = mg::git::submodules(repo_path); subs && !subs->empty()) {
+        out("");
+        out("Submodules (" + std::to_string(subs->size()) + ")",
+            MG_LINE_SECTION);
+        for (const auto &s : *subs)
+            out("  " + s.path, MG_LINE_SUBMODULE, s.path.c_str());
+    }
+
     return n;
 }
 

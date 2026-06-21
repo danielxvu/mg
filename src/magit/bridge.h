@@ -42,6 +42,7 @@ int mg_magit_modeline(char *buf, size_t buflen);
 #define MG_LINE_COMMIT    9   /* a commit line in the log (path = full oid) */
 #define MG_LINE_TAG       10  /* a tag entry (path = tag name) */
 #define MG_LINE_WORKTREE  11  /* a worktree entry (path = worktree name) */
+#define MG_LINE_SUBMODULE 12  /* a submodule entry (path = submodule path) */
 
 /* Compose the *magit-status* buffer for the repo at `repo_path`, calling
  * `emit(ctx, line, kind, path, hunk)` once per line. Files whose path is in

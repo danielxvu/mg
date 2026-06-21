@@ -160,6 +160,11 @@ struct worktree_entry {
     std::string path;
 };
 
+struct submodule_entry {
+    std::string name;
+    std::string path;
+};
+
 // One source line annotated with the commit that last touched it.
 struct blame_line {
     std::string short_oid;
@@ -374,6 +379,10 @@ add_worktree(std::string repo, std::string name, std::string path);
 
 // Remove worktree `name`: prune its admin files and its working-tree dir.
 std::expected<void, error> remove_worktree(std::string repo, std::string name);
+
+// The repository's registered submodules (name + path), from .gitmodules.
+std::expected<std::vector<submodule_entry>, error>
+submodules(std::string repo);
 
 // Set / remove / read the (default refs/notes/commits) note on commit `rev`.
 // set overwrites any existing note; read returns "" when there is none.
@@ -1061,6 +1070,27 @@ std::expected<std::vector<worktree_entry>, error> worktrees(std::string repo)
         out.push_back(std::move(e));
     }
     git_strarray_dispose(&names);
+    return out;
+}
+
+std::expected<std::vector<submodule_entry>, error>
+submodules(std::string repo)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    std::vector<submodule_entry> out;
+    auto cb = [](git_submodule *sm, const char *name, void *payload) -> int {
+        auto *v = static_cast<std::vector<submodule_entry> *>(payload);
+        const char *p = git_submodule_path(sm);
+        v->push_back({name ? name : "", p ? p : ""});
+        return 0;
+    };
+    if (git_submodule_foreach(r.get(), cb, &out) != 0)
+        return std::unexpected(last_error());
     return out;
 }
 
