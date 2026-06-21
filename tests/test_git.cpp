@@ -693,6 +693,49 @@ TEST_CASE("stage_region stages only the selected lines of a single hunk")
     fs::remove_all(dir);
 }
 
+TEST_CASE("recent_commits carries the full commit oid")
+{
+    auto dir = make_repo_with_commit("only commit");
+    auto cs = mg::git::recent_commits(dir.string(), 1);
+    REQUIRE(cs.has_value());
+    REQUIRE(cs->size() == 1);
+    CHECK((*cs)[0].oid.size() == 40);                  // full sha-1 hex
+    CHECK((*cs)[0].oid.rfind((*cs)[0].short_oid, 0) == 0); // short is a prefix
+    fs::remove_all(dir);
+}
+
+TEST_CASE("commit_diff returns the diff of a commit against its parent")
+{
+    auto dir = make_repo_with_commit("first"); // a.txt = "content"
+    commit_file(dir, "a.txt", "content\nsecond line\n", "second");
+
+    auto cs = mg::git::recent_commits(dir.string(), 1); // newest = "second"
+    REQUIRE(cs.has_value());
+    REQUIRE(cs->size() == 1);
+
+    auto d = mg::git::commit_diff(dir.string(), (*cs)[0].oid);
+    REQUIRE(d.has_value());
+    bool added = false;
+    for (const auto &h : *d)
+        for (const auto &l : h.lines)
+            if (l.origin == '+' && l.content.find("second line") != std::string::npos)
+                added = true;
+    CHECK(added);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("commit_diff of the root commit shows all its lines as additions")
+{
+    auto dir = make_repo_with_commit("root"); // a.txt = "content", no parent
+    auto cs = mg::git::recent_commits(dir.string(), 1);
+    REQUIRE(cs.has_value());
+
+    auto d = mg::git::commit_diff(dir.string(), (*cs)[0].oid);
+    REQUIRE(d.has_value());
+    REQUIRE_FALSE(d->empty()); // diff against the empty tree
+    fs::remove_all(dir);
+}
+
 TEST_CASE("stash_push stashes the working tree, stash_pop restores it")
 {
     auto dir = make_repo_with_commit("base"); // a.txt = "content"

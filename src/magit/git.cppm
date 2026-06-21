@@ -65,6 +65,13 @@ inline std::string short_oid(const git_oid *oid)
     return std::string(buf);
 }
 
+inline std::string full_oid(const git_oid *oid)
+{
+    char buf[GIT_OID_HEXSZ + 1];
+    git_oid_tostr(buf, sizeof buf, oid);
+    return std::string(buf);
+}
+
 // git_apply hunk_cb that applies exactly one hunk (by 0-based position) and
 // skips the rest. Hunks are visited in order, so a running counter is enough.
 struct hunk_filter {
@@ -132,6 +139,7 @@ struct head_info {
 
 struct commit_brief {
     std::string short_oid;
+    std::string oid;       // full 40-char sha-1 hex (for lookups)
     std::string summary;
 };
 
@@ -249,6 +257,11 @@ std::expected<std::string, error> head_message(std::string repo);
 // The hunks of `path`'s diff: unstaged (workdir vs index) or staged (index vs HEAD).
 std::expected<std::vector<hunk>, error>
 file_diff(std::string repo, std::string path, bool staged);
+
+// The hunks introduced by commit `rev` (a sha-1 hex string), i.e. its tree vs
+// its first parent's (vs the empty tree for a root commit).
+std::expected<std::vector<hunk>, error>
+commit_diff(std::string repo, std::string rev);
 
 // Stage just hunk `hunk_index` (0-based, as numbered by file_diff(.,.,false))
 // of `path` into the index, leaving the file's other hunks unstaged.
@@ -447,6 +460,7 @@ upstream_commits(std::string path, bool unpushed)
     while (git_revwalk_next(&oid, walk.get()) == 0) {
         commit_brief cb;
         cb.short_oid = detail::short_oid(&oid);
+        cb.oid = detail::full_oid(&oid);
         git_commit *raw_commit = nullptr;
         if (git_commit_lookup(&raw_commit, repo.get(), &oid) == 0) {
             detail::commit_ptr commit(raw_commit);
@@ -482,6 +496,7 @@ recent_commits(std::string path, std::size_t n)
     while (out.size() < n && git_revwalk_next(&oid, walk.get()) == 0) {
         commit_brief cb;
         cb.short_oid = detail::short_oid(&oid);
+        cb.oid = detail::full_oid(&oid);
         git_commit *raw_commit = nullptr;
         if (git_commit_lookup(&raw_commit, repo.get(), &oid) == 0) {
             detail::commit_ptr commit(raw_commit);
@@ -961,6 +976,38 @@ std::expected<std::string, error> head_message(std::string repo)
     return std::string(m != nullptr ? m : "");
 }
 
+// Flatten a libgit2 diff into our hunk/diff_line value types.
+static std::vector<hunk> diff_to_hunks(git_diff *diff)
+{
+    std::vector<hunk> out;
+    const size_t ndeltas = git_diff_num_deltas(diff);
+    for (size_t di = 0; di < ndeltas; ++di) {
+        git_patch *raw_patch = nullptr;
+        if (git_patch_from_diff(&raw_patch, diff, di) != 0)
+            continue;
+        detail::patch_ptr patch(raw_patch);
+
+        const size_t nhunks = git_patch_num_hunks(patch.get());
+        for (size_t hi = 0; hi < nhunks; ++hi) {
+            const git_diff_hunk *gh = nullptr;
+            size_t nlines = 0;
+            if (git_patch_get_hunk(&gh, &nlines, patch.get(), hi) != 0)
+                continue;
+            hunk h;
+            h.header.assign(gh->header, gh->header_len);
+            for (size_t li = 0; li < nlines; ++li) {
+                const git_diff_line *gl = nullptr;
+                if (git_patch_get_line_in_hunk(&gl, patch.get(), hi, li) != 0)
+                    continue;
+                h.lines.push_back(diff_line{
+                    gl->origin, std::string(gl->content, gl->content_len)});
+            }
+            out.push_back(std::move(h));
+        }
+    }
+    return out;
+}
+
 std::expected<std::vector<hunk>, error>
 file_diff(std::string repo, std::string path, bool staged)
 {
@@ -991,34 +1038,52 @@ file_diff(std::string repo, std::string path, bool staged)
             return std::unexpected(last_error());
     }
     detail::diff_ptr diff(raw_diff);
+    return diff_to_hunks(diff.get());
+}
 
-    std::vector<hunk> out;
-    const size_t ndeltas = git_diff_num_deltas(diff.get());
-    for (size_t di = 0; di < ndeltas; ++di) {
-        git_patch *raw_patch = nullptr;
-        if (git_patch_from_diff(&raw_patch, diff.get(), di) != 0)
-            continue;
-        detail::patch_ptr patch(raw_patch);
+std::expected<std::vector<hunk>, error>
+commit_diff(std::string repo, std::string rev)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
 
-        const size_t nhunks = git_patch_num_hunks(patch.get());
-        for (size_t hi = 0; hi < nhunks; ++hi) {
-            const git_diff_hunk *gh = nullptr;
-            size_t nlines = 0;
-            if (git_patch_get_hunk(&gh, &nlines, patch.get(), hi) != 0)
-                continue;
-            hunk h;
-            h.header.assign(gh->header, gh->header_len);
-            for (size_t li = 0; li < nlines; ++li) {
-                const git_diff_line *gl = nullptr;
-                if (git_patch_get_line_in_hunk(&gl, patch.get(), hi, li) != 0)
-                    continue;
-                h.lines.push_back(diff_line{
-                    gl->origin, std::string(gl->content, gl->content_len)});
-            }
-            out.push_back(std::move(h));
-        }
+    git_object *raw_obj = nullptr;
+    if (git_revparse_single(&raw_obj, r.get(), rev.c_str()) != 0)
+        return std::unexpected(last_error());
+    detail::object_ptr obj(raw_obj);
+
+    git_commit *raw_commit = nullptr;
+    if (git_commit_lookup(&raw_commit, r.get(), git_object_id(obj.get())) != 0)
+        return std::unexpected(last_error());
+    detail::commit_ptr commit(raw_commit);
+
+    git_tree *raw_tree = nullptr;
+    if (git_commit_tree(&raw_tree, commit.get()) != 0)
+        return std::unexpected(last_error());
+    detail::tree_ptr tree(raw_tree);
+
+    // First parent's tree, or null (-> empty tree) for a root commit.
+    detail::tree_ptr parent_tree(nullptr);
+    if (git_commit_parentcount(commit.get()) > 0) {
+        git_commit *raw_parent = nullptr;
+        if (git_commit_parent(&raw_parent, commit.get(), 0) != 0)
+            return std::unexpected(last_error());
+        detail::commit_ptr parent(raw_parent);
+        git_tree *raw_pt = nullptr;
+        if (git_commit_tree(&raw_pt, parent.get()) != 0)
+            return std::unexpected(last_error());
+        parent_tree.reset(raw_pt);
     }
-    return out;
+
+    git_diff *raw_diff = nullptr;
+    if (git_diff_tree_to_tree(&raw_diff, r.get(), parent_tree.get(), tree.get(),
+                              nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::diff_ptr diff(raw_diff);
+    return diff_to_hunks(diff.get());
 }
 
 // Apply one hunk of `diff` (scoped to a single path) to the index.
