@@ -45,6 +45,9 @@ static int	magit_next_section(int, int);
 static int	magit_prev_section(int, int);
 static int	magit_stash_apply(int, int);
 static int	magit_checkout(int, int);
+static int	magit_branch_create(int, int);
+static int	magit_branch_delete(int, int);
+static int	magit_branch_rename(int, int);
 static int	magit_stage_all(int, int);
 static int	magit_unstage_all(int, int);
 static int	magit_region(int *, char **, int *, int *);
@@ -80,7 +83,7 @@ static PF magit_qmark[] = { magit_help };
 static PF magit_S[] = { magit_stage_all };
 static PF magit_U[] = { magit_unstage_all };
 static PF magit_a[] = { magit_stash_apply };
-static PF magit_b[] = { magit_checkout };
+static PF magit_b[] = { NULL };			/* b -> branch menu prefix */
 static PF magit_c[] = { NULL };			/* c -> commit menu prefix */
 static PF magit_g[] = { magit_refresh };
 static PF magit_k[] = { magit_discard };
@@ -114,6 +117,27 @@ static PF commit_a[] = { magit_commit_amend };
 static PF commit_e[] = { magit_commit_extend };
 static PF commit_w[] = { magit_commit_reword };
 
+/*
+ * Branch menu: `b` prefixes into this (magit's branch transient). b=checkout
+ * (the old bare-b action), c=create, k=delete, m=rename. Entries ascending.
+ */
+static PF branch_b[] = { magit_checkout };
+static PF branch_c[] = { magit_branch_create };
+static PF branch_k[] = { magit_branch_delete };
+static PF branch_m[] = { magit_branch_rename };
+
+static struct KEYMAPE (4) magit_branchmenu = {
+	4,
+	4,
+	rescan,
+	{
+		{ 'b', 'b', branch_b, NULL },	/* b b: checkout branch at point */
+		{ 'c', 'c', branch_c, NULL },	/* b c: create */
+		{ 'k', 'k', branch_k, NULL },	/* b k: delete */
+		{ 'm', 'm', branch_m, NULL }	/* b m: rename */
+	}
+};
+
 static struct KEYMAPE (4) magit_commitmenu = {
 	4,
 	4,
@@ -140,7 +164,7 @@ static struct KEYMAPE (14) magitmap = {
 		{ 'S', 'S', magit_S, NULL },			/* S: stage all */
 		{ 'U', 'U', magit_U, NULL },			/* U: unstage all */
 		{ 'a', 'a', magit_a, NULL },			/* a: apply stash */
-		{ 'b', 'b', magit_b, NULL },			/* b: checkout branch */
+		{ 'b', 'b', magit_b, (KEYMAP *)&magit_branchmenu }, /* b: branch menu */
 		{ 'c', 'c', magit_c, (KEYMAP *)&magit_commitmenu }, /* c: commit menu */
 		{ 'g', 'g', magit_g, NULL },
 		{ 'k', 'k', magit_k, NULL },
@@ -537,7 +561,7 @@ magit_help(int f, int n)
 		"  S / U    stage all / unstage all",
 		"  k        discard changes / drop the stash at point",
 		"  a        apply the stash at point",
-		"  b        check out the branch at point",
+		"  b b/c/k/m  branch: checkout / create / delete / rename",
 		"  c c/a/e/w  commit / amend / extend / reword",
 		"  g        refresh",
 		"  q        quit this window",
@@ -662,6 +686,76 @@ magit_checkout(int f, int n)
 		return (FALSE);
 	if (mg_magit_checkout(cwd, path) != 1) {	/* path holds the name */
 		ewprintf("Checkout failed");
+		return (FALSE);
+	}
+	return (magit_refresh(f, n));
+}
+
+/* b c: create a branch at HEAD (prompts for the name; does not switch to it). */
+static int
+magit_branch_create(int f, int n)
+{
+	char	name[PATH_MAX], cwd[PATH_MAX];
+
+	if (eread("Create branch: ", name, sizeof(name), EFNEW | EFCR) == NULL ||
+	    name[0] == '\0')
+		return (ABORT);
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	if (mg_magit_branch_create(cwd, name) != 1) {
+		ewprintf("Branch create failed");
+		return (FALSE);
+	}
+	return (magit_refresh(f, n));
+}
+
+/* b k: delete a branch (the branch at point, else prompt; confirms first). */
+static int
+magit_branch_delete(int f, int n)
+{
+	char	*path = NULL;
+	char	 name[PATH_MAX], prompt[PATH_MAX + 32], cwd[PATH_MAX];
+	int	 kind, hunk;
+
+	kind = magit_at_point(&path, &hunk);
+	if (kind == MG_LINE_BRANCH)
+		(void)strlcpy(name, path, sizeof(name));
+	else if (eread("Delete branch: ", name, sizeof(name), EFNEW | EFCR) ==
+	    NULL || name[0] == '\0')
+		return (ABORT);
+	(void)snprintf(prompt, sizeof(prompt), "Delete branch %s", name);
+	if (eyesno(prompt) != TRUE)
+		return (FALSE);
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	if (mg_magit_branch_delete(cwd, name) != 1) {
+		ewprintf("Branch delete failed");
+		return (FALSE);
+	}
+	return (magit_refresh(f, n));
+}
+
+/* b m: rename a branch (the branch at point, else prompt) to a new name. */
+static int
+magit_branch_rename(int f, int n)
+{
+	char	*path = NULL;
+	char	 from[PATH_MAX], to[PATH_MAX], cwd[PATH_MAX];
+	int	 kind, hunk;
+
+	kind = magit_at_point(&path, &hunk);
+	if (kind == MG_LINE_BRANCH)
+		(void)strlcpy(from, path, sizeof(from));
+	else if (eread("Rename branch: ", from, sizeof(from), EFNEW | EFCR) ==
+	    NULL || from[0] == '\0')
+		return (ABORT);
+	if (eread("Rename %s to: ", to, sizeof(to), EFNEW | EFCR, from) == NULL ||
+	    to[0] == '\0')
+		return (ABORT);
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	if (mg_magit_branch_rename(cwd, from, to) != 1) {
+		ewprintf("Branch rename failed");
 		return (FALSE);
 	}
 	return (magit_refresh(f, n));
