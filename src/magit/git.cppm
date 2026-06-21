@@ -224,6 +224,11 @@ std::expected<void, error> revert_commit(std::string repo, std::string rev);
 // merge commit. Errors (leaving the tree clean) on conflicts.
 std::expected<void, error> merge_branch(std::string repo, std::string name);
 
+// Rebase the current branch onto `upstream` (a branch name / revspec): replay
+// HEAD's commits since the merge-base on top of upstream. On conflict, abort
+// (restoring the original state) and return an error. Non-interactive.
+std::expected<void, error> rebase_onto(std::string repo, std::string upstream);
+
 // UI prompt for credentials: fill `out` (size outlen) with the user's answer
 // to `prompt`; `hidden` requests non-echoing input (passwords). Return 1 on
 // success, 0 on abort. `udata` is opaque (passed through from set_cred_prompt).
@@ -980,6 +985,66 @@ std::expected<void, error> merge_branch(std::string repo, std::string name)
         their(raw_their, git_annotated_commit_free);
 
     return merge_annotated(r.get(), their.get(), "Merge branch '" + name + "'");
+}
+
+std::expected<void, error> rebase_onto(std::string repo, std::string upstream)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    // Resolve `upstream` to an annotated commit (the new base).
+    git_object *raw_obj = nullptr;
+    if (git_revparse_single(&raw_obj, r.get(), upstream.c_str()) != 0)
+        return std::unexpected(last_error());
+    detail::object_ptr obj(raw_obj);
+    git_annotated_commit *raw_up = nullptr;
+    if (git_annotated_commit_lookup(&raw_up, r.get(),
+                                    git_object_id(obj.get())) != 0)
+        return std::unexpected(last_error());
+    std::unique_ptr<git_annotated_commit, decltype(&git_annotated_commit_free)>
+        up(raw_up, git_annotated_commit_free);
+
+    git_rebase_options ropts;
+    git_rebase_options_init(&ropts, GIT_REBASE_OPTIONS_VERSION);
+
+    git_rebase *raw_rebase = nullptr;
+    // branch = NULL -> rebase HEAD; onto = NULL -> onto `upstream`.
+    if (git_rebase_init(&raw_rebase, r.get(), nullptr, up.get(), nullptr,
+                        &ropts) != 0)
+        return std::unexpected(last_error());
+    std::unique_ptr<git_rebase, decltype(&git_rebase_free)> rebase(
+        raw_rebase, git_rebase_free);
+
+    detail::sig_ptr sig = default_signature(r.get());
+    if (!sig)
+        return std::unexpected(last_error());
+
+    git_rebase_operation *op = nullptr;
+    int rc;
+    while ((rc = git_rebase_next(&op, rebase.get())) == 0) {
+        git_oid id;
+        // author = NULL keeps the original; committer = sig; message = NULL
+        // keeps the original commit message.
+        int crc = git_rebase_commit(&id, rebase.get(), nullptr, sig.get(),
+                                    nullptr, nullptr);
+        if (crc == GIT_EAPPLIED)
+            continue; // commit already present upstream -> dropped
+        if (crc != 0) {
+            git_rebase_abort(rebase.get());
+            return std::unexpected(error{0, "rebase conflict (aborted)"});
+        }
+    }
+    if (rc != GIT_ITEROVER) {
+        error e = last_error();
+        git_rebase_abort(rebase.get());
+        return std::unexpected(e);
+    }
+    if (git_rebase_finish(rebase.get(), sig.get()) != 0)
+        return std::unexpected(last_error());
+    return {};
 }
 
 // Process-wide credential prompt (set by the UI via set_cred_prompt).

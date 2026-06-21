@@ -653,6 +653,70 @@ TEST_CASE("mg_magit_push and mg_magit_pull act through the bridge")
     fs::remove_all(bare);
 }
 
+TEST_CASE("mg_magit_rebase replays the current branch onto upstream")
+{
+    // master: C1 -> C2 (b.txt); feature: C1 -> C3 (c.txt); HEAD = feature.
+    auto dir = make_temp_dir();
+    auto repo = dir.string();
+    git_libgit2_init();
+    git_repository *r = nullptr;
+    REQUIRE(git_repository_init(&r, repo.c_str(), 0) == 0);
+    git_config *cfg = nullptr;
+    REQUIRE(git_repository_config(&cfg, r) == 0);
+    git_config_set_string(cfg, "user.name", "T");
+    git_config_set_string(cfg, "user.email", "t@t");
+    git_config_free(cfg);
+    git_repository_free(r);
+    git_libgit2_shutdown();
+
+    auto commit = [&](const char *file, const char *body, const char *msg) {
+        git_libgit2_init();
+        git_repository *repo2 = nullptr;
+        REQUIRE(git_repository_open(&repo2, repo.c_str()) == 0);
+        std::ofstream(dir / file) << body;
+        git_index *idx = nullptr;
+        REQUIRE(git_repository_index(&idx, repo2) == 0);
+        REQUIRE(git_index_add_bypath(idx, file) == 0);
+        REQUIRE(git_index_write(idx) == 0);
+        git_oid toid;
+        REQUIRE(git_index_write_tree(&toid, idx) == 0);
+        git_tree *tree = nullptr;
+        REQUIRE(git_tree_lookup(&tree, repo2, &toid) == 0);
+        git_signature *sig = nullptr;
+        REQUIRE(git_signature_now(&sig, "T", "t@t") == 0);
+        git_oid head;
+        bool born = git_reference_name_to_id(&head, repo2, "HEAD") == 0;
+        git_commit *parent = nullptr;
+        if (born)
+            git_commit_lookup(&parent, repo2, &head);
+        const git_commit *parents[1] = {parent};
+        git_oid out;
+        REQUIRE(git_commit_create(&out, repo2, "HEAD", sig, sig, nullptr, msg,
+                                  tree, born ? 1 : 0, born ? parents : nullptr) == 0);
+        if (parent)
+            git_commit_free(parent);
+        git_signature_free(sig);
+        git_tree_free(tree);
+        git_index_free(idx);
+        git_repository_free(repo2);
+        git_libgit2_shutdown();
+    };
+
+    commit("a.txt", "a\n", "C1");
+    REQUIRE(mg_magit_branch_create(repo.c_str(), "feature") == 1);
+    commit("b.txt", "b\n", "C2 on master"); // advances the default branch
+    REQUIRE(mg_magit_checkout(repo.c_str(), "feature") == 1);
+    commit("c.txt", "c\n", "C3 on feature");
+
+    CHECK(mg_magit_rebase(repo.c_str(), "master") == 1);
+    // After rebase, feature includes master's b.txt (C2 is now an ancestor).
+    CHECK(std::filesystem::exists(dir / "b.txt"));
+    CHECK(std::filesystem::exists(dir / "c.txt"));
+    // A bogus upstream fails gracefully.
+    CHECK(mg_magit_rebase(repo.c_str(), "no-such-ref") == 0);
+    fs::remove_all(dir);
+}
+
 TEST_CASE("mg_magit_revert and mg_magit_merge act through the bridge")
 {
     // make_repo_one_hunk: committed f.txt with a dirty working-tree change.

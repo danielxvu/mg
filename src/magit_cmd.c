@@ -67,6 +67,8 @@ static int	magit_fetch(int, int);
 static int	magit_pull(int, int);
 static int	magit_push(int, int);
 static int	magit_cred_prompt(const char *, int, char *, int);
+static int	magit_rebase_upstream(int, int);
+static int	magit_rebase_elsewhere(int, int);
 
 /*
  * line -> {kind, hunk, path} map for the most recent render of *magit-status*.
@@ -131,6 +133,7 @@ static PF magit_g[] = { magit_refresh };
 static PF magit_k[] = { magit_discard };
 static PF magit_q[] = { delwind };
 static PF magit_l[] = { magit_log };
+static PF magit_r[] = { NULL };			/* r -> rebase menu prefix */
 static PF magit_s[] = { magit_stage };
 static PF magit_u[] = { magit_unstage };
 static PF magit_z[] = { NULL };			/* z -> stash menu prefix */
@@ -216,6 +219,23 @@ static struct KEYMAPE (4) magit_branchmenu = {
 };
 
 /*
+ * Rebase menu: `r` prefixes into this (magit's rebase transient, subset).
+ * e=elsewhere (onto a prompted branch), u=onto upstream. Entries ascending.
+ */
+static PF rebase_e[] = { magit_rebase_elsewhere };
+static PF rebase_u[] = { magit_rebase_upstream };
+
+static struct KEYMAPE (2) magit_rebasemenu = {
+	2,
+	2,
+	rescan,
+	{
+		{ 'e', 'e', rebase_e, NULL },	/* r e: onto a branch */
+		{ 'u', 'u', rebase_u, NULL }	/* r u: onto upstream */
+	}
+};
+
+/*
  * Stash menu: `z` prefixes into this (magit's stash transient). z=push/create,
  * p=pop. Entries ascending.
  */
@@ -245,9 +265,9 @@ static struct KEYMAPE (4) magit_commitmenu = {
 };
 
 /* Entries MUST stay in ascending key order -- doscan() relies on it. */
-static struct KEYMAPE (22) magitmap = {
-	22,
-	22,
+static struct KEYMAPE (23) magitmap = {
+	23,
+	23,
 	rescan,
 	{
 		{ CCHR('I'), CCHR('I'), magit_tab, NULL },	/* TAB: expand/collapse */
@@ -270,6 +290,7 @@ static struct KEYMAPE (22) magitmap = {
 		{ 'l', 'l', magit_l, NULL },			/* l: log buffer */
 		{ 'm', 'm', magit_m, NULL },			/* m: merge */
 		{ 'q', 'q', magit_q, NULL },
+		{ 'r', 'r', magit_r, (KEYMAP *)&magit_rebasemenu }, /* r: rebase menu */
 		{ 's', 's', magit_s, NULL },
 		{ 'u', 'u', magit_u, NULL },
 		{ 'z', 'z', magit_z, (KEYMAP *)&magit_stashmenu } /* z: stash menu */
@@ -853,6 +874,7 @@ magit_help(int f, int n)
 		"  z z/p    stash: push / pop",
 		"  l        log buffer (RET shows a commit's diff, V reverts it)",
 		"  m        merge a branch into HEAD",
+		"  r e/u    rebase onto a branch / upstream",
 		"  V        revert a commit",
 		"  X h/m/s  reset HEAD: hard / mixed / soft",
 		"  f / F / P  fetch / pull / push (origin)",
@@ -1263,6 +1285,39 @@ magit_push(int f, int n)
 		return (FALSE);
 	}
 	ewprintf("Pushed to origin");
+	return (magit_refresh(f, n));
+}
+
+/* r u: rebase the current branch onto its upstream. */
+static int
+magit_rebase_upstream(int f, int n)
+{
+	char	cwd[PATH_MAX];
+
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	if (mg_magit_rebase(cwd, "@{u}") != 1) {
+		ewprintf("Rebase failed (no upstream, or conflicts -- aborted)");
+		return (FALSE);
+	}
+	return (magit_refresh(f, n));
+}
+
+/* r e: rebase the current branch onto a prompted branch/revision. */
+static int
+magit_rebase_elsewhere(int f, int n)
+{
+	char	onto[PATH_MAX], cwd[PATH_MAX];
+
+	if (eread("Rebase onto: ", onto, sizeof(onto), EFNEW | EFCR) == NULL ||
+	    onto[0] == '\0')
+		return (ABORT);
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	if (mg_magit_rebase(cwd, onto) != 1) {
+		ewprintf("Rebase failed (conflicts -- aborted, or bad ref)");
+		return (FALSE);
+	}
 	return (magit_refresh(f, n));
 }
 

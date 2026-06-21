@@ -557,6 +557,13 @@ extern "C" int mg_magit_merge(const char *repo_path, const char *name)
     return mg::git::merge_branch(repo_path, name).has_value() ? 1 : 0;
 }
 
+extern "C" int mg_magit_rebase(const char *repo_path, const char *upstream)
+{
+    if (repo_path == nullptr || upstream == nullptr || upstream[0] == '\0')
+        return 0;
+    return mg::git::rebase_onto(repo_path, upstream).has_value() ? 1 : 0;
+}
+
 extern "C" int mg_magit_branch_create(const char *repo_path, const char *name)
 {
     if (repo_path == nullptr || name == nullptr || name[0] == '\0')

@@ -315,6 +315,32 @@ fs::path make_repo_diverged()
     commit_file(dir, "a.txt", "content\nmaster line\n", "C2 on master");
     return dir;
 }
+// HEAD on "feature" (C1 -> C3 adds c.txt); "master" is C1 -> C2 adds b.txt.
+// Different files -> rebasing feature onto master is clean. Built with the
+// engine's own checkout + the commit_file helper.
+fs::path make_repo_for_rebase()
+{
+    auto dir = make_repo_with_commit("C1"); // master @ C1 (a.txt), HEAD master
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_open(&repo, dir.string().c_str()) == 0);
+    git_oid c1;
+    REQUIRE(git_reference_name_to_id(&c1, repo, "HEAD") == 0);
+    git_commit *base = nullptr;
+    REQUIRE(git_commit_lookup(&base, repo, &c1) == 0);
+    git_reference *feat = nullptr;
+    REQUIRE(git_branch_create(&feat, repo, "feature", base, 0) == 0);
+    git_reference_free(feat);
+    git_commit_free(base);
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+
+    commit_file(dir, "b.txt", "bee\n", "C2 on master"); // master advances
+    REQUIRE(mg::git::checkout_branch(dir.string(), "feature").has_value());
+    commit_file(dir, "c.txt", "cee\n", "C3 on feature"); // feature advances
+    return dir;
+}
+
 // A working repo with `origin` pointing at a local bare repo (file path, no
 // network), its current branch pushed there. Returns work dir, bare dir, and
 // the branch name.
@@ -496,6 +522,37 @@ TEST_CASE("pull_remote fast-forwards HEAD onto upstream changes")
     CHECK(h->summary == "C2 upstream"); // fast-forwarded to the upstream commit
     fs::remove_all(fx.work);
     fs::remove_all(fx.bare);
+}
+
+TEST_CASE("rebase_onto replays the branch's commits on top of upstream")
+{
+    auto dir = make_repo_for_rebase(); // HEAD=feature (C1->C3); master=C1->C2
+
+    REQUIRE(mg::git::rebase_onto(dir.string(), "master").has_value());
+
+    auto h = mg::git::read_head(dir.string());
+    REQUIRE(h.has_value());
+    CHECK(h->branch == "feature");
+    CHECK(h->summary == "C3 on feature");
+
+    // C2 is now an ancestor of feature's replayed tip: all three commits are
+    // reachable from HEAD (order is by commit time, which collides in the
+    // fixture, so check membership rather than position).
+    auto cs = mg::git::recent_commits(dir.string(), 10);
+    REQUIRE(cs.has_value());
+    REQUIRE(cs->size() == 3);
+    bool c1 = false, c2 = false, c3 = false;
+    for (const auto &c : *cs) {
+        c1 = c1 || c.summary == "C1";
+        c2 = c2 || c.summary == "C2 on master";
+        c3 = c3 || c.summary == "C3 on feature";
+    }
+    CHECK(c1);
+    CHECK(c2); // C2 was NOT reachable from feature before the rebase
+    CHECK(c3);
+    CHECK(fs::exists(dir / "b.txt")); // from C2
+    CHECK(fs::exists(dir / "c.txt")); // from C3
+    fs::remove_all(dir);
 }
 
 TEST_CASE("merge_branch makes a merge commit for a clean divergent merge")
