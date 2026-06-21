@@ -215,10 +215,14 @@ the shared `merge_annotated` helper); bridge `mg_magit_fetch/push/pull`; UI
 bare remotes (no network). ⚠ no credentials callback yet → authenticated
 ssh/https remotes are a follow-up; local/unauthenticated transports work.
 
-**🎉 FULL-MAGIT ROADMAP COMPLETE** (Phase A + Phase B). Remaining optional
-work: the two deferred sub-slices — FM-S2 region-discard (`k` on a region),
-FM-Z stash-show (RET on a stash → its diff) — plus remote auth (credentials
-callback) for FM-R.
+**🎉 FULL-MAGIT ROADMAP COMPLETE** (Phase A + Phase B). ✅ Follow-ups also done
+(PR #40, branch `fm-followups`): FM-S2 **region-discard** (`k` on a marked
+region → `discard_region` via a GIT_DIFF_REVERSE workdir patch); FM-Z
+**stash-show** (`RET` on a stash → `commit_diff "stash@{N}"` in the
+*magit-commit* view; also fixed a latent crash — log/commit-view modes now
+registered in magit_status init, not lazily in `l`); FM-R **remote auth**
+(ssh-agent credentials callback on fetch/push; https/password prompt still a
+follow-up). Nothing magit-related outstanding.
 Per-slice TDD (test_git → test_bridge → magit_cmd.c → pty) + stacked PR.
 
 ---
@@ -279,11 +283,11 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `fm-s1-stageall`→fm-c-commit (#32), `fm-s2-region`→fm-s1-stageall (#33),
   `fm-t-sections`→fm-s2-region (#34), `fm-b-branches`→fm-t-sections (#35),
   `fm-z-stash`→fm-b-branches (#36), `fm-l-log`→fm-z-stash (#37),
-  `fm-x-rrm`→fm-l-log (#38), `fm-r-remotes`→fm-x-rrm (#39).
-  🎉 Full-magit roadmap COMPLETE (Phases A+B, PRs #31-#39). Optional remaining:
-  deferred slices FM-S2 region-discard (`k`), FM-Z stash-show (RET); FM-R
-  remote auth (credentials callback). Next milestone branch freezes on
-  `fm-r-remotes`.
+  `fm-x-rrm`→fm-l-log (#38), `fm-r-remotes`→fm-x-rrm (#39),
+  `fm-followups`→fm-r-remotes (#40).
+  🎉 Full-magit roadmap COMPLETE (Phases A+B + follow-ups, PRs #31-#40). Only
+  open item: interactive https/password remote auth (a UI-prompt callback).
+  Next milestone branch freezes on `fm-followups`.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
