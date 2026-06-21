@@ -44,6 +44,8 @@ static int	magit_help(int, int);
 static int	magit_next_section(int, int);
 static int	magit_prev_section(int, int);
 static int	magit_stash_apply(int, int);
+static int	magit_stash_push(int, int);
+static int	magit_stash_pop(int, int);
 static int	magit_checkout(int, int);
 static int	magit_branch_create(int, int);
 static int	magit_branch_delete(int, int);
@@ -90,6 +92,7 @@ static PF magit_k[] = { magit_discard };
 static PF magit_q[] = { delwind };
 static PF magit_s[] = { magit_stage };
 static PF magit_u[] = { magit_unstage };
+static PF magit_z[] = { NULL };			/* z -> stash menu prefix */
 
 /*
  * ESC submap: M-n / M-p jump between section headers. map_default is rescan, so
@@ -138,6 +141,23 @@ static struct KEYMAPE (4) magit_branchmenu = {
 	}
 };
 
+/*
+ * Stash menu: `z` prefixes into this (magit's stash transient). z=push/create,
+ * p=pop. Entries ascending.
+ */
+static PF stash_p[] = { magit_stash_pop };
+static PF stash_z[] = { magit_stash_push };
+
+static struct KEYMAPE (2) magit_stashmenu = {
+	2,
+	2,
+	rescan,
+	{
+		{ 'p', 'p', stash_p, NULL },	/* z p: pop */
+		{ 'z', 'z', stash_z, NULL }	/* z z: push/create */
+	}
+};
+
 static struct KEYMAPE (4) magit_commitmenu = {
 	4,
 	4,
@@ -151,9 +171,9 @@ static struct KEYMAPE (4) magit_commitmenu = {
 };
 
 /* Entries MUST stay in ascending key order -- doscan() relies on it. */
-static struct KEYMAPE (14) magitmap = {
-	14,
-	14,
+static struct KEYMAPE (15) magitmap = {
+	15,
+	15,
 	rescan,
 	{
 		{ CCHR('I'), CCHR('I'), magit_tab, NULL },	/* TAB: expand/collapse */
@@ -170,7 +190,8 @@ static struct KEYMAPE (14) magitmap = {
 		{ 'k', 'k', magit_k, NULL },
 		{ 'q', 'q', magit_q, NULL },
 		{ 's', 's', magit_s, NULL },
-		{ 'u', 'u', magit_u, NULL }
+		{ 'u', 'u', magit_u, NULL },
+		{ 'z', 'z', magit_z, (KEYMAP *)&magit_stashmenu } /* z: stash menu */
 	}
 };
 
@@ -563,6 +584,7 @@ magit_help(int f, int n)
 		"  a        apply the stash at point",
 		"  b b/c/k/m  branch: checkout / create / delete / rename",
 		"  c c/a/e/w  commit / amend / extend / reword",
+		"  z z/p    stash: push / pop",
 		"  g        refresh",
 		"  q        quit this window",
 		"  ?        this help",
@@ -664,6 +686,43 @@ magit_stash_apply(int f, int n)
 		return (FALSE);
 	if (mg_magit_stash_apply(cwd, hunk) != 1) {	/* hunk holds the index */
 		ewprintf("Stash apply failed");
+		return (FALSE);
+	}
+	return (magit_refresh(f, n));
+}
+
+/* z z: stash the working-tree changes away (prompts for an optional message). */
+static int
+magit_stash_push(int f, int n)
+{
+	char	msg[PATH_MAX], cwd[PATH_MAX];
+
+	if (eread("Stash message: ", msg, sizeof(msg),
+	    EFNEW | EFCR | EFNUL) == NULL)
+		return (ABORT);
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	if (mg_magit_stash_push(cwd, msg) != 1) {
+		ewprintf("Stash failed (nothing to stash?)");
+		return (FALSE);
+	}
+	return (magit_refresh(f, n));
+}
+
+/* z p: pop a stash (the one at point, else stash@{0}) -- apply then drop. */
+static int
+magit_stash_pop(int f, int n)
+{
+	char	*path = NULL;
+	char	 cwd[PATH_MAX];
+	int	 kind, hunk, index;
+
+	kind = magit_at_point(&path, &hunk);
+	index = (kind == MG_LINE_STASH) ? hunk : 0;	/* hunk holds the index */
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	if (mg_magit_stash_pop(cwd, index) != 1) {
+		ewprintf("Stash pop failed");
 		return (FALSE);
 	}
 	return (magit_refresh(f, n));
