@@ -92,6 +92,7 @@ static int	magit_todo_pick(int, int);
 static int	magit_todo_drop(int, int);
 static int	magit_todo_squash(int, int);
 static int	magit_todo_fixup(int, int);
+static int	magit_todo_reword(int, int);
 static int	magit_todo_up(int, int);
 static int	magit_todo_down(int, int);
 static int	magit_todo_execute(int, int);
@@ -122,9 +123,10 @@ static int	magit_log_count;
  * one commit; the buffer is a rendered view of this array (line i = entry i). */
 #define MAGIT_MAX_TODO 256
 struct magit_todo_entry {
-	int	action;			/* 0 pick, 1 drop, 2 squash, 3 fixup */
+	int	action;			/* 0 pick 1 drop 2 squash 3 fixup 4 reword */
 	char	oid[MAGIT_OID_LEN];
 	char	text[160];		/* "shortoid summary" */
+	char	message[1024];		/* reword: the new commit message */
 };
 static struct magit_todo_entry	magit_todo[MAGIT_MAX_TODO];
 static int	magit_todo_count;
@@ -364,6 +366,7 @@ static PF todo_p[] = { magit_todo_pick };
 static PF todo_d[] = { magit_todo_drop };
 static PF todo_s[] = { magit_todo_squash };
 static PF todo_f[] = { magit_todo_fixup };
+static PF todo_w[] = { magit_todo_reword };
 static PF todo_esc[] = { NULL };		/* ESC -> reorder submap */
 static PF todo_cc_pf[] = { magit_todo_execute };
 static PF todo_ck_pf[] = { magit_todo_abort };
@@ -390,9 +393,9 @@ static struct KEYMAPE (2) todo_ccmap = {
 	}
 };
 
-static struct KEYMAPE (7) magit_todomap = {
-	7,
-	7,
+static struct KEYMAPE (8) magit_todomap = {
+	8,
+	8,
 	rescan,
 	{
 		{ CCHR('C'), CCHR('C'), todo_esc,		/* C-c prefix */
@@ -403,7 +406,8 @@ static struct KEYMAPE (7) magit_todomap = {
 		{ 'f', 'f', todo_f, NULL },			/* f: fixup */
 		{ 'k', 'k', todo_d, NULL },			/* k: drop */
 		{ 'p', 'p', todo_p, NULL },			/* p: pick */
-		{ 's', 's', todo_s, NULL }			/* s: squash */
+		{ 's', 's', todo_s, NULL },			/* s: squash */
+		{ 'w', 'w', todo_w, NULL }			/* w: reword */
 	}
 };
 
@@ -2155,6 +2159,7 @@ todo_action_name(int action)
 	case 1: return ("drop");
 	case 2: return ("squash");
 	case 3: return ("fixup");
+	case 4: return ("reword");
 	default: return ("pick");
 	}
 }
@@ -2193,7 +2198,7 @@ magit_rebase_todo_build(struct buffer *bp)
 		    magit_todo[i].text);
 	(void)addlinef(bp, "%s", "");
 	(void)addlinef(bp, "%s", "# p pick  d/k drop  s squash  f fixup  "
-	    "M-n/M-p reorder  C-c C-c run  C-c C-k abort");
+	    "w reword  M-n/M-p reorder  C-c C-c run  C-c C-k abort");
 
 	bp->b_dotp = bfirstlp(bp);
 	bp->b_doto = 0;
@@ -2269,6 +2274,32 @@ static int magit_todo_drop(int f, int n)   { return (magit_todo_set(1)); }
 static int magit_todo_squash(int f, int n) { return (magit_todo_set(2)); }
 static int magit_todo_fixup(int f, int n)  { return (magit_todo_set(3)); }
 
+/* w: reword -- mark the entry at point reword and collect the new message now
+ * (so the executor never has to stop mid-sequence). */
+static int
+magit_todo_reword(int f, int n)
+{
+	struct buffer	*bp;
+	char		 msg[1024];
+	int		 idx = magit_line_index();
+
+	if (idx < 0 || idx >= magit_todo_count) {
+		ewprintf("Not on a rebase line");
+		return (FALSE);
+	}
+	if (eread("New message: ", msg, sizeof(msg), EFNEW | EFCR) == NULL ||
+	    msg[0] == '\0')
+		return (ABORT);
+	magit_todo[idx].action = 4; /* reword */
+	(void)strlcpy(magit_todo[idx].message, msg,
+	    sizeof(magit_todo[idx].message));
+	if ((bp = bfind("*git-rebase-todo*", FALSE)) == NULL)
+		return (FALSE);
+	(void)magit_rebase_todo_build(bp);
+	magit_goto_index(idx);
+	return (TRUE);
+}
+
 /* Move the entry at point by `dir` (+1 down, -1 up), re-render, follow it. */
 static int
 magit_todo_move(int dir)
@@ -2321,6 +2352,8 @@ magit_todo_execute(int f, int n)
 	for (i = 0; i < magit_todo_count; i++) {
 		steps[i].action = magit_todo[i].action;
 		steps[i].oid = magit_todo[i].oid;
+		steps[i].message =
+		    (magit_todo[i].action == 4) ? magit_todo[i].message : NULL;
 	}
 	rc = mg_magit_rebase_interactive(cwd, magit_todo_onto, steps,
 	    magit_todo_count);

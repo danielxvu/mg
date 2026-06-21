@@ -167,10 +167,12 @@ int mg_magit_rebase_abort(const char *repo_path);
 int mg_magit_rebase_in_progress(const char *repo_path);
 
 /* One interactive-rebase plan step: `action` 0=pick, 1=drop, 2=squash,
- * 3=fixup; `oid` is the commit's full sha-1 hex. */
+ * 3=fixup, 4=reword; `oid` is the commit's full sha-1 hex; `message` is the new
+ * message for reword (NULL otherwise). */
 struct mg_magit_rebase_step {
 	int action;
 	const char *oid;
+	const char *message;
 };
 
 /* Emit the commits an interactive rebase onto `onto` would replay -- one

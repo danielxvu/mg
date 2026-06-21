@@ -780,6 +780,31 @@ TEST_CASE("rebase_interactive drops a commit from the middle of the plan")
     fs::remove_all(dir);
 }
 
+TEST_CASE("rebase_interactive reword replaces a commit's message")
+{
+    using mg::git::rebase_action;
+    using mg::git::rebase_step;
+    auto dir = make_repo_for_interactive(); // C2/C3/C4
+
+    std::vector<rebase_step> plan = {
+        {rebase_action::pick, oid_of(dir, "feature~2"), ""},          // C2
+        {rebase_action::reword, oid_of(dir, "feature~1"), "reworded C3"}, // C3
+        {rebase_action::pick, oid_of(dir, "feature"), ""},            // C4
+    };
+    REQUIRE(mg::git::rebase_interactive(dir.string(), "master", plan).has_value());
+
+    auto after = mg::git::recent_commits(dir.string(), 10);
+    REQUIRE(after.has_value());
+    bool reworded = false, old = false;
+    for (const auto &c : *after) {
+        reworded = reworded || c.summary == "reworded C3";
+        old = old || c.summary == "C3";
+    }
+    CHECK(reworded);
+    CHECK_FALSE(old);
+    fs::remove_all(dir);
+}
+
 TEST_CASE("rebase_interactive fixup folds a commit into the previous one")
 {
     using mg::git::rebase_action;

@@ -267,10 +267,11 @@ std::expected<void, error> rebase_abort(std::string repo);
 bool rebase_in_progress(std::string repo);
 
 // One entry of an interactive-rebase plan: what to do with a commit.
-enum class rebase_action { pick, drop, squash, fixup };
+enum class rebase_action { pick, drop, squash, fixup, reword };
 struct rebase_step {
     rebase_action action;
-    std::string oid;   // full sha-1 hex of the commit
+    std::string oid;       // full sha-1 hex of the commit
+    std::string message;   // reword: the new commit message (else ignored)
 };
 
 // Interactive rebase: replay `plan` (oldest first) on top of `onto`, then move
@@ -1667,12 +1668,15 @@ rebase_interactive(std::string repo, std::string onto,
         detail::tree_ptr tree(raw_tree);
 
         git_oid new_oid;
-        if (act == rebase_action::pick) {
+        if (act == rebase_action::pick || act == rebase_action::reword) {
+            // reword keeps the commit but uses the plan's message.
+            const char *msg = act == rebase_action::reword
+                                  ? step.message.c_str()
+                                  : git_commit_message(apply.get());
             const git_commit *parents[1] = {tip.get()};
             if (git_commit_create(&new_oid, r.get(), nullptr,
                                   git_commit_author(apply.get()), sig.get(),
-                                  nullptr, git_commit_message(apply.get()),
-                                  tree.get(), 1, parents) != 0)
+                                  nullptr, msg, tree.get(), 1, parents) != 0)
                 return std::unexpected(last_error());
         } else { // squash / fixup: replace `tip` with the combined commit
             detail::commit_ptr tparent(nullptr);

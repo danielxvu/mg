@@ -760,9 +760,11 @@ extern "C" int mg_magit_rebase_interactive(const char *repo_path,
         case 1: a = mg::git::rebase_action::drop; break;
         case 2: a = mg::git::rebase_action::squash; break;
         case 3: a = mg::git::rebase_action::fixup; break;
+        case 4: a = mg::git::rebase_action::reword; break;
         default: a = mg::git::rebase_action::pick; break;
         }
-        plan.push_back({a, steps[i].oid ? steps[i].oid : ""});
+        plan.push_back({a, steps[i].oid ? steps[i].oid : "",
+                        steps[i].message ? steps[i].message : ""});
     }
     return mg::git::rebase_interactive(repo_path, onto, std::move(plan))
                    .has_value()
