@@ -69,6 +69,9 @@ static int	magit_push(int, int);
 static int	magit_cred_prompt(const char *, int, char *, int);
 static int	magit_rebase_upstream(int, int);
 static int	magit_rebase_elsewhere(int, int);
+static int	magit_rebase_continue(int, int);
+static int	magit_rebase_skip(int, int);
+static int	magit_rebase_abort(int, int);
 
 /*
  * line -> {kind, hunk, path} map for the most recent render of *magit-status*.
@@ -220,17 +223,24 @@ static struct KEYMAPE (4) magit_branchmenu = {
 
 /*
  * Rebase menu: `r` prefixes into this (magit's rebase transient, subset).
- * e=elsewhere (onto a prompted branch), u=onto upstream. Entries ascending.
+ * a=abort, e=elsewhere (onto a prompted branch), r=continue, s=skip, u=onto
+ * upstream. Entries ascending.
  */
+static PF rebase_a[] = { magit_rebase_abort };
 static PF rebase_e[] = { magit_rebase_elsewhere };
+static PF rebase_r[] = { magit_rebase_continue };
+static PF rebase_s[] = { magit_rebase_skip };
 static PF rebase_u[] = { magit_rebase_upstream };
 
-static struct KEYMAPE (2) magit_rebasemenu = {
-	2,
-	2,
+static struct KEYMAPE (5) magit_rebasemenu = {
+	5,
+	5,
 	rescan,
 	{
+		{ 'a', 'a', rebase_a, NULL },	/* r a: abort */
 		{ 'e', 'e', rebase_e, NULL },	/* r e: onto a branch */
+		{ 'r', 'r', rebase_r, NULL },	/* r r: continue */
+		{ 's', 's', rebase_s, NULL },	/* r s: skip */
 		{ 'u', 'u', rebase_u, NULL }	/* r u: onto upstream */
 	}
 };
@@ -875,6 +885,7 @@ magit_help(int f, int n)
 		"  l        log buffer (RET shows a commit's diff, V reverts it)",
 		"  m        merge a branch into HEAD",
 		"  r e/u    rebase onto a branch / upstream",
+		"  r r/s/a  rebase continue / skip / abort",
 		"  V        revert a commit",
 		"  X h/m/s  reset HEAD: hard / mixed / soft",
 		"  f / F / P  fetch / pull / push (origin)",
@@ -1288,6 +1299,25 @@ magit_push(int f, int n)
 	return (magit_refresh(f, n));
 }
 
+/*
+ * Interpret a rebase bridge result (1 done / 2 paused on conflicts / 0 fail),
+ * report it, and refresh. `what` names the action for the failure message.
+ */
+static int
+magit_rebase_report(int code, const char *what, int f, int n)
+{
+	if (code == 0) {
+		ewprintf("%s failed", what);
+		return (FALSE);
+	}
+	if (code == 2)
+		ewprintf("Rebase paused: resolve conflicts, then r r "
+		    "(continue) / r s (skip) / r a (abort)");
+	else
+		ewprintf("Rebase complete");
+	return (magit_refresh(f, n));
+}
+
 /* r u: rebase the current branch onto its upstream. */
 static int
 magit_rebase_upstream(int f, int n)
@@ -1296,11 +1326,8 @@ magit_rebase_upstream(int f, int n)
 
 	if (getcwd(cwd, sizeof(cwd)) == NULL)
 		return (FALSE);
-	if (mg_magit_rebase(cwd, "@{u}") != 1) {
-		ewprintf("Rebase failed (no upstream, or conflicts -- aborted)");
-		return (FALSE);
-	}
-	return (magit_refresh(f, n));
+	return (magit_rebase_report(mg_magit_rebase(cwd, "@{u}"),
+	    "Rebase onto upstream", f, n));
 }
 
 /* r e: rebase the current branch onto a prompted branch/revision. */
@@ -1314,10 +1341,46 @@ magit_rebase_elsewhere(int f, int n)
 		return (ABORT);
 	if (getcwd(cwd, sizeof(cwd)) == NULL)
 		return (FALSE);
-	if (mg_magit_rebase(cwd, onto) != 1) {
-		ewprintf("Rebase failed (conflicts -- aborted, or bad ref)");
+	return (magit_rebase_report(mg_magit_rebase(cwd, onto), "Rebase", f, n));
+}
+
+/* r r: continue a paused rebase (after resolving + staging conflicts). */
+static int
+magit_rebase_continue(int f, int n)
+{
+	char	cwd[PATH_MAX];
+
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	return (magit_rebase_report(mg_magit_rebase_continue(cwd),
+	    "Rebase continue", f, n));
+}
+
+/* r s: skip the current commit of a paused rebase. */
+static int
+magit_rebase_skip(int f, int n)
+{
+	char	cwd[PATH_MAX];
+
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	return (magit_rebase_report(mg_magit_rebase_skip(cwd), "Rebase skip",
+	    f, n));
+}
+
+/* r a: abort a paused rebase, restoring the pre-rebase state. */
+static int
+magit_rebase_abort(int f, int n)
+{
+	char	cwd[PATH_MAX];
+
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	if (mg_magit_rebase_abort(cwd) != 1) {
+		ewprintf("Rebase abort failed");
 		return (FALSE);
 	}
+	ewprintf("Rebase aborted");
 	return (magit_refresh(f, n));
 }
 

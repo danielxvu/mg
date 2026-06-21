@@ -144,8 +144,17 @@ int mg_magit_revert(const char *repo_path, const char *rev);
 int mg_magit_merge(const char *repo_path, const char *name);
 
 /* Rebase the current branch onto `upstream` (a branch name / revspec, e.g.
- * "@{u}" for the configured upstream). 1 ok, 0 fail (conflicts abort). */
+ * "@{u}"). Returns 1 = done, 2 = paused on conflicts (resolve + continue),
+ * 0 = failure. */
 int mg_magit_rebase(const char *repo_path, const char *upstream);
+
+/* Continue / skip / abort a paused rebase (1 done, 2 still-conflicts for
+ * continue/skip, 0 fail; abort: 1 ok / 0 fail). Whether a rebase is in
+ * progress -> 1/0. */
+int mg_magit_rebase_continue(const char *repo_path);
+int mg_magit_rebase_skip(const char *repo_path);
+int mg_magit_rebase_abort(const char *repo_path);
+int mg_magit_rebase_in_progress(const char *repo_path);
 
 /* Create / delete / rename a local branch. create makes `name` at HEAD without
  * switching; rename moves `from` to `to`. Return 1 on success, 0 on failure. */

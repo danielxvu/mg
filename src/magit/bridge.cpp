@@ -10,6 +10,7 @@
 
 #include <atomic>
 #include <cstring>
+#include <expected>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -185,6 +186,13 @@ extern "C" int mg_magit_status_buffer(const char *repo_path,
             line += " [ahead " + std::to_string(up->ahead) + ", behind " +
                     std::to_string(up->behind) + "]";
         out(line);
+    }
+
+    if (mg::git::rebase_in_progress(repo_path)) {
+        out("");
+        out("Rebasing -- resolve conflicts, then r r (continue) / r s (skip) / "
+            "r a (abort)",
+            MG_LINE_SECTION);
     }
 
     if (auto st = mg::git::repo_status(repo_path)) {
@@ -557,11 +565,49 @@ extern "C" int mg_magit_merge(const char *repo_path, const char *name)
     return mg::git::merge_branch(repo_path, name).has_value() ? 1 : 0;
 }
 
+// Map a rebase outcome to the bridge code: 1 done, 2 paused on conflicts,
+// 0 failure.
+static int rebase_code(
+    const std::expected<mg::git::rebase_result, mg::git::error> &r)
+{
+    if (!r)
+        return 0;
+    return *r == mg::git::rebase_result::conflicts ? 2 : 1;
+}
+
 extern "C" int mg_magit_rebase(const char *repo_path, const char *upstream)
 {
     if (repo_path == nullptr || upstream == nullptr || upstream[0] == '\0')
         return 0;
-    return mg::git::rebase_onto(repo_path, upstream).has_value() ? 1 : 0;
+    return rebase_code(mg::git::rebase_onto(repo_path, upstream));
+}
+
+extern "C" int mg_magit_rebase_continue(const char *repo_path)
+{
+    if (repo_path == nullptr)
+        return 0;
+    return rebase_code(mg::git::rebase_continue(repo_path));
+}
+
+extern "C" int mg_magit_rebase_skip(const char *repo_path)
+{
+    if (repo_path == nullptr)
+        return 0;
+    return rebase_code(mg::git::rebase_skip(repo_path));
+}
+
+extern "C" int mg_magit_rebase_abort(const char *repo_path)
+{
+    if (repo_path == nullptr)
+        return 0;
+    return mg::git::rebase_abort(repo_path).has_value() ? 1 : 0;
+}
+
+extern "C" int mg_magit_rebase_in_progress(const char *repo_path)
+{
+    if (repo_path == nullptr)
+        return 0;
+    return mg::git::rebase_in_progress(repo_path) ? 1 : 0;
 }
 
 extern "C" int mg_magit_branch_create(const char *repo_path, const char *name)

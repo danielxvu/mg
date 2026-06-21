@@ -341,6 +341,47 @@ fs::path make_repo_for_rebase()
     return dir;
 }
 
+// Like make_repo_for_rebase but master and feature change the SAME line of
+// a.txt, so rebasing feature onto master conflicts. HEAD = feature.
+fs::path make_repo_rebase_conflict()
+{
+    auto dir = make_repo_with_commit("C1"); // a.txt = "content", HEAD master
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_open(&repo, dir.string().c_str()) == 0);
+    git_oid c1;
+    REQUIRE(git_reference_name_to_id(&c1, repo, "HEAD") == 0);
+    git_commit *base = nullptr;
+    REQUIRE(git_commit_lookup(&base, repo, &c1) == 0);
+    git_reference *feat = nullptr;
+    REQUIRE(git_branch_create(&feat, repo, "feature", base, 0) == 0);
+    git_reference_free(feat);
+    git_commit_free(base);
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+
+    commit_file(dir, "a.txt", "master change\n", "C2 master");
+    REQUIRE(mg::git::checkout_branch(dir.string(), "feature").has_value());
+    commit_file(dir, "a.txt", "feature change\n", "C3 feature");
+    return dir;
+}
+
+// Resolve the conflicted a.txt to `body` and stage it (clears the conflict).
+void resolve_and_stage(const fs::path &dir, const char *body)
+{
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_open(&repo, dir.string().c_str()) == 0);
+    std::ofstream(dir / "a.txt") << body;
+    git_index *idx = nullptr;
+    REQUIRE(git_repository_index(&idx, repo) == 0);
+    REQUIRE(git_index_add_bypath(idx, "a.txt") == 0); // stages + clears conflict
+    REQUIRE(git_index_write(idx) == 0);
+    git_index_free(idx);
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+}
+
 // A working repo with `origin` pointing at a local bare repo (file path, no
 // network), its current branch pushed there. Returns work dir, bare dir, and
 // the branch name.
@@ -552,6 +593,50 @@ TEST_CASE("rebase_onto replays the branch's commits on top of upstream")
     CHECK(c3);
     CHECK(fs::exists(dir / "b.txt")); // from C2
     CHECK(fs::exists(dir / "c.txt")); // from C3
+    fs::remove_all(dir);
+}
+
+TEST_CASE("rebase_onto pauses on conflict; rebase_abort restores the branch")
+{
+    auto dir = make_repo_rebase_conflict(); // feature & master change a.txt
+
+    auto r = mg::git::rebase_onto(dir.string(), "master");
+    REQUIRE(r.has_value());
+    CHECK(*r == mg::git::rebase_result::conflicts);
+    CHECK(mg::git::rebase_in_progress(dir.string()));
+
+    REQUIRE(mg::git::rebase_abort(dir.string()).has_value());
+    CHECK_FALSE(mg::git::rebase_in_progress(dir.string()));
+    auto h = mg::git::read_head(dir.string());
+    REQUIRE(h.has_value());
+    CHECK(h->summary == "C3 feature"); // original feature tip restored
+    fs::remove_all(dir);
+}
+
+TEST_CASE("rebase_continue finishes the rebase once the conflict is resolved")
+{
+    auto dir = make_repo_rebase_conflict();
+
+    auto r = mg::git::rebase_onto(dir.string(), "master");
+    REQUIRE(r.has_value());
+    REQUIRE(*r == mg::git::rebase_result::conflicts);
+
+    resolve_and_stage(dir, "resolved\n");
+    auto c = mg::git::rebase_continue(dir.string());
+    REQUIRE(c.has_value());
+    CHECK(*c == mg::git::rebase_result::done);
+    CHECK_FALSE(mg::git::rebase_in_progress(dir.string()));
+
+    // The resolved content is committed, and C2 master is now an ancestor.
+    std::ifstream f(dir / "a.txt");
+    std::string body((std::istreambuf_iterator<char>(f)), {});
+    CHECK(body == "resolved\n");
+    auto cs = mg::git::recent_commits(dir.string(), 10);
+    REQUIRE(cs.has_value());
+    bool c2 = false;
+    for (const auto &cm : *cs)
+        c2 = c2 || cm.summary == "C2 master";
+    CHECK(c2);
     fs::remove_all(dir);
 }
 
