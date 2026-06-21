@@ -164,3 +164,20 @@ TEST_CASE("grapheme_back finds the start of the grapheme left of pos")
     CHECK(grapheme_back("abc", 2) == 1);
     CHECK(grapheme_back(nfd, 0) == 0);
 }
+
+
+TEST_CASE("normalize_nfc composes decomposed sequences, leaves NFC/ASCII alone")
+{
+    // NFD "e + combining acute" (3 bytes) -> NFC precomposed e-acute (2 bytes).
+    std::string nfd = "e\u0301";
+    std::string nfc = normalize_nfc(nfd);
+    CHECK(nfc == "\u00e9");          // single precomposed codepoint
+    CHECK(nfc.size() == 2);
+    // Already-NFC and pure-ASCII strings are returned unchanged.
+    CHECK(normalize_nfc("\u00e9") == "\u00e9");
+    CHECK(normalize_nfc("hello") == "hello");
+    CHECK(normalize_nfc("") == "");
+    // Invalid UTF-8 (a lone 0xFF) is preserved byte-for-byte.
+    std::string bad = "a\xff" "b";
+    CHECK(normalize_nfc(bad) == bad);
+}

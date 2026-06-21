@@ -43,6 +43,12 @@ int mg_utf8_grapheme_len(const char *s, int len);
  * (where the cursor lands one grapheme left of `pos`). 0 if pos <= 0. */
 int mg_utf8_grapheme_back(const char *s, int pos);
 
+/* NFC-normalize s[0..len) into `out` (capacity `outcap`). Returns the full
+ * normalized length; `out` is written only when it fits (length <= outcap), so
+ * call once with outcap 0 to size a buffer, then again to fill it. Returns -1
+ * on bad arguments. Invalid UTF-8 is passed through unchanged. */
+int mg_utf8_nfc(const char *s, int len, char *out, int outcap);
+
 #ifdef __cplusplus
 }
 #endif

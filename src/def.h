@@ -662,6 +662,9 @@ int		 lfindent(int, int);
 int		 indent(int, int);
 int		 forwdel(int, int);
 int		 backdel(int, int);
+#ifdef ENABLE_CPP_UPGRADES
+int		 normalize_buffer(int, int);	/* M-x normalize-buffer (NFC) */
+#endif
 int		 space_to_tabstop(int, int);
 int		 backtoindent(int, int);
 int		 joinline(int, int);

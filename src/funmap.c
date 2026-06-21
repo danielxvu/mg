@@ -175,6 +175,9 @@ static struct funmap functnames[] = {
 	{lfindent, "newline-and-indent", 1, NULL},
 	{forwline, "next-line", 1, NULL},
 	{notabmode, "no-tab-mode", 0, NULL},
+#ifdef ENABLE_CPP_UPGRADES
+	{normalize_buffer, "normalize-buffer", 0, NULL},
+#endif
 	{notmodified, "not-modified", 0, NULL},
 	{openline, "open-line", 1, NULL},
 	{nextwind, "other-window", 0, NULL},

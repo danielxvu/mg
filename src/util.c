@@ -12,6 +12,8 @@
 #include <ctype.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "def.h"
 
@@ -504,6 +506,61 @@ char_bytes_backward(int n)
 		}
 	}
 	return (bytes);
+}
+
+/*
+ * normalize-buffer: rewrite every line to Unicode NFC (canonical composition),
+ * turning decomposed sequences (e + combining acute) into precomposed forms
+ * (e-acute). Lines that are already NFC, plain ASCII, empty, or not valid
+ * UTF-8 are left untouched. M-x normalize-buffer (no default binding).
+ */
+int
+normalize_buffer(int f, int n)
+{
+	struct line	*lp;
+	int		 changed = 0, lineno = 1, s;
+
+	if ((s = checkdirty(curbp)) != TRUE)
+		return (s);
+	if (curbp->b_flag & BFREADONLY) {
+		dobeep();
+		ewprintf("Buffer is read-only");
+		return (FALSE);
+	}
+
+	for (lp = bfirstlp(curbp); lp != curbp->b_headp;
+	    lp = lforw(lp), lineno++) {
+		int	 llen = llength(lp), nlen;
+		char	*norm;
+
+		if (llen == 0)
+			continue;
+		nlen = mg_utf8_nfc(ltext(lp), llen, NULL, 0);
+		if (nlen < 0)
+			continue;
+		if ((norm = malloc((size_t)(nlen > 0 ? nlen : 1))) == NULL)
+			continue;
+		(void)mg_utf8_nfc(ltext(lp), llen, norm, nlen);
+		/* Only rewrite lines whose bytes actually change. */
+		if (nlen != llen ||
+		    memcmp(norm, ltext(lp), (size_t)llen) != 0) {
+			curwp->w_dotp = lp;
+			curwp->w_doto = 0;
+			curwp->w_dotline = lineno;
+			(void)ldelete((RSIZE)llen, KNONE);
+			region_put_data(norm, nlen);
+			changed++;
+		}
+		free(norm);
+	}
+
+	gotobob(FFRAND, 1);
+	if (changed == 0)
+		ewprintf("Buffer already NFC-normalized");
+	else
+		ewprintf("Normalized %d line%s", changed,
+		    changed == 1 ? "" : "s");
+	return (TRUE);
 }
 #endif /* ENABLE_CPP_UPGRADES */
 

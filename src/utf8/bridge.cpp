@@ -5,6 +5,8 @@
 
 #include "bridge.h"
 
+#include <cstring>
+#include <string>
 #include <string_view>
 
 import mg.utf8;
@@ -73,4 +75,15 @@ extern "C" int mg_utf8_grapheme_back(const char *s, int pos)
     return static_cast<int>(mg::utf8::grapheme_back(
         std::string_view(s, static_cast<size_t>(pos)),
         static_cast<size_t>(pos)));
+}
+
+extern "C" int mg_utf8_nfc(const char *s, int len, char *out, int outcap)
+{
+    if (s == nullptr || len < 0)
+        return -1;
+    std::string r =
+        mg::utf8::normalize_nfc(std::string_view(s, static_cast<size_t>(len)));
+    if (out != nullptr && static_cast<int>(r.size()) <= outcap)
+        std::memcpy(out, r.data(), r.size());
+    return static_cast<int>(r.size());
 }

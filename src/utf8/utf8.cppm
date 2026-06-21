@@ -9,6 +9,8 @@
 module;
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <string>
 #include <string_view>
 
 #include <utf8proc.h>
@@ -55,6 +57,10 @@ std::size_t grapheme_len(std::string_view s);
 // Start byte offset of the grapheme cluster ending at `pos` within `s` (i.e.
 // where the cursor lands stepping one grapheme left of `pos`). 0 if pos == 0.
 std::size_t grapheme_back(std::string_view s, std::size_t pos);
+
+// NFC (canonical composition) normalization of `s`. Returns `s` unchanged if it
+// is not valid UTF-8 (so binary/Latin-1 content is preserved).
+std::string normalize_nfc(std::string_view s);
 
 // Whitespace: ASCII blanks/newlines/tabs and Unicode space/line/para separators.
 bool is_space(char32_t cp);
@@ -150,6 +156,20 @@ std::size_t grapheme_len(std::string_view s)
         prev = nx.cp;
     }
     return len;
+}
+
+std::string normalize_nfc(std::string_view s)
+{
+    utf8proc_uint8_t *out = nullptr;
+    utf8proc_ssize_t n = utf8proc_map(
+        reinterpret_cast<const utf8proc_uint8_t *>(s.data()),
+        static_cast<utf8proc_ssize_t>(s.size()), &out,
+        static_cast<utf8proc_option_t>(UTF8PROC_COMPOSE | UTF8PROC_STABLE));
+    if (n < 0 || out == nullptr)
+        return std::string(s); // invalid UTF-8 -> leave bytes untouched
+    std::string result(reinterpret_cast<char *>(out), static_cast<std::size_t>(n));
+    std::free(out);
+    return result;
 }
 
 std::size_t grapheme_back(std::string_view s, std::size_t pos)
