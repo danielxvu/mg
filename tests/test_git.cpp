@@ -103,6 +103,26 @@ fs::path make_repo_with_two_hunks()
     return dir;
 }
 
+// A repo whose committed file has two changes close enough (within git's
+// 3-line context) to land in ONE unstaged hunk -- the substrate for region
+// staging, where we stage only part of a single hunk.
+fs::path make_repo_with_one_hunk_two_changes()
+{
+    auto dir = make_temp_dir();
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_init(&repo, dir.string().c_str(), 0) == 0);
+    git_repository_free(repo);
+
+    // Lines 2 (b->B) and 4 (d->D) are only one line apart, so the 3-line
+    // context overlaps and git emits a single hunk covering both.
+    commit_file(dir, "f.txt", "a\nb\nc\nd\ne\n", "base");
+    std::ofstream(dir / "f.txt") << "a\nB\nc\nD\ne\n";
+
+    git_libgit2_shutdown();
+    return dir;
+}
+
 // Set user.name/user.email so git_signature_default works (amend/commit).
 void set_test_config(const fs::path &dir)
 {
@@ -579,6 +599,90 @@ TEST_CASE("unstage_hunk drops one staged hunk back to unstaged")
             if (l.origin == '+' && l.content.find('B') != std::string::npos)
                 unstaged_has_B = true;
     CHECK(unstaged_has_B);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("stage_region stages only the selected lines of a single hunk")
+{
+    auto dir = make_repo_with_one_hunk_two_changes();
+
+    // One hunk: ' a / -b / +B / c / -d / +D / e' (line indices 0..6).
+    auto d = mg::git::file_diff(dir.string(), "f.txt", /*staged=*/false);
+    REQUIRE(d.has_value());
+    REQUIRE(d->size() == 1);
+
+    // Select just the b->B change: hunk line indices 1 (-b) and 2 (+B).
+    REQUIRE(mg::git::stage_region(dir.string(), "f.txt", /*hunk_index=*/0,
+                                  /*sel_first=*/1, /*sel_last=*/2)
+                .has_value());
+
+    // Staged side now has b->B but NOT d->D.
+    auto staged = mg::git::file_diff(dir.string(), "f.txt", /*staged=*/true);
+    REQUIRE(staged.has_value());
+    bool staged_B = false, staged_D = false;
+    for (const auto &h : *staged)
+        for (const auto &l : h.lines) {
+            if (l.origin == '+' && l.content.find('B') != std::string::npos)
+                staged_B = true;
+            if (l.origin == '+' && l.content.find('D') != std::string::npos)
+                staged_D = true;
+        }
+    CHECK(staged_B);
+    CHECK_FALSE(staged_D);
+
+    // Unstaged side keeps only d->D.
+    auto unstaged = mg::git::file_diff(dir.string(), "f.txt", /*staged=*/false);
+    REQUIRE(unstaged.has_value());
+    bool unstaged_B = false, unstaged_D = false;
+    for (const auto &h : *unstaged)
+        for (const auto &l : h.lines) {
+            if (l.origin == '+' && l.content.find('B') != std::string::npos)
+                unstaged_B = true;
+            if (l.origin == '+' && l.content.find('D') != std::string::npos)
+                unstaged_D = true;
+        }
+    CHECK_FALSE(unstaged_B);
+    CHECK(unstaged_D);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("unstage_region unstages only the selected lines of a staged hunk")
+{
+    auto dir = make_repo_with_one_hunk_two_changes();
+    // Stage the whole file: one staged hunk with both b->B and d->D.
+    REQUIRE(mg::git::stage(dir.string(), "f.txt").has_value());
+    auto staged = mg::git::file_diff(dir.string(), "f.txt", /*staged=*/true);
+    REQUIRE(staged.has_value());
+    REQUIRE(staged->size() == 1);
+
+    // Unstage just the b->B change: staged-hunk line indices 1 (-b) and 2 (+B).
+    REQUIRE(mg::git::unstage_region(dir.string(), "f.txt", /*hunk_index=*/0,
+                                    /*sel_first=*/1, /*sel_last=*/2)
+                .has_value());
+
+    // Staged side keeps only d->D now.
+    auto staged_after = mg::git::file_diff(dir.string(), "f.txt", /*staged=*/true);
+    REQUIRE(staged_after.has_value());
+    bool staged_B = false, staged_D = false;
+    for (const auto &h : *staged_after)
+        for (const auto &l : h.lines) {
+            if (l.origin == '+' && l.content.find('B') != std::string::npos)
+                staged_B = true;
+            if (l.origin == '+' && l.content.find('D') != std::string::npos)
+                staged_D = true;
+        }
+    CHECK_FALSE(staged_B);
+    CHECK(staged_D);
+
+    // The b->B change is back on the unstaged side.
+    auto unstaged = mg::git::file_diff(dir.string(), "f.txt", /*staged=*/false);
+    REQUIRE(unstaged.has_value());
+    bool unstaged_B = false;
+    for (const auto &h : *unstaged)
+        for (const auto &l : h.lines)
+            if (l.origin == '+' && l.content.find('B') != std::string::npos)
+                unstaged_B = true;
+    CHECK(unstaged_B);
     fs::remove_all(dir);
 }
 

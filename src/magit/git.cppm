@@ -6,6 +6,7 @@
 
 module;
 #include <cstddef>
+#include <cstdio>
 #include <expected>
 #include <filesystem>
 #include <memory>
@@ -226,6 +227,21 @@ stage_hunk(std::string repo, std::string path, std::size_t hunk_index);
 // of `path`, returning that hunk to the working tree's unstaged changes.
 std::expected<void, error>
 unstage_hunk(std::string repo, std::string path, std::size_t hunk_index);
+
+// Stage only the lines [sel_first, sel_last] (0-based indices within hunk
+// `hunk_index` of file_diff(.,.,false)) into the index. Unselected additions
+// are dropped; unselected deletions are demoted to context. This is magit's
+// line/region staging.
+std::expected<void, error>
+stage_region(std::string repo, std::string path, std::size_t hunk_index,
+             std::size_t sel_first, std::size_t sel_last);
+
+// Unstage only the lines [sel_first, sel_last] (0-based indices within hunk
+// `hunk_index` of file_diff(.,.,true)) back to the working tree. The reverse
+// of stage_region.
+std::expected<void, error>
+unstage_region(std::string repo, std::string path, std::size_t hunk_index,
+               std::size_t sel_first, std::size_t sel_last);
 
 } // namespace mg::git
 
@@ -863,6 +879,178 @@ unstage_hunk(std::string repo, std::string path, std::size_t hunk_index)
     detail::diff_ptr diff(raw_diff);
 
     return apply_hunk_to_index(r.get(), diff.get(), hunk_index);
+}
+
+// Find, in `diff`, the patch for the delta whose new-side path is `path`.
+// Returns nullptr if no delta matches.
+static detail::patch_ptr patch_for_path(git_diff *diff, const std::string &path)
+{
+    const size_t ndeltas = git_diff_num_deltas(diff);
+    for (size_t di = 0; di < ndeltas; ++di) {
+        const git_diff_delta *delta = git_diff_get_delta(diff, di);
+        if (!delta || !delta->new_file.path || path != delta->new_file.path)
+            continue;
+        git_patch *raw = nullptr;
+        if (git_patch_from_diff(&raw, diff, di) != 0)
+            return nullptr;
+        return detail::patch_ptr(raw);
+    }
+    return nullptr;
+}
+
+// Synthesize a single-hunk unified-diff text covering only the selected lines
+// of `patch`'s hunk `hunk_index`. Unselected additions are omitted; unselected
+// deletions become context (so they survive unchanged on the side we apply
+// to). The header uses the hunk's old_start for both sides because the patch is
+// applied against that baseline (the index for staging, HEAD for unstaging).
+static std::string build_region_patch(git_patch *patch, std::size_t hunk_index,
+                                       std::size_t sel_first,
+                                       std::size_t sel_last,
+                                       const std::string &path)
+{
+    const git_diff_hunk *gh = nullptr;
+    size_t nlines = 0;
+    if (git_patch_get_hunk(&gh, &nlines, patch, hunk_index) != 0)
+        return {};
+
+    std::string body;
+    int old_count = 0, new_count = 0;
+    for (size_t li = 0; li < nlines; ++li) {
+        const git_diff_line *gl = nullptr;
+        if (git_patch_get_line_in_hunk(&gl, patch, hunk_index, li) != 0)
+            continue;
+        std::string content(gl->content, gl->content_len);
+        const bool selected = li >= sel_first && li <= sel_last;
+        switch (gl->origin) {
+        case GIT_DIFF_LINE_CONTEXT:
+            body += ' ' + content;
+            ++old_count, ++new_count;
+            break;
+        case GIT_DIFF_LINE_ADDITION:
+            if (selected) {
+                body += '+' + content;
+                ++new_count;
+            } // unselected addition: dropped entirely
+            break;
+        case GIT_DIFF_LINE_DELETION:
+            if (selected) {
+                body += '-' + content;
+                ++old_count;
+            } else { // unselected deletion: keep the line as context
+                body += ' ' + content;
+                ++old_count, ++new_count;
+            }
+            break;
+        default: // EOFNL markers etc.: pass through verbatim
+            body += content;
+            break;
+        }
+    }
+
+    char header[128];
+    std::snprintf(header, sizeof header, "@@ -%d,%d +%d,%d @@\n", gh->old_start,
+                  old_count, gh->old_start, new_count);
+    return "diff --git a/" + path + " b/" + path + "\n--- a/" + path +
+           "\n+++ b/" + path + "\n" + header + body;
+}
+
+// Apply a hand-built unified-diff text to `location` (INDEX for staging).
+static std::expected<void, error>
+apply_patch_text(git_repository *repo, const std::string &text,
+                 git_apply_location_t location)
+{
+    git_diff *raw = nullptr;
+    if (git_diff_from_buffer(&raw, text.data(), text.size()) != 0)
+        return std::unexpected(last_error());
+    detail::diff_ptr partial(raw);
+
+    git_apply_options aopts;
+    git_apply_options_init(&aopts, GIT_APPLY_OPTIONS_VERSION);
+    if (git_apply(repo, partial.get(), location, &aopts) != 0)
+        return std::unexpected(last_error());
+    return {};
+}
+
+std::expected<void, error>
+stage_region(std::string repo, std::string path, std::size_t hunk_index,
+             std::size_t sel_first, std::size_t sel_last)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    char *paths[1] = {const_cast<char *>(path.c_str())};
+    git_diff_options opts;
+    path_scoped_diff_opts(opts, paths);
+
+    // index -> workdir: the unstaged changes; a region patch built from this
+    // and applied to the index stages exactly the selected lines.
+    git_diff *raw_diff = nullptr;
+    if (git_diff_index_to_workdir(&raw_diff, r.get(), nullptr, &opts) != 0)
+        return std::unexpected(last_error());
+    detail::diff_ptr diff(raw_diff);
+
+    detail::patch_ptr patch = patch_for_path(diff.get(), path);
+    if (!patch)
+        return std::unexpected(error{0, "no diff for path"});
+
+    std::string text =
+        build_region_patch(patch.get(), hunk_index, sel_first, sel_last, path);
+    return apply_patch_text(r.get(), text, GIT_APPLY_LOCATION_INDEX);
+}
+
+std::expected<void, error>
+unstage_region(std::string repo, std::string path, std::size_t hunk_index,
+               std::size_t sel_first, std::size_t sel_last)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    // Snapshot the index as a tree (its staged content), as unstage_hunk does.
+    git_index *raw_idx = nullptr;
+    if (git_repository_index(&raw_idx, r.get()) != 0)
+        return std::unexpected(last_error());
+    detail::index_ptr idx(raw_idx);
+    git_oid index_tree_oid;
+    if (git_index_write_tree(&index_tree_oid, idx.get()) != 0)
+        return std::unexpected(last_error());
+    git_tree *raw_index_tree = nullptr;
+    if (git_tree_lookup(&raw_index_tree, r.get(), &index_tree_oid) != 0)
+        return std::unexpected(last_error());
+    detail::tree_ptr index_tree(raw_index_tree);
+
+    git_object *raw_head_tree = nullptr;
+    git_revparse_single(&raw_head_tree, r.get(), "HEAD^{tree}");
+    detail::object_ptr head_tree(raw_head_tree);
+
+    char *paths[1] = {const_cast<char *>(path.c_str())};
+    git_diff_options opts;
+    path_scoped_diff_opts(opts, paths);
+
+    // index -> HEAD: the reverse of the staged view. Its hunks mirror the
+    // staged diff's (same context, same line positions), so the selected
+    // indices carry over; its context lines come from the index, matching the
+    // apply baseline. A region patch built here and applied to the index rolls
+    // exactly the selected lines back toward HEAD.
+    git_diff *raw_diff = nullptr;
+    if (git_diff_tree_to_tree(&raw_diff, r.get(), index_tree.get(),
+                              reinterpret_cast<git_tree *>(head_tree.get()),
+                              &opts) != 0)
+        return std::unexpected(last_error());
+    detail::diff_ptr diff(raw_diff);
+
+    detail::patch_ptr patch = patch_for_path(diff.get(), path);
+    if (!patch)
+        return std::unexpected(error{0, "no diff for path"});
+
+    std::string text =
+        build_region_patch(patch.get(), hunk_index, sel_first, sel_last, path);
+    return apply_patch_text(r.get(), text, GIT_APPLY_LOCATION_INDEX);
 }
 
 } // namespace mg::git
