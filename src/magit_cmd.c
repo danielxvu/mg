@@ -68,6 +68,8 @@ static int	magit_line_index(void);
 static const char *magit_log_oid_at_point(void);
 static int	magit_at_point(char **, int *);
 static int	magit_log(int, int);
+static int	magit_log_file(int, int);
+static int	magit_log_open(int, int);
 static int	magit_blame(int, int);
 static int	magit_cherrypick(int, int);
 static int	magit_log_visit(int, int);
@@ -123,6 +125,10 @@ static int	magit_expanded_count;
 #define MAGIT_OID_LEN 64
 static char	magit_log_oid[MAGIT_MAX_LINES][MAGIT_OID_LEN];
 static int	magit_log_count;
+
+/* When non-empty, *magit-log* is filtered to commits touching this file (l f);
+ * empty means the whole-repo log (l l). */
+static char	magit_log_file_path[PATH_MAX];
 
 /* Interactive-rebase plan backing the *git-rebase-todo* buffer. Each entry is
  * one commit; the buffer is a rendered view of this array (line i = entry i). */
@@ -238,6 +244,20 @@ static struct KEYMAPE (4) magit_bisectmenu = {
 		{ 's', 's', bisect_s, NULL }	/* Z s: start */
 	}
 };
+
+/* Log menu: l l whole-repo log, l f log of a file. Ascending. */
+static PF log_f[] = { magit_log_file };
+static PF log_l[] = { magit_log };
+
+static struct KEYMAPE (2) magit_logmenu = {
+	2,
+	2,
+	rescan,
+	{
+		{ 'f', 'f', log_f, NULL },	/* l f: log file */
+		{ 'l', 'l', log_l, NULL }	/* l l: log all */
+	}
+};
 static PF magit_a[] = { magit_stash_apply };
 static PF magit_b[] = { NULL };			/* b -> branch menu prefix */
 static PF magit_c[] = { NULL };			/* c -> commit menu prefix */
@@ -245,7 +265,7 @@ static PF magit_g[] = { magit_refresh };
 static PF magit_i[] = { magit_ignore };
 static PF magit_k[] = { magit_discard };
 static PF magit_q[] = { delwind };
-static PF magit_l[] = { magit_log };
+static PF magit_l[] = { NULL };			/* l -> log menu prefix */
 static PF magit_r[] = { NULL };			/* r -> rebase menu prefix */
 static PF magit_s[] = { magit_stage };
 static PF magit_t[] = { NULL };			/* t -> tag menu prefix */
@@ -492,7 +512,7 @@ static struct KEYMAPE (29) magitmap = {
 		{ 'g', 'g', magit_g, NULL },
 		{ 'i', 'i', magit_i, NULL },			/* i: gitignore */
 		{ 'k', 'k', magit_k, NULL },
-		{ 'l', 'l', magit_l, NULL },			/* l: log buffer */
+		{ 'l', 'l', magit_l, (KEYMAP *)&magit_logmenu }, /* l: log menu */
 		{ 'm', 'm', magit_m, NULL },			/* m: merge */
 		{ 'q', 'q', magit_q, NULL },
 		{ 'r', 'r', magit_r, (KEYMAP *)&magit_rebasemenu }, /* r: rebase menu */
@@ -747,7 +767,11 @@ magit_log_build(struct buffer *bp)
 	bp->b_flag |= BFREADONLY;
 
 	magit_log_count = 0;
-	(void)mg_magit_log_buffer(cwd, 100, magit_log_emit, bp);
+	if (magit_log_file_path[0] != '\0')
+		(void)mg_magit_log_file_buffer(cwd, magit_log_file_path, 100,
+		    magit_log_emit, bp);
+	else
+		(void)mg_magit_log_buffer(cwd, 100, magit_log_emit, bp);
 
 	bp->b_dotp = bfirstlp(bp);
 	bp->b_doto = 0;
@@ -762,9 +786,9 @@ magit_log_build(struct buffer *bp)
 	return (TRUE);
 }
 
-/* l: open the *magit-log* buffer (commit history, newest first). */
+/* Build + pop the *magit-log* buffer (honoring magit_log_file_path). */
 static int
-magit_log(int f, int n)
+magit_log_open(int f, int n)
 {
 	struct buffer	*bp;
 	struct mgwin	*wp;
@@ -784,6 +808,36 @@ magit_log(int f, int n)
 	bp->b_modes[1] = name_mode("magit-log-mode");
 	bp->b_nmodes = 1;
 	return (TRUE);
+}
+
+/* l l: open the *magit-log* buffer for the whole repo (newest first). */
+static int
+magit_log(int f, int n)
+{
+	magit_log_file_path[0] = '\0';
+	return (magit_log_open(f, n));
+}
+
+/*
+ * l f: log only the commits that touched a file -- the file at point (a
+ * staged/unstaged/untracked entry), else prompt for a path.
+ */
+static int
+magit_log_file(int f, int n)
+{
+	char	*path = NULL;
+	int	 kind, hunk;
+
+	kind = magit_at_point(&path, &hunk);
+	if ((kind == MG_LINE_UNSTAGED || kind == MG_LINE_STAGED ||
+	    kind == MG_LINE_UNTRACKED) && path != NULL && path[0] != '\0')
+		(void)strlcpy(magit_log_file_path, path,
+		    sizeof(magit_log_file_path));
+	else if (eread("Log file: ", magit_log_file_path,
+	    sizeof(magit_log_file_path), EFNEW | EFCR) == NULL ||
+	    magit_log_file_path[0] == '\0')
+		return (ABORT);
+	return (magit_log_open(f, n));
 }
 
 static int

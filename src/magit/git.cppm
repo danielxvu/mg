@@ -11,6 +11,7 @@ module;
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -212,6 +213,12 @@ commits_range(std::string path, std::string onto);
 
 std::expected<std::vector<commit_brief>, error>
 recent_commits(std::string path, std::size_t n);
+
+// Up to `n` recent commits (newest first) that changed `file` -- a commit
+// whose blob for `file` differs from its first parent's (or that introduces
+// it). magit's "log of a file".
+std::expected<std::vector<commit_brief>, error>
+log_file(std::string repo, std::string file, std::size_t n);
 
 // The repository's stash entries, most recent first.
 std::expected<std::vector<stash_entry>, error> stashes(std::string path);
@@ -725,6 +732,76 @@ recent_commits(std::string path, std::size_t n)
             if (const char *s = git_commit_summary(commit.get()))
                 cb.summary = s;
         }
+        out.push_back(std::move(cb));
+    }
+    return out;
+}
+
+std::expected<std::vector<commit_brief>, error>
+log_file(std::string path, std::string file, std::size_t n)
+{
+    detail::init_guard guard;
+    git_repository *raw_repo = nullptr;
+    if (git_repository_open_ext(&raw_repo, path.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr repo(raw_repo);
+
+    std::vector<commit_brief> out;
+    git_revwalk *raw_walk = nullptr;
+    if (git_revwalk_new(&raw_walk, repo.get()) != 0)
+        return std::unexpected(last_error());
+    detail::revwalk_ptr walk(raw_walk);
+    // Topological keeps a child strictly before its parents (newest-first for a
+    // linear history) even when commits share a timestamp.
+    git_revwalk_sorting(walk.get(), GIT_SORT_TOPOLOGICAL | GIT_SORT_TIME);
+    if (git_revwalk_push_head(walk.get()) != 0)
+        return out; // unborn / no HEAD -> no commits
+
+    // The blob oid for `file` in `commit`'s tree, or nullopt if absent.
+    auto blob_at = [&](git_commit *commit) -> std::optional<git_oid> {
+        git_tree *raw_tree = nullptr;
+        if (git_commit_tree(&raw_tree, commit) != 0)
+            return std::nullopt;
+        detail::tree_ptr tree(raw_tree);
+        git_tree_entry *raw_entry = nullptr;
+        if (git_tree_entry_bypath(&raw_entry, tree.get(), file.c_str()) != 0)
+            return std::nullopt;
+        std::unique_ptr<git_tree_entry, decltype(&git_tree_entry_free)> entry(
+            raw_entry, git_tree_entry_free);
+        return *git_tree_entry_id(entry.get());
+    };
+
+    git_oid oid;
+    while (out.size() < n && git_revwalk_next(&oid, walk.get()) == 0) {
+        git_commit *raw_commit = nullptr;
+        if (git_commit_lookup(&raw_commit, repo.get(), &oid) != 0)
+            continue;
+        detail::commit_ptr commit(raw_commit);
+        auto here = blob_at(commit.get());
+
+        // Touched iff `file`'s blob differs from the first parent's (or this is
+        // a root commit that introduces the file).
+        bool touched;
+        if (git_commit_parentcount(commit.get()) == 0) {
+            touched = here.has_value();
+        } else {
+            git_commit *raw_parent = nullptr;
+            std::optional<git_oid> there;
+            if (git_commit_parent(&raw_parent, commit.get(), 0) == 0) {
+                detail::commit_ptr parent(raw_parent);
+                there = blob_at(parent.get());
+            }
+            touched = here.has_value() != there.has_value() ||
+                      (here && there && !git_oid_equal(&*here, &*there));
+        }
+        if (!touched)
+            continue;
+
+        commit_brief cb;
+        cb.short_oid = detail::short_oid(&oid);
+        cb.oid = detail::full_oid(&oid);
+        if (const char *s = git_commit_summary(commit.get()))
+            cb.summary = s;
         out.push_back(std::move(cb));
     }
     return out;

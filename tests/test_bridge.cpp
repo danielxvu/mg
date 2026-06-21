@@ -588,6 +588,69 @@ TEST_CASE("mg_magit_log_buffer emits commit lines carrying the full oid")
     fs::remove_all(dir);
 }
 
+TEST_CASE("mg_magit_log_file_buffer emits only commits that touched the file")
+{
+    auto dir = make_temp_dir();
+    auto repo = dir.string();
+    auto commit = [&](const char *file, const char *body, const char *msg) {
+        git_libgit2_init();
+        git_repository *r2 = nullptr;
+        if (!std::filesystem::exists(dir / ".git"))
+            REQUIRE(git_repository_init(&r2, repo.c_str(), 0) == 0);
+        else
+            REQUIRE(git_repository_open(&r2, repo.c_str()) == 0);
+        git_config *cfg = nullptr;
+        REQUIRE(git_repository_config(&cfg, r2) == 0);
+        git_config_set_string(cfg, "user.name", "T");
+        git_config_set_string(cfg, "user.email", "t@t");
+        git_config_free(cfg);
+        std::ofstream(dir / file) << body;
+        git_index *idx = nullptr;
+        REQUIRE(git_repository_index(&idx, r2) == 0);
+        REQUIRE(git_index_add_bypath(idx, file) == 0);
+        REQUIRE(git_index_write(idx) == 0);
+        git_oid toid;
+        REQUIRE(git_index_write_tree(&toid, idx) == 0);
+        git_tree *tree = nullptr;
+        REQUIRE(git_tree_lookup(&tree, r2, &toid) == 0);
+        git_signature *sig = nullptr;
+        REQUIRE(git_signature_now(&sig, "T", "t@t") == 0);
+        git_oid head;
+        bool born = git_reference_name_to_id(&head, r2, "HEAD") == 0;
+        git_commit *parent = nullptr;
+        if (born)
+            git_commit_lookup(&parent, r2, &head);
+        const git_commit *parents[1] = {parent};
+        git_oid out;
+        REQUIRE(git_commit_create(&out, r2, "HEAD", sig, sig, nullptr, msg, tree,
+                                  born ? 1 : 0, born ? parents : nullptr) == 0);
+        if (parent)
+            git_commit_free(parent);
+        git_signature_free(sig);
+        git_tree_free(tree);
+        git_index_free(idx);
+        git_repository_free(r2);
+        git_libgit2_shutdown();
+    };
+    commit("a.txt", "a\n", "C1");
+    commit("target.txt", "t\n", "add target");
+    commit("a.txt", "a\nb\n", "edit a");
+    commit("target.txt", "t\nu\n", "edit target");
+
+    std::vector<std::string> lines;
+    int n = mg_magit_log_file_buffer(
+        repo.c_str(), "target.txt", 50,
+        [](void *ctx, const char *line, int, const char *, int) {
+            static_cast<std::vector<std::string> *>(ctx)->push_back(line);
+        },
+        &lines);
+    CHECK(n == 2);
+    REQUIRE(lines.size() == 2);
+    CHECK(lines[0].find("edit target") != std::string::npos); // newest first
+    CHECK(lines[1].find("add target") != std::string::npos);
+    fs::remove_all(dir);
+}
+
 TEST_CASE("mg_magit_stash_push then stash_pop round-trip through the bridge")
 {
     auto dir = make_repo_one_hunk(); // committed f.txt with a dirty change

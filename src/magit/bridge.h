@@ -59,6 +59,11 @@ int mg_magit_status_buffer(const char *repo_path, const char *const *expanded,
 int mg_magit_log_buffer(const char *repo_path, int n, mg_magit_emit_fn emit,
                         void *ctx);
 
+/* Like mg_magit_log_buffer, but limited to the up-to-`n` commits that changed
+ * `file` (repo-relative). Returns the number of lines emitted. */
+int mg_magit_log_file_buffer(const char *repo_path, const char *file, int n,
+                             mg_magit_emit_fn emit, void *ctx);
+
 /* Compose a *magit-commit* buffer for commit `rev`: a header line then its diff
  * (MG_LINE_HUNK / MG_LINE_DIFF). Returns the number of lines emitted, 0 on a
  * bad rev. */

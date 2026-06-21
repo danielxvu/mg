@@ -1546,6 +1546,26 @@ TEST_CASE("set_note / read_note / remove_note round-trip")
     fs::remove_all(dir);
 }
 
+TEST_CASE("log_file returns only the commits that touched a given file")
+{
+    auto dir = make_repo_with_commit("base"); // commits a.txt
+    commit_file(dir, "foo.txt", "one\n", "add foo");        // touches foo
+    commit_file(dir, "bar.txt", "x\n", "add bar");          // not foo
+    commit_file(dir, "foo.txt", "one\ntwo\n", "edit foo");  // touches foo
+    commit_file(dir, "bar.txt", "x\ny\n", "edit bar");      // not foo
+
+    auto log = mg::git::log_file(dir.string(), "foo.txt", 50);
+    REQUIRE(log.has_value());
+    REQUIRE(log->size() == 2); // only "add foo" and "edit foo"
+    CHECK((*log)[0].summary == "edit foo"); // newest first
+    CHECK((*log)[1].summary == "add foo");
+
+    auto missing = mg::git::log_file(dir.string(), "nope.txt", 50);
+    REQUIRE(missing.has_value());
+    CHECK(missing->empty());
+    fs::remove_all(dir);
+}
+
 TEST_CASE("submodules lists each registered submodule's name and path")
 {
     auto parent = make_repo_with_commit("base");

@@ -336,6 +336,26 @@ extern "C" int mg_magit_log_buffer(const char *repo_path, int n_commits,
     return n;
 }
 
+extern "C" int mg_magit_log_file_buffer(const char *repo_path, const char *file,
+                                        int n_commits, mg_magit_emit_fn emit,
+                                        void *ctx)
+{
+    if (repo_path == nullptr || file == nullptr || emit == nullptr ||
+        n_commits <= 0)
+        return 0;
+
+    int n = 0;
+    auto commits = mg::git::log_file(repo_path, file, n_commits);
+    if (!commits)
+        return 0;
+    for (const auto &c : *commits) {
+        emit(ctx, (c.short_oid + " " + c.summary).c_str(), MG_LINE_COMMIT,
+             c.oid.c_str(), -1);
+        ++n;
+    }
+    return n;
+}
+
 extern "C" int mg_magit_commit_diff(const char *repo_path, const char *rev,
                                     mg_magit_emit_fn emit, void *ctx)
 {
