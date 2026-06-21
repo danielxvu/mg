@@ -5,6 +5,8 @@
 // freed on every path; errors surface as std::expected, never raw int codes.
 
 module;
+#include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <cstdio>
 #include <expected>
@@ -450,6 +452,13 @@ conflict_hunks(std::string repo, std::string path);
 std::expected<void, error>
 resolve_conflict_hunk(std::string repo, std::string path, std::size_t index,
                       conflict_side side);
+
+// Word-level refinement: return `text` with each word NOT shared with `other`
+// (by a word-level LCS) wrapped in `open`..`close` -- the textual form of
+// ediff's intra-line highlight. Whitespace + newlines are preserved. Returns
+// `text` unchanged if either side is very large.
+std::string refine_words(std::string text, std::string other, std::string open,
+                         std::string close);
 
 // Set / remove / read the (default refs/notes/commits) note on commit `rev`.
 // set overwrites any existing note; read returns "" when there is none.
@@ -1388,6 +1397,74 @@ conflict_hunks(std::string repo, std::string path)
          parse_conflicts(read_lines(std::filesystem::path(wd) / path)))
         out.push_back({join_lines(h.ours), join_lines(h.theirs)});
     return out;
+}
+
+namespace {
+// Split `s` into (token, is_word) pairs: a word is a maximal non-space run, a
+// separator a maximal space/tab/newline run. Reassembling the tokens == `s`.
+std::vector<std::pair<std::string, bool>> tokenize(const std::string &s)
+{
+    std::vector<std::pair<std::string, bool>> toks;
+    std::size_t i = 0;
+    while (i < s.size()) {
+        bool word = !std::isspace((unsigned char)s[i]);
+        std::size_t j = i;
+        while (j < s.size() && (!std::isspace((unsigned char)s[j])) == word)
+            ++j;
+        toks.emplace_back(s.substr(i, j - i), word);
+        i = j;
+    }
+    return toks;
+}
+} // namespace
+
+std::string refine_words(std::string text, std::string other, std::string open,
+                         std::string close)
+{
+    auto toks = tokenize(text);
+    std::vector<std::string> tw, ow;
+    for (const auto &t : toks)
+        if (t.second)
+            tw.push_back(t.first);
+    for (const auto &t : tokenize(other))
+        if (t.second)
+            ow.push_back(t.first);
+
+    const std::size_t n = tw.size(), m = ow.size();
+    if (n == 0 || n * m > 4'000'000u) // nothing to do / too large
+        return text;
+
+    // LCS over word sequences; backtrack to mark text words that are shared.
+    std::vector<std::vector<int>> dp(n + 1, std::vector<int>(m + 1, 0));
+    for (std::size_t i = 1; i <= n; ++i)
+        for (std::size_t j = 1; j <= m; ++j)
+            dp[i][j] = tw[i - 1] == ow[j - 1]
+                           ? dp[i - 1][j - 1] + 1
+                           : std::max(dp[i - 1][j], dp[i][j - 1]);
+    std::vector<bool> shared(n, false);
+    for (std::size_t i = n, j = m; i > 0 && j > 0;) {
+        if (tw[i - 1] == ow[j - 1]) {
+            shared[i - 1] = true;
+            --i;
+            --j;
+        } else if (dp[i - 1][j] >= dp[i][j - 1]) {
+            --i;
+        } else {
+            --j;
+        }
+    }
+
+    std::string outs;
+    std::size_t w = 0;
+    for (const auto &t : toks) {
+        if (t.second && !shared[w])
+            outs += open + t.first + close;
+        else
+            outs += t.first;
+        if (t.second)
+            ++w;
+    }
+    return outs;
 }
 
 std::expected<void, error>

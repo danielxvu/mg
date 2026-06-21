@@ -1340,6 +1340,35 @@ TEST_CASE("mg_magit_conflict_hunks emits regions; resolve_conflict_hunk rewrites
     fs::remove_all(dir);
 }
 
+TEST_CASE("mg_magit_conflict_hunk_side refines the words unique to each side")
+{
+    auto dir = make_temp_dir();
+    auto repo = dir.string();
+    git_libgit2_init();
+    git_repository *r0 = nullptr;
+    REQUIRE(git_repository_init(&r0, repo.c_str(), 0) == 0);
+    git_repository_free(r0);
+    git_libgit2_shutdown();
+
+    std::ofstream(dir / "f.txt")
+        << "<<<<<<< HEAD\nthe quick brown fox\n=======\n"
+        << "the slow brown fox\n>>>>>>> x\n";
+
+    auto side = [&](int s) {
+        std::string t;
+        mg_magit_conflict_hunk_side(
+            repo.c_str(), "f.txt", 0, s,
+            [](void *ctx, const char *line, int, const char *, int) {
+                static_cast<std::string *>(ctx)->append(line).append("\n");
+            },
+            &t);
+        return t;
+    };
+    CHECK(side(0).find("the [-quick-] brown fox") != std::string::npos);
+    CHECK(side(1).find("the {+slow+} brown fox") != std::string::npos);
+    fs::remove_all(dir);
+}
+
 TEST_CASE("mg_magit_merge returns 2 (left conflicts), then commit completes it")
 {
     auto dir = make_temp_dir();

@@ -1772,6 +1772,23 @@ TEST_CASE("conflicts lists unmerged paths and resolve_conflict picks a side")
     fs::remove_all(dir);
 }
 
+TEST_CASE("refine_words wraps only the words unique to a side")
+{
+    using mg::git::refine_words;
+    // "quick" differs; the shared words stay plain.
+    CHECK(refine_words("the quick brown fox", "the slow brown fox", "[-", "-]") ==
+          "the [-quick-] brown fox");
+    CHECK(refine_words("the slow brown fox", "the quick brown fox", "{+", "+}") ==
+          "the {+slow+} brown fox");
+    // Whitespace + newlines preserved; multiple changed words each wrapped.
+    CHECK(refine_words("a X\nc Y", "a b\nc d", "<", ">") == "a <X>\nc <Y>");
+    // Identical -> nothing wrapped.
+    CHECK(refine_words("same line", "same line", "[-", "-]") == "same line");
+    // Pure insertion on this side.
+    CHECK(refine_words("one two three", "one three", "[-", "-]") ==
+          "one [-two-] three");
+}
+
 TEST_CASE("conflict_hunks parses regions and resolve_conflict_hunk rewrites them")
 {
     auto dir = make_repo_with_commit("C1");

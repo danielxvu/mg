@@ -773,7 +773,12 @@ extern "C" int mg_magit_conflict_hunk_side(const char *repo_path,
     auto hs = mg::git::conflict_hunks(repo_path, path);
     if (!hs || index >= static_cast<int>(hs->size()))
         return 0;
-    const std::string &text = side == 0 ? (*hs)[index].ours : (*hs)[index].theirs;
+    // Word-level refinement: wrap the words unique to this side (ediff's
+    // intra-line highlight, rendered textually since cells are whole-line color).
+    const std::string &mine = side == 0 ? (*hs)[index].ours : (*hs)[index].theirs;
+    const std::string &other = side == 0 ? (*hs)[index].theirs : (*hs)[index].ours;
+    const std::string text = side == 0 ? mg::git::refine_words(mine, other, "[-", "-]")
+                                       : mg::git::refine_words(mine, other, "{+", "+}");
 
     int n = 0;
     std::size_t pos = 0;
