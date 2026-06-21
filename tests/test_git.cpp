@@ -706,6 +706,31 @@ TEST_CASE("upstream_status reports the upstream name and ahead/behind counts")
     fs::remove_all(dir);
 }
 
+TEST_CASE("upstream_commits lists the unpushed and unpulled commits")
+{
+    auto dir = make_repo_ahead_behind(); // topic: C3 unpushed, C2 unpulled
+
+    auto unpushed = mg::git::upstream_commits(dir.string(), /*unpushed=*/true);
+    REQUIRE(unpushed.has_value());
+    REQUIRE(unpushed->size() == 1);
+    CHECK((*unpushed)[0].summary == "C3");
+
+    auto unpulled = mg::git::upstream_commits(dir.string(), /*unpushed=*/false);
+    REQUIRE(unpulled.has_value());
+    REQUIRE(unpulled->size() == 1);
+    CHECK((*unpulled)[0].summary == "C2");
+    fs::remove_all(dir);
+}
+
+TEST_CASE("upstream_commits is empty without an upstream")
+{
+    auto dir = make_repo_with_commit("base");
+    auto c = mg::git::upstream_commits(dir.string(), true);
+    REQUIRE(c.has_value());
+    CHECK(c->empty());
+    fs::remove_all(dir);
+}
+
 TEST_CASE("upstream_status reports no upstream when none is configured")
 {
     auto dir = make_repo_with_commit("base"); // master, no upstream set

@@ -225,6 +225,21 @@ extern "C" int mg_magit_status_buffer(const char *repo_path,
         section("Staged changes", staged, true, true, MG_LINE_STAGED, true);
     }
 
+    auto commit_section = [&](const char *title,
+                              std::vector<mg::git::commit_brief> &&commits) {
+        if (commits.empty())
+            return;
+        out("");
+        out(std::string(title) + " (" + std::to_string(commits.size()) + ")",
+            MG_LINE_SECTION);
+        for (const auto &c : commits)
+            out("  " + c.short_oid + " " + c.summary);
+    };
+    if (auto up = mg::git::upstream_commits(repo_path, /*unpushed=*/false))
+        commit_section("Unpulled commits", std::move(*up));
+    if (auto up = mg::git::upstream_commits(repo_path, /*unpushed=*/true))
+        commit_section("Unpushed commits", std::move(*up));
+
     if (auto stashes = mg::git::stashes(repo_path);
         stashes && !stashes->empty()) {
         out("");

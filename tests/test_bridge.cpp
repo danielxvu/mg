@@ -535,6 +535,23 @@ TEST_CASE("mg_magit_status_buffer shows the upstream and ahead/behind counts")
     fs::remove_all(dir);
 }
 
+TEST_CASE("mg_magit_status_buffer emits Unpushed and Unpulled sections")
+{
+    auto dir = make_repo_ahead_behind(); // C3 unpushed, C2 unpulled
+    std::string text;
+    mg_magit_status_buffer(
+        dir.string().c_str(), nullptr, 0,
+        [](void *ctx, const char *line, int, const char *, int) {
+            (static_cast<std::string *>(ctx))->append(line).append("\n");
+        },
+        &text);
+    CHECK(text.find("Unpushed") != std::string::npos);
+    CHECK(text.find("C3") != std::string::npos);
+    CHECK(text.find("Unpulled") != std::string::npos);
+    CHECK(text.find("C2") != std::string::npos);
+    fs::remove_all(dir);
+}
+
 TEST_CASE("mg_magit_discard removes an untracked file")
 {
     auto dir = make_repo_with_changes(); // untracked.txt is untracked

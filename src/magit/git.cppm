@@ -173,6 +173,12 @@ std::expected<head_info, error> read_head(std::string path);
 // The current branch's upstream tracking status (name + ahead/behind counts).
 std::expected<upstream_info, error> upstream_status(std::string path);
 
+// Commits that diverge from the upstream: unpushed (on HEAD, not upstream) when
+// `unpushed` is true, else unpulled (on upstream, not HEAD). Empty if no
+// upstream. Newest first.
+std::expected<std::vector<commit_brief>, error>
+upstream_commits(std::string path, bool unpushed);
+
 std::expected<std::vector<commit_brief>, error>
 recent_commits(std::string path, std::size_t n);
 
@@ -380,6 +386,60 @@ std::expected<upstream_info, error> upstream_status(std::string path)
     }
     info.has_upstream = true;
     return info;
+}
+
+std::expected<std::vector<commit_brief>, error>
+upstream_commits(std::string path, bool unpushed)
+{
+    detail::init_guard guard;
+    git_repository *raw_repo = nullptr;
+    if (git_repository_open_ext(&raw_repo, path.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr repo(raw_repo);
+
+    std::vector<commit_brief> out;
+
+    git_reference *raw_head = nullptr;
+    if (git_repository_head(&raw_head, repo.get()) != 0)
+        return out; // unborn -> nothing diverges
+    detail::ref_ptr head(raw_head);
+
+    git_reference *raw_up = nullptr;
+    if (git_branch_upstream(&raw_up, head.get()) != 0)
+        return out; // no upstream
+    detail::ref_ptr up(raw_up);
+
+    const git_oid *head_oid = git_reference_target(head.get());
+    const git_oid *up_oid = git_reference_target(up.get());
+    if (head_oid == nullptr || up_oid == nullptr)
+        return out;
+
+    git_revwalk *raw_walk = nullptr;
+    if (git_revwalk_new(&raw_walk, repo.get()) != 0)
+        return std::unexpected(last_error());
+    detail::revwalk_ptr walk(raw_walk);
+    git_revwalk_sorting(walk.get(), GIT_SORT_TIME);
+
+    // unpushed = HEAD ^upstream ; unpulled = upstream ^HEAD.
+    const git_oid *push = unpushed ? head_oid : up_oid;
+    const git_oid *hide = unpushed ? up_oid : head_oid;
+    if (git_revwalk_push(walk.get(), push) != 0 ||
+        git_revwalk_hide(walk.get(), hide) != 0)
+        return std::unexpected(last_error());
+
+    git_oid oid;
+    while (git_revwalk_next(&oid, walk.get()) == 0) {
+        commit_brief cb;
+        cb.short_oid = detail::short_oid(&oid);
+        git_commit *raw_commit = nullptr;
+        if (git_commit_lookup(&raw_commit, repo.get(), &oid) == 0) {
+            detail::commit_ptr commit(raw_commit);
+            if (const char *s = git_commit_summary(commit.get()))
+                cb.summary = s;
+        }
+        out.push_back(std::move(cb));
+    }
+    return out;
 }
 
 std::expected<std::vector<commit_brief>, error>
