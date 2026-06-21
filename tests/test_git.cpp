@@ -123,6 +123,53 @@ fs::path make_repo_with_one_hunk_two_changes()
     return dir;
 }
 
+// A repo whose checked-out branch "topic" tracks "master" and is 1 commit
+// ahead (one commit only on topic) and 1 behind (one commit only on master).
+// No remote: the upstream is a local branch (branch.topic.remote = ".").
+fs::path make_repo_ahead_behind()
+{
+    auto dir = make_temp_dir();
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_init(&repo, dir.string().c_str(), 0) == 0);
+    git_repository_free(repo);
+
+    commit_file(dir, "a.txt", "base\n", "C1"); // master @ C1, HEAD -> master
+
+    REQUIRE(git_repository_open(&repo, dir.string().c_str()) == 0);
+    git_oid c1;
+    REQUIRE(git_reference_name_to_id(&c1, repo, "HEAD") == 0);
+    git_commit *base = nullptr;
+    REQUIRE(git_commit_lookup(&base, repo, &c1) == 0);
+    git_tree *tree = nullptr;
+    REQUIRE(git_commit_tree(&tree, base) == 0);
+
+    // Branch topic at C1, tracking master.
+    git_reference *topic = nullptr;
+    REQUIRE(git_branch_create(&topic, repo, "topic", base, 0) == 0);
+    REQUIRE(git_branch_set_upstream(topic, "master") == 0);
+    git_reference_free(topic);
+
+    git_signature *sig = nullptr;
+    REQUIRE(git_signature_now(&sig, "T", "t@t") == 0);
+    const git_commit *parents[1] = {base};
+    git_oid c2, c3;
+    // C2 on master (topic is now 1 behind); C3 on topic (1 ahead). Reusing
+    // C1's tree makes them empty commits -- only the graph shape matters here.
+    REQUIRE(git_commit_create(&c2, repo, "refs/heads/master", sig, sig, nullptr,
+                              "C2", tree, 1, parents) == 0);
+    REQUIRE(git_commit_create(&c3, repo, "refs/heads/topic", sig, sig, nullptr,
+                              "C3", tree, 1, parents) == 0);
+    REQUIRE(git_repository_set_head(repo, "refs/heads/topic") == 0);
+
+    git_signature_free(sig);
+    git_tree_free(tree);
+    git_commit_free(base);
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+    return dir;
+}
+
 // Set user.name/user.email so git_signature_default works (amend/commit).
 void set_test_config(const fs::path &dir)
 {
@@ -643,6 +690,30 @@ TEST_CASE("stage_region stages only the selected lines of a single hunk")
         }
     CHECK_FALSE(unstaged_B);
     CHECK(unstaged_D);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("upstream_status reports the upstream name and ahead/behind counts")
+{
+    auto dir = make_repo_ahead_behind(); // topic tracks master, 1 ahead/1 behind
+
+    auto u = mg::git::upstream_status(dir.string());
+    REQUIRE(u.has_value());
+    CHECK(u->has_upstream);
+    CHECK(u->name == "master");
+    CHECK(u->ahead == 1);
+    CHECK(u->behind == 1);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("upstream_status reports no upstream when none is configured")
+{
+    auto dir = make_repo_with_commit("base"); // master, no upstream set
+    auto u = mg::git::upstream_status(dir.string());
+    REQUIRE(u.has_value());
+    CHECK_FALSE(u->has_upstream);
+    CHECK(u->ahead == 0);
+    CHECK(u->behind == 0);
     fs::remove_all(dir);
 }
 

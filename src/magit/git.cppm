@@ -146,6 +146,13 @@ struct branch_entry {
     bool is_head;            // true for the currently checked-out branch
 };
 
+struct upstream_info {
+    bool has_upstream;       // false when the current branch tracks nothing
+    std::string name;        // upstream shorthand, e.g. "origin/master"
+    std::size_t ahead;       // commits on HEAD but not upstream (to push)
+    std::size_t behind;      // commits on upstream but not HEAD (to pull)
+};
+
 // One line of a diff: origin is git's marker ('+', '-', ' ', etc.); content
 // includes the trailing newline.
 struct diff_line {
@@ -162,6 +169,9 @@ std::expected<std::vector<mg::magit::file_status>, error>
 repo_status(std::string path);
 
 std::expected<head_info, error> read_head(std::string path);
+
+// The current branch's upstream tracking status (name + ahead/behind counts).
+std::expected<upstream_info, error> upstream_status(std::string path);
 
 std::expected<std::vector<commit_brief>, error>
 recent_commits(std::string path, std::size_t n);
@@ -327,6 +337,49 @@ std::expected<head_info, error> read_head(std::string path)
         }
     }
     return hi;
+}
+
+std::expected<upstream_info, error> upstream_status(std::string path)
+{
+    detail::init_guard guard;
+    git_repository *raw_repo = nullptr;
+    if (git_repository_open_ext(&raw_repo, path.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr repo(raw_repo);
+
+    upstream_info info{false, "", 0, 0};
+
+    git_reference *raw_head = nullptr;
+    int rc = git_repository_head(&raw_head, repo.get());
+    if (rc == GIT_EUNBORNBRANCH || rc == GIT_ENOTFOUND)
+        return info; // unborn branch: nothing to track yet
+    if (rc != 0)
+        return std::unexpected(last_error());
+    detail::ref_ptr head(raw_head);
+
+    git_reference *raw_up = nullptr;
+    rc = git_branch_upstream(&raw_up, head.get());
+    if (rc == GIT_ENOTFOUND)
+        return info; // no upstream configured
+    if (rc != 0)
+        return std::unexpected(last_error());
+    detail::ref_ptr up(raw_up);
+
+    if (const char *sh = git_reference_shorthand(up.get()))
+        info.name = sh;
+
+    const git_oid *local = git_reference_target(head.get());
+    const git_oid *upstream = git_reference_target(up.get());
+    if (local != nullptr && upstream != nullptr) {
+        std::size_t ahead = 0, behind = 0;
+        if (git_graph_ahead_behind(&ahead, &behind, repo.get(), local,
+                                   upstream) != 0)
+            return std::unexpected(last_error());
+        info.ahead = ahead;
+        info.behind = behind;
+    }
+    info.has_upstream = true;
+    return info;
 }
 
 std::expected<std::vector<commit_brief>, error>
