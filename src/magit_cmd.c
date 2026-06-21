@@ -55,6 +55,7 @@ static int	magit_tag_annotate_cmd(int, int);
 static int	magit_tag_delete_cmd(int, int);
 static int	magit_stage_all(int, int);
 static int	magit_unstage_all(int, int);
+static int	magit_ignore(int, int);
 static int	magit_region(int *, char **, int *, int *);
 static int	magit_line_index(void);
 static const char *magit_log_oid_at_point(void);
@@ -194,6 +195,7 @@ static PF magit_a[] = { magit_stash_apply };
 static PF magit_b[] = { NULL };			/* b -> branch menu prefix */
 static PF magit_c[] = { NULL };			/* c -> commit menu prefix */
 static PF magit_g[] = { magit_refresh };
+static PF magit_i[] = { magit_ignore };
 static PF magit_k[] = { magit_discard };
 static PF magit_q[] = { delwind };
 static PF magit_l[] = { magit_log };
@@ -412,9 +414,9 @@ static struct KEYMAPE (4) magit_commitmenu = {
 };
 
 /* Entries MUST stay in ascending key order -- doscan() relies on it. */
-static struct KEYMAPE (25) magitmap = {
-	25,
-	25,
+static struct KEYMAPE (26) magitmap = {
+	26,
+	26,
 	rescan,
 	{
 		{ CCHR('I'), CCHR('I'), magit_tab, NULL },	/* TAB: expand/collapse */
@@ -434,6 +436,7 @@ static struct KEYMAPE (25) magitmap = {
 		{ 'c', 'c', magit_c, (KEYMAP *)&magit_commitmenu }, /* c: commit menu */
 		{ 'f', 'f', magit_f, NULL },			/* f: fetch */
 		{ 'g', 'g', magit_g, NULL },
+		{ 'i', 'i', magit_i, NULL },			/* i: gitignore */
 		{ 'k', 'k', magit_k, NULL },
 		{ 'l', 'l', magit_l, NULL },			/* l: log buffer */
 		{ 'm', 'm', magit_m, NULL },			/* m: merge */
@@ -1046,6 +1049,7 @@ magit_help(int f, int n)
 		"  s        stage the file/hunk at point (or marked region)",
 		"  u        unstage the file/hunk at point (or marked region)",
 		"  S / U    stage all / unstage all",
+		"  i        add the file at point to .gitignore",
 		"  k        discard changes / region / drop the stash at point",
 		"  a        apply the stash at point",
 		"  A        cherry-pick (commit at point in the log, else prompt)",
@@ -1719,6 +1723,35 @@ magit_unstage(int f, int n)
 	}
 	if (mg_magit_unstage(cwd, path) != 1) {
 		ewprintf("Unstage failed");
+		return (FALSE);
+	}
+	return (magit_refresh(f, n));
+}
+
+/* i: add the file at point (a default of its name) to .gitignore. */
+static int
+magit_ignore(int f, int n)
+{
+	char	*path = NULL;
+	char	 pat[PATH_MAX], cwd[PATH_MAX];
+	int	 kind, hunk;
+
+	kind = magit_at_point(&path, &hunk);
+	if (kind != MG_LINE_UNTRACKED && kind != MG_LINE_UNSTAGED &&
+	    kind != MG_LINE_STAGED) {
+		ewprintf("Nothing to ignore on this line");
+		return (FALSE);
+	}
+	/* Prefill the prompt with the file at point (EFDEF shows buf's contents);
+	 * the user can edit it (e.g. to a glob) before confirming. */
+	(void)strlcpy(pat, path, sizeof(pat));
+	if (eread("Ignore (pattern): ", pat, sizeof(pat), EFNEW | EFCR | EFDEF) ==
+	    NULL || pat[0] == '\0')
+		return (ABORT);
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	if (mg_magit_ignore(cwd, pat) != 1) {
+		ewprintf("Ignore failed");
 		return (FALSE);
 	}
 	return (magit_refresh(f, n));

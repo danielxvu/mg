@@ -9,6 +9,7 @@ module;
 #include <cstdio>
 #include <expected>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <system_error>
@@ -331,6 +332,9 @@ std::expected<void, error> delete_tag(std::string repo, std::string name);
 
 // The repository's tag names (sorted by libgit2).
 std::expected<std::vector<std::string>, error> tags(std::string repo);
+
+// Append `pattern` as a line to the repository's top-level .gitignore.
+std::expected<void, error> ignore_path(std::string repo, std::string pattern);
 
 // Stage `file` (relative to the repo root) into the index.
 std::expected<void, error> stage(std::string repo, std::string file);
@@ -915,6 +919,28 @@ std::expected<void, error> delete_tag(std::string repo, std::string name)
     detail::repo_ptr r(raw);
     if (git_tag_delete(r.get(), name.c_str()) != 0)
         return std::unexpected(last_error());
+    return {};
+}
+
+std::expected<void, error> ignore_path(std::string repo, std::string pattern)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    const char *wd = git_repository_workdir(r.get());
+    if (wd == nullptr)
+        return std::unexpected(error{0, "no work tree"});
+
+    std::ofstream out(std::filesystem::path(wd) / ".gitignore",
+                      std::ios::app);
+    if (!out)
+        return std::unexpected(error{0, "cannot open .gitignore"});
+    out << pattern << '\n';
+    if (!out)
+        return std::unexpected(error{0, "write to .gitignore failed"});
     return {};
 }
 

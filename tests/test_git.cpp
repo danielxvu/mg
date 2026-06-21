@@ -1472,6 +1472,19 @@ TEST_CASE("create_tag / tags / delete_tag round-trip")
     fs::remove_all(dir);
 }
 
+TEST_CASE("ignore_path appends a pattern to .gitignore")
+{
+    auto dir = make_repo_with_commit("base");
+
+    REQUIRE(mg::git::ignore_path(dir.string(), "build/").has_value());
+    REQUIRE(mg::git::ignore_path(dir.string(), "*.o").has_value());
+
+    std::ifstream f(dir / ".gitignore");
+    std::string body((std::istreambuf_iterator<char>(f)), {});
+    CHECK(body == "build/\n*.o\n");
+    fs::remove_all(dir);
+}
+
 TEST_CASE("create_tag with a message makes an annotated tag")
 {
     auto dir = make_repo_with_commit("base");

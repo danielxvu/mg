@@ -613,6 +613,13 @@ extern "C" int mg_magit_tag_delete(const char *repo_path, const char *name)
     return mg::git::delete_tag(repo_path, name).has_value() ? 1 : 0;
 }
 
+extern "C" int mg_magit_ignore(const char *repo_path, const char *pattern)
+{
+    if (repo_path == nullptr || pattern == nullptr || pattern[0] == '\0')
+        return 0;
+    return mg::git::ignore_path(repo_path, pattern).has_value() ? 1 : 0;
+}
+
 extern "C" int mg_magit_cherrypick(const char *repo_path, const char *rev)
 {
     if (repo_path == nullptr || rev == nullptr || rev[0] == '\0')

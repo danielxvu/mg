@@ -198,6 +198,9 @@ int mg_magit_tag_create(const char *repo_path, const char *name,
                         const char *target, const char *message);
 int mg_magit_tag_delete(const char *repo_path, const char *name);
 
+/* Append `pattern` to the repo's top-level .gitignore. 1 ok, 0 fail. */
+int mg_magit_ignore(const char *repo_path, const char *pattern);
+
 #ifdef __cplusplus
 }
 #endif
