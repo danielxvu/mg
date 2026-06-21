@@ -139,8 +139,9 @@ typedef int (*mg_magit_cred_prompt_fn)(const char *prompt, int hidden,
 void mg_magit_set_cred_prompt(mg_magit_cred_prompt_fn fn);
 
 /* Fetch / push (current branch) / pull (fetch + merge) against `remote`
- * (NULL -> "origin"). Return 1 on success, 0 on failure. ssh uses the agent;
- * HTTPS user/password prompts via mg_magit_set_cred_prompt's callback. */
+ * (NULL -> "origin"). fetch/push: 1 ok, 0 fail. pull: 1 done, 2 left conflicts
+ * (resolve + commit), 0 fail. ssh uses the agent; HTTPS user/password prompts
+ * via mg_magit_set_cred_prompt's callback. */
 int mg_magit_fetch(const char *repo_path, const char *remote);
 int mg_magit_push(const char *repo_path, const char *remote, int force,
                   int set_upstream);
@@ -149,15 +150,16 @@ int mg_magit_pull(const char *repo_path, const char *remote);
  * conflict / 0 fail. */
 int mg_magit_pull_rebase(const char *repo_path, const char *remote);
 
-/* Reset HEAD to `rev` (mode 0=soft, 1=mixed, 2=hard) / revert commit `rev`
- * (records the inverse on HEAD) / merge local branch `name` into HEAD (ff or a
- * merge commit; conflicts abort). Return 1 on success, 0 on failure. */
+/* Reset HEAD to `rev` (mode 0=soft, 1=mixed, 2=hard): 1 ok, 0 fail.
+ * revert commit `rev` / merge local branch `name` into HEAD (ff or a merge
+ * commit): 1 done, 2 left conflicts on disk (resolve, then commit to finish),
+ * 0 failure. */
 int mg_magit_reset(const char *repo_path, const char *rev, int mode);
 int mg_magit_revert(const char *repo_path, const char *rev);
 int mg_magit_merge(const char *repo_path, const char *name);
 
 /* Cherry-pick commit `rev` onto HEAD (new commit, keeps author + message).
- * 1 ok, 0 fail (incl. conflict, which leaves the repo untouched). */
+ * 1 done, 2 left conflicts on disk (resolve, then commit), 0 failure. */
 int mg_magit_cherrypick(const char *repo_path, const char *rev);
 
 /* Rebase the current branch onto `upstream` (a branch name / revspec, e.g.

@@ -128,6 +128,7 @@ static int	magit_pull(int, int);
 static int	magit_push(int, int);
 static int	magit_pull_rebase(int, int);
 static int	magit_rebase_report(int, const char *, int, int);
+static int	magit_apply_report(int, const char *, int, int);
 static int	magit_cred_prompt(const char *, int, char *, int);
 static int	magit_rebase_upstream(int, int);
 static int	magit_rebase_elsewhere(int, int);
@@ -1302,12 +1303,8 @@ magit_cherrypick(int f, int n)
 		return (ABORT);
 	if (getcwd(cwd, sizeof(cwd)) == NULL)
 		return (FALSE);
-	if (mg_magit_cherrypick(cwd, rev) != 1) {
-		ewprintf("Cherry-pick failed (conflict or bad revision)");
-		return (FALSE);
-	}
-	ewprintf("Cherry-picked %.8s", rev);
-	return (magit_refresh(f, n));
+	return (magit_apply_report(mg_magit_cherrypick(cwd, rev), "Cherry-pick",
+	    f, n));
 }
 
 /* T in *magit-log*: set the note on the commit at point (empty input removes). */
@@ -1353,9 +1350,17 @@ magit_log_revert(int f, int n)
 		return (FALSE);
 	if (getcwd(cwd, sizeof(cwd)) == NULL)
 		return (FALSE);
-	if (mg_magit_revert(cwd, oid) != 1) {
-		ewprintf("Revert failed (conflicts?)");
-		return (FALSE);
+	{
+		int code = mg_magit_revert(cwd, oid);
+		if (code == 0) {
+			ewprintf("Revert failed");
+			return (FALSE);
+		}
+		if (code == 2) {
+			ewprintf("Revert left conflicts -- resolve in *magit-status* "
+			    "(e o / e t), then c c");
+			return (magit_refresh(f, n));
+		}
 	}
 	return (magit_log_refresh(f, n));
 }
@@ -2006,11 +2011,7 @@ magit_merge(int f, int n)
 		return (ABORT);
 	if (getcwd(cwd, sizeof(cwd)) == NULL)
 		return (FALSE);
-	if (mg_magit_merge(cwd, name) != 1) {
-		ewprintf("Merge failed (conflicts?)");
-		return (FALSE);
-	}
-	return (magit_refresh(f, n));
+	return (magit_apply_report(mg_magit_merge(cwd, name), "Merge", f, n));
 }
 
 /* V: revert a commit (prompts for a revision) -- records the inverse on HEAD. */
@@ -2024,11 +2025,7 @@ magit_revert(int f, int n)
 		return (ABORT);
 	if (getcwd(cwd, sizeof(cwd)) == NULL)
 		return (FALSE);
-	if (mg_magit_revert(cwd, rev) != 1) {
-		ewprintf("Revert failed (conflicts?)");
-		return (FALSE);
-	}
-	return (magit_refresh(f, n));
+	return (magit_apply_report(mg_magit_revert(cwd, rev), "Revert", f, n));
 }
 
 /* X h/m/s: reset HEAD (and the tree, per mode) to a prompted revision. */
@@ -2141,11 +2138,7 @@ magit_pull(int f, int n)
 	if (getcwd(cwd, sizeof(cwd)) == NULL)
 		return (FALSE);
 	ewprintf("Pulling from origin...");
-	if (mg_magit_pull(cwd, "origin") != 1) {
-		ewprintf("Pull failed (conflicts, no origin, or auth required)");
-		return (FALSE);
-	}
-	return (magit_refresh(f, n));
+	return (magit_apply_report(mg_magit_pull(cwd, "origin"), "Pull", f, n));
 }
 
 /* Shared push helper: `force` / `set_upstream` map to the engine flags. */
@@ -2201,6 +2194,25 @@ magit_rebase_report(int code, const char *what, int f, int n)
 		    "(continue) / r s (skip) / r a (abort)");
 	else
 		ewprintf("Rebase complete");
+	return (magit_refresh(f, n));
+}
+
+/*
+ * Interpret an apply-style bridge result (1 done / 2 left conflicts / 0 fail)
+ * for merge / revert / cherry-pick / pull; report and refresh the status buffer.
+ */
+static int
+magit_apply_report(int code, const char *what, int f, int n)
+{
+	if (code == 0) {
+		ewprintf("%s failed", what);
+		return (FALSE);
+	}
+	if (code == 2)
+		ewprintf("%s left conflicts -- resolve (e o / e t), then c c to "
+		    "commit", what);
+	else
+		ewprintf("%s done", what);
 	return (magit_refresh(f, n));
 }
 

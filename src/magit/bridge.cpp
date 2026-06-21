@@ -33,6 +33,16 @@ static int rebase_code(
     return *r == mg::git::rebase_result::conflicts ? 2 : 1;
 }
 
+// Same mapping for apply-style ops (merge / revert / cherry-pick / pull):
+// 1 done, 2 left conflicts on disk (resolve + commit), 0 failure.
+static int apply_code(
+    const std::expected<mg::git::apply_result, mg::git::error> &r)
+{
+    if (!r)
+        return 0;
+    return *r == mg::git::apply_result::conflicts ? 2 : 1;
+}
+
 namespace {
 
 class monitor {
@@ -613,10 +623,8 @@ extern "C" int mg_magit_pull(const char *repo_path, const char *remote)
 {
     if (repo_path == nullptr)
         return 0;
-    return mg::git::pull_remote(repo_path, remote ? remote : "origin")
-                   .has_value()
-               ? 1
-               : 0;
+    return apply_code(
+        mg::git::pull_remote(repo_path, remote ? remote : "origin"));
 }
 
 extern "C" int mg_magit_pull_rebase(const char *repo_path, const char *remote)
@@ -640,14 +648,14 @@ extern "C" int mg_magit_revert(const char *repo_path, const char *rev)
 {
     if (repo_path == nullptr || rev == nullptr)
         return 0;
-    return mg::git::revert_commit(repo_path, rev).has_value() ? 1 : 0;
+    return apply_code(mg::git::revert_commit(repo_path, rev));
 }
 
 extern "C" int mg_magit_merge(const char *repo_path, const char *name)
 {
     if (repo_path == nullptr || name == nullptr || name[0] == '\0')
         return 0;
-    return mg::git::merge_branch(repo_path, name).has_value() ? 1 : 0;
+    return apply_code(mg::git::merge_branch(repo_path, name));
 }
 
 // Map a rebase outcome to the bridge code: 1 done, 2 paused on conflicts,
@@ -745,7 +753,7 @@ extern "C" int mg_magit_cherrypick(const char *repo_path, const char *rev)
 {
     if (repo_path == nullptr || rev == nullptr || rev[0] == '\0')
         return 0;
-    return mg::git::cherry_pick(repo_path, rev).has_value() ? 1 : 0;
+    return apply_code(mg::git::cherry_pick(repo_path, rev));
 }
 
 // Copy `msg` into the caller's NUL-terminated `out` (size `outlen`).

@@ -265,20 +265,31 @@ enum class reset_mode { soft, mixed, hard };
 std::expected<void, error>
 reset_to(std::string repo, std::string rev, reset_mode mode);
 
-// Revert commit `rev`, recording the inverse as a new commit on HEAD.
-std::expected<void, error> revert_commit(std::string repo, std::string rev);
+// Outcome of an apply-style operation (merge / revert / cherry-pick): it either
+// finished, or left conflicts on disk (index + working-tree markers + the
+// in-progress *_HEAD state) for the user to resolve and then commit.
+enum class apply_result { done, conflicts };
+
+// Revert commit `rev`, recording the inverse as a new commit on HEAD. On
+// conflict, leaves the conflicted tree + REVERT_HEAD in place (resolve + commit).
+std::expected<apply_result, error>
+revert_commit(std::string repo, std::string rev);
 
 // Merge local branch `name` into HEAD: fast-forward when possible, else a
-// merge commit. Errors (leaving the tree clean) on conflicts.
-std::expected<void, error> merge_branch(std::string repo, std::string name);
+// merge commit. On conflict, leaves the conflicted tree + MERGE_HEAD in place
+// (resolve + commit makes the merge commit).
+std::expected<apply_result, error>
+merge_branch(std::string repo, std::string name);
 
 // Outcome of a rebase step: finished, or paused on a conflict (the on-disk
 // rebase state is left in place for continue/skip/abort).
 enum class rebase_result { done, conflicts };
 
 // Cherry-pick commit `rev` onto HEAD as a new commit (keeping its author +
-// message). In-memory, so a conflict leaves the repo untouched and errors.
-std::expected<void, error> cherry_pick(std::string repo, std::string rev);
+// message). On conflict, leaves the conflicted tree + CHERRY_PICK_HEAD in place
+// (resolve + commit).
+std::expected<apply_result, error>
+cherry_pick(std::string repo, std::string rev);
 
 // Rebase the current branch onto `upstream` (a branch name / revspec): replay
 // HEAD's commits since the merge-base on top of upstream. Pauses (leaving the
@@ -347,7 +358,8 @@ push_remote(std::string repo, std::string remote, bool force = false,
 
 // Fetch `remote`, then merge the current branch's remote-tracking ref into HEAD
 // (fast-forward or merge commit; conflicts abort). Magit's pull.
-std::expected<void, error> pull_remote(std::string repo, std::string remote);
+std::expected<apply_result, error>
+pull_remote(std::string repo, std::string remote);
 
 // Fetch `remote`, then rebase the current branch onto its remote-tracking ref
 // (pull --rebase). May pause on conflict (like rebase_onto).
@@ -1595,7 +1607,8 @@ reset_to(std::string repo, std::string rev, reset_mode mode)
     return {};
 }
 
-std::expected<void, error> revert_commit(std::string repo, std::string rev)
+std::expected<apply_result, error>
+revert_commit(std::string repo, std::string rev)
 {
     detail::init_guard guard;
     git_repository *raw = nullptr;
@@ -1612,6 +1625,28 @@ std::expected<void, error> revert_commit(std::string repo, std::string rev)
         return std::unexpected(last_error());
     detail::commit_ptr target(raw_target);
 
+    // Apply the revert to the index + working tree (sets REVERT_HEAD).
+    git_revert_options opts;
+    git_revert_options_init(&opts, GIT_REVERT_OPTIONS_VERSION);
+    opts.checkout_opts.checkout_strategy = GIT_CHECKOUT_SAFE;
+    if (git_revert(r.get(), target.get(), &opts) != 0)
+        return std::unexpected(last_error());
+
+    git_index *raw_idx = nullptr;
+    if (git_repository_index(&raw_idx, r.get()) != 0)
+        return std::unexpected(last_error());
+    detail::index_ptr idx(raw_idx);
+    if (git_index_has_conflicts(idx.get()))
+        return apply_result::conflicts; // leave REVERT_HEAD + markers
+
+    git_oid tree_oid;
+    if (git_index_write_tree(&tree_oid, idx.get()) != 0)
+        return std::unexpected(last_error());
+    git_tree *raw_tree = nullptr;
+    if (git_tree_lookup(&raw_tree, r.get(), &tree_oid) != 0)
+        return std::unexpected(last_error());
+    detail::tree_ptr tree(raw_tree);
+
     git_oid head_oid;
     if (git_reference_name_to_id(&head_oid, r.get(), "HEAD") != 0)
         return std::unexpected(last_error());
@@ -1619,23 +1654,6 @@ std::expected<void, error> revert_commit(std::string repo, std::string rev)
     if (git_commit_lookup(&raw_head, r.get(), &head_oid) != 0)
         return std::unexpected(last_error());
     detail::commit_ptr head(raw_head);
-
-    // Compute the reverted tree in memory (no working-tree state machine).
-    git_index *raw_idx = nullptr;
-    if (git_revert_commit(&raw_idx, r.get(), target.get(), head.get(), 0,
-                          nullptr) != 0)
-        return std::unexpected(last_error());
-    detail::index_ptr idx(raw_idx);
-    if (git_index_has_conflicts(idx.get()))
-        return std::unexpected(error{0, "revert has conflicts"});
-
-    git_oid tree_oid;
-    if (git_index_write_tree_to(&tree_oid, idx.get(), r.get()) != 0)
-        return std::unexpected(last_error());
-    git_tree *raw_tree = nullptr;
-    if (git_tree_lookup(&raw_tree, r.get(), &tree_oid) != 0)
-        return std::unexpected(last_error());
-    detail::tree_ptr tree(raw_tree);
 
     detail::sig_ptr sig = default_signature(r.get());
     if (!sig)
@@ -1648,21 +1666,15 @@ std::expected<void, error> revert_commit(std::string repo, std::string rev)
     if (git_commit_create(&commit_oid, r.get(), "HEAD", sig.get(), sig.get(),
                           nullptr, msg.c_str(), tree.get(), 1, parents) != 0)
         return std::unexpected(last_error());
-
-    // Bring the working tree + index to the new commit's content.
-    git_checkout_options opts;
-    git_checkout_options_init(&opts, GIT_CHECKOUT_OPTIONS_VERSION);
-    opts.checkout_strategy = GIT_CHECKOUT_FORCE;
-    if (git_checkout_tree(r.get(), reinterpret_cast<git_object *>(tree.get()),
-                          &opts) != 0)
-        return std::unexpected(last_error());
-    return {};
+    git_repository_state_cleanup(r.get());
+    return apply_result::done;
 }
 
 // Merge an already-resolved annotated commit into HEAD: up-to-date (noop) /
 // fast-forward (checkout + move ref) / true merge (write a 2-parent `msg`
-// commit). Conflicts abort cleanly (state_cleanup + reset --hard) with an error.
-static std::expected<void, error>
+// commit). On conflict, leaves the conflicted index + working tree + MERGE_HEAD
+// in place and returns `conflicts` (resolve + commit completes the merge).
+static std::expected<apply_result, error>
 merge_annotated(git_repository *repo, git_annotated_commit *their,
                 const std::string &msg)
 {
@@ -1673,7 +1685,7 @@ merge_annotated(git_repository *repo, git_annotated_commit *their,
         return std::unexpected(last_error());
 
     if (analysis & GIT_MERGE_ANALYSIS_UP_TO_DATE)
-        return {}; // already contains their commit
+        return apply_result::done; // already contains their commit
 
     const git_oid *their_oid = git_annotated_commit_id(their);
 
@@ -1699,7 +1711,7 @@ merge_annotated(git_repository *repo, git_annotated_commit *their,
                                      "merge: fast-forward") != 0)
             return std::unexpected(last_error());
         git_reference_free(raw_new);
-        return {};
+        return apply_result::done;
     }
 
     git_merge_options mopts;
@@ -1714,15 +1726,10 @@ merge_annotated(git_repository *repo, git_annotated_commit *their,
     if (git_repository_index(&raw_idx, repo) != 0)
         return std::unexpected(last_error());
     detail::index_ptr idx(raw_idx);
-    if (git_index_has_conflicts(idx.get())) {
-        git_repository_state_cleanup(repo);
-        git_object *raw_head_obj = nullptr;
-        if (git_revparse_single(&raw_head_obj, repo, "HEAD") == 0) {
-            detail::object_ptr ho(raw_head_obj);
-            git_reset(repo, ho.get(), GIT_RESET_HARD, nullptr);
-        }
-        return std::unexpected(error{0, "merge conflicts"});
-    }
+    if (git_index_has_conflicts(idx.get()))
+        // git_merge already wrote the conflicted index + working tree +
+        // MERGE_HEAD; leave it for the user to resolve and commit.
+        return apply_result::conflicts;
 
     git_oid tree_oid;
     if (git_index_write_tree(&tree_oid, idx.get()) != 0)
@@ -1755,10 +1762,11 @@ merge_annotated(git_repository *repo, git_annotated_commit *their,
         return std::unexpected(last_error());
 
     git_repository_state_cleanup(repo);
-    return {};
+    return apply_result::done;
 }
 
-std::expected<void, error> merge_branch(std::string repo, std::string name)
+std::expected<apply_result, error>
+merge_branch(std::string repo, std::string name)
 {
     detail::init_guard guard;
     git_repository *raw = nullptr;
@@ -1822,7 +1830,8 @@ rebase_drive(git_repository *repo, git_rebase *rebase, git_signature *sig,
     return rebase_result::done;
 }
 
-std::expected<void, error> cherry_pick(std::string repo, std::string rev)
+std::expected<apply_result, error>
+cherry_pick(std::string repo, std::string rev)
 {
     detail::init_guard guard;
     git_repository *raw = nullptr;
@@ -1844,7 +1853,28 @@ std::expected<void, error> cherry_pick(std::string repo, std::string rev)
         return std::unexpected(last_error());
     detail::commit_ptr pick(raw_pick);
 
-    // Our side = HEAD.
+    // Apply to the index + working tree (sets CHERRY_PICK_HEAD).
+    git_cherrypick_options opts;
+    git_cherrypick_options_init(&opts, GIT_CHERRYPICK_OPTIONS_VERSION);
+    opts.checkout_opts.checkout_strategy = GIT_CHECKOUT_SAFE;
+    if (git_cherrypick(r.get(), pick.get(), &opts) != 0)
+        return std::unexpected(last_error());
+
+    git_index *raw_idx = nullptr;
+    if (git_repository_index(&raw_idx, r.get()) != 0)
+        return std::unexpected(last_error());
+    detail::index_ptr idx(raw_idx);
+    if (git_index_has_conflicts(idx.get()))
+        return apply_result::conflicts; // leave CHERRY_PICK_HEAD + markers
+
+    git_oid tree_oid;
+    if (git_index_write_tree(&tree_oid, idx.get()) != 0)
+        return std::unexpected(last_error());
+    git_tree *raw_tree = nullptr;
+    if (git_tree_lookup(&raw_tree, r.get(), &tree_oid) != 0)
+        return std::unexpected(last_error());
+    detail::tree_ptr tree(raw_tree);
+
     git_oid head_oid;
     if (git_reference_name_to_id(&head_oid, r.get(), "HEAD") != 0)
         return std::unexpected(last_error());
@@ -1853,36 +1883,15 @@ std::expected<void, error> cherry_pick(std::string repo, std::string rev)
         return std::unexpected(last_error());
     detail::commit_ptr head(raw_head);
 
-    git_index *raw_idx = nullptr;
-    if (git_cherrypick_commit(&raw_idx, r.get(), pick.get(), head.get(), 0,
-                              nullptr) != 0)
-        return std::unexpected(last_error());
-    detail::index_ptr idx(raw_idx);
-    if (git_index_has_conflicts(idx.get()))
-        return std::unexpected(error{0, "cherry-pick conflict"});
-
-    git_oid tree_oid;
-    if (git_index_write_tree_to(&tree_oid, idx.get(), r.get()) != 0)
-        return std::unexpected(last_error());
-    git_tree *raw_tree = nullptr;
-    if (git_tree_lookup(&raw_tree, r.get(), &tree_oid) != 0)
-        return std::unexpected(last_error());
-    detail::tree_ptr tree(raw_tree);
-
+    // Keep the picked commit's author; we are the committer.
     const git_commit *parents[1] = {head.get()};
     git_oid new_oid;
     if (git_commit_create(&new_oid, r.get(), "HEAD", git_commit_author(pick.get()),
                           sig.get(), nullptr, git_commit_message(pick.get()),
                           tree.get(), 1, parents) != 0)
         return std::unexpected(last_error());
-
-    git_checkout_options chk;
-    git_checkout_options_init(&chk, GIT_CHECKOUT_OPTIONS_VERSION);
-    chk.checkout_strategy = GIT_CHECKOUT_FORCE;
-    if (git_checkout_tree(r.get(), reinterpret_cast<git_object *>(tree.get()),
-                          &chk) != 0)
-        return std::unexpected(last_error());
-    return {};
+    git_repository_state_cleanup(r.get());
+    return apply_result::done;
 }
 
 std::expected<rebase_result, error>
@@ -2240,10 +2249,11 @@ push_remote(std::string repo, std::string remote, bool force, bool set_upstream)
     return {};
 }
 
-std::expected<void, error> pull_remote(std::string repo, std::string remote)
+std::expected<apply_result, error>
+pull_remote(std::string repo, std::string remote)
 {
     if (auto fetched = fetch_remote(repo, remote); !fetched)
-        return fetched;
+        return std::unexpected(fetched.error());
 
     detail::init_guard guard;
     git_repository *raw = nullptr;
@@ -2462,20 +2472,43 @@ std::expected<std::string, error> commit(std::string repo, std::string message)
         return std::unexpected(last_error());
     detail::tree_ptr tree(raw_tree);
 
-    // Parent = current HEAD commit, if the branch is born.
+    // Parents = current HEAD (if born) plus any MERGE_HEAD entries, so a commit
+    // after resolving a conflicted merge becomes a real multi-parent merge.
+    std::vector<detail::commit_ptr> owned;
+    std::vector<const git_commit *> parents;
     git_commit *raw_parent = nullptr;
     git_oid head_oid;
-    bool has_parent = git_reference_name_to_id(&head_oid, r.get(), "HEAD") == 0 &&
-                      git_commit_lookup(&raw_parent, r.get(), &head_oid) == 0;
-    detail::commit_ptr parent(raw_parent);
-    const git_commit *parents[1] = {parent.get()};
+    if (git_reference_name_to_id(&head_oid, r.get(), "HEAD") == 0 &&
+        git_commit_lookup(&raw_parent, r.get(), &head_oid) == 0) {
+        owned.emplace_back(raw_parent);
+        parents.push_back(raw_parent);
+    }
+    struct collect {
+        git_repository *repo;
+        std::vector<detail::commit_ptr> *owned;
+        std::vector<const git_commit *> *parents;
+    } ctx{r.get(), &owned, &parents};
+    git_repository_mergehead_foreach(
+        r.get(),
+        [](const git_oid *oid, void *payload) -> int {
+            auto *c = static_cast<collect *>(payload);
+            git_commit *mh = nullptr;
+            if (git_commit_lookup(&mh, c->repo, oid) == 0) {
+                c->owned->emplace_back(mh);
+                c->parents->push_back(mh);
+            }
+            return 0;
+        },
+        &ctx);
 
     git_oid commit_oid;
     if (git_commit_create(&commit_oid, r.get(), "HEAD", sig.get(), sig.get(),
-                          nullptr, message.c_str(), tree.get(),
-                          has_parent ? 1 : 0, has_parent ? parents : nullptr) != 0)
+                          nullptr, message.c_str(), tree.get(), parents.size(),
+                          parents.empty() ? nullptr : parents.data()) != 0)
         return std::unexpected(last_error());
 
+    // Clear any in-progress merge / cherry-pick / revert state now committed.
+    git_repository_state_cleanup(r.get());
     return detail::short_oid(&commit_oid);
 }
 

@@ -948,6 +948,72 @@ TEST_CASE("merge_branch fast-forwards onto an ahead branch")
     fs::remove_all(dir);
 }
 
+TEST_CASE("merge_branch leaves conflicts on disk, then commit completes it")
+{
+    auto dir = make_repo_rebase_conflict(); // HEAD feature, a.txt diverged
+
+    auto m = mg::git::merge_branch(dir.string(), "master");
+    REQUIRE(m.has_value());
+    CHECK(*m == mg::git::apply_result::conflicts); // left on disk, not aborted
+
+    auto cs = mg::git::conflicts(dir.string());
+    REQUIRE(cs.has_value());
+    REQUIRE(cs->size() == 1);
+    CHECK((*cs)[0].path == "a.txt");
+
+    // Resolve to theirs (master) and commit -> a real two-parent merge commit.
+    REQUIRE(mg::git::resolve_conflict(dir.string(), "a.txt",
+                                      mg::git::conflict_side::theirs)
+                .has_value());
+    REQUIRE(mg::git::commit(dir.string(), "Merge master").has_value());
+
+    // MERGE_HEAD cleared and the commit has two parents.
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_open(&repo, dir.string().c_str()) == 0);
+    CHECK(git_repository_state(repo) == GIT_REPOSITORY_STATE_NONE);
+    git_oid head;
+    REQUIRE(git_reference_name_to_id(&head, repo, "HEAD") == 0);
+    git_commit *c = nullptr;
+    REQUIRE(git_commit_lookup(&c, repo, &head) == 0);
+    CHECK(git_commit_parentcount(c) == 2);
+    git_commit_free(c);
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+    fs::remove_all(dir);
+}
+
+TEST_CASE("cherry_pick leaves conflicts on disk instead of erroring")
+{
+    auto dir = make_repo_rebase_conflict(); // HEAD feature (a.txt=feature change)
+    std::string c2 = oid_of(dir, "master"); // C2: a.txt = master change
+
+    auto cp = mg::git::cherry_pick(dir.string(), c2);
+    REQUIRE(cp.has_value());
+    CHECK(*cp == mg::git::apply_result::conflicts);
+    auto cs = mg::git::conflicts(dir.string());
+    REQUIRE(cs.has_value());
+    REQUIRE(cs->size() == 1);
+    CHECK((*cs)[0].path == "a.txt");
+    fs::remove_all(dir);
+}
+
+TEST_CASE("revert_commit leaves conflicts when the inverse does not apply")
+{
+    auto dir = make_repo_with_commit("C1");       // a.txt = "content"
+    commit_file(dir, "a.txt", "content\nmore\n", "C2 add more");
+    commit_file(dir, "a.txt", "totally different\n", "C3 rewrite");
+    std::string c2 = oid_of(dir, "HEAD~1");        // the commit to revert
+
+    auto rv = mg::git::revert_commit(dir.string(), c2);
+    REQUIRE(rv.has_value());
+    CHECK(*rv == mg::git::apply_result::conflicts); // can't cleanly undo
+    auto cs = mg::git::conflicts(dir.string());
+    REQUIRE(cs.has_value());
+    CHECK(cs->size() == 1);
+    fs::remove_all(dir);
+}
+
 TEST_CASE("repo_status reports a staged and an untracked entry")
 {
     auto dir = make_repo_with_changes();
