@@ -29,6 +29,7 @@ project(mg
 # --- Architectural feature gates -------------------------------------------
 option(ENABLE_CPP_UPGRADES "Compile the modern C++23 modules instead of plain C" OFF)
 option(ENABLE_NATIVE_MAGIT "Link the native C++ Git DAG engine (src/magit/)"     OFF)
+option(ENABLE_TSAN         "Build every target with ThreadSanitizer (gate)"     OFF)
 
 # --- Language standards ------------------------------------------------------
 # The C core stays C11 to match upstream's expectations; the new engine targets
@@ -41,6 +42,40 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Honour BUILD_TESTING (defaults ON) via CTest.
 include(CTest)
+
+# --- ThreadSanitizer gate (cpp-tsan preset) ---------------------------------
+# Instruments every target with -fsanitize=thread. Declared before the first
+# add_subdirectory() so the flags propagate to all targets.
+#
+# macOS wrinkle: the MacPorts clang-21 TSan *runtime* crashes at process
+# startup on macOS 26.5 (a dyld4 init re-entrancy bug -- see the FM-ASYNC-STATUS
+# spec). The clang-21 instrumentation links fine against Apple's OS-matched
+# runtime though (the __tsan ABI is shared across clang 21), so we put Apple's
+# compiler-rt dir -- derived from `xcrun clang -print-resource-dir`, not
+# hardcoded -- first in the rpath and let dyld resolve the working runtime. On
+# Linux the toolchain's own runtime works and no extra rpath is added.
+if(ENABLE_TSAN)
+    add_compile_options(-fsanitize=thread -g)
+    add_link_options(-fsanitize=thread)
+    if(APPLE)
+        execute_process(
+            COMMAND xcrun clang -print-resource-dir
+            OUTPUT_VARIABLE _apple_resource_dir
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE _apple_rc)
+        set(_apple_tsan_dir "${_apple_resource_dir}/lib/darwin")
+        if(_apple_rc EQUAL 0 AND EXISTS
+                "${_apple_tsan_dir}/libclang_rt.tsan_osx_dynamic.dylib")
+            add_link_options("-Wl,-rpath,${_apple_tsan_dir}")
+            message(STATUS
+                "TSan: linking against Apple's OS-matched runtime in ${_apple_tsan_dir}")
+        else()
+            message(WARNING
+                "TSan: Apple's TSan runtime not found via xcrun; the MacPorts "
+                "runtime may crash at startup on recent macOS.")
+        endif()
+    endif()
+endif()
 
 # The legacy mg editor (faithful plain C). Built in every configuration; it is
 # the entire program when ENABLE_CPP_UPGRADES=OFF, and registers the `mg -h`

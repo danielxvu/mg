@@ -31,13 +31,11 @@
     {
       "name": "cpp-tsan",
       "displayName": "C++23 + modules under ThreadSanitizer",
-      "description": "Same toolchain as cpp, with -fsanitize=thread, to gate the FM-ASYNC-STATUS monitor thread (snapshot/modeline races) and any other concurrency. On macOS the clang-21 instrumentation is linked against Apple's OS-matched TSan runtime (via an rpath searched before MacPorts'); the MacPorts runtime crashes at startup on macOS 26.5 (a dyld4 init bug). On Linux the toolchain runtime works directly and this rpath is harmless.",
+      "description": "Same toolchain as cpp, with ENABLE_TSAN=ON to gate the FM-ASYNC-STATUS monitor thread (snapshot/modeline races) and any other concurrency. The CMakeLists ENABLE_TSAN block instruments every target and, on macOS, links the clang-21 instrumentation against Apple's OS-matched runtime (path derived from xcrun) because the MacPorts runtime crashes at startup on macOS 26.5.",
       "inherits": "cpp",
       "binaryDir": "${sourceDir}/build-tsan",
       "cacheVariables": {
-        "CMAKE_C_FLAGS": "-fsanitize=thread -g -O1",
-        "CMAKE_CXX_FLAGS": "-fsanitize=thread -g -O1",
-        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=thread -Wl,-rpath,/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/lib/darwin"
+        "ENABLE_TSAN": "ON"
       }
     }
   ],
