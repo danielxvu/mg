@@ -39,3 +39,13 @@ extern "C" int mg_utf8_is_word(unsigned int cp)
 {
     return mg::utf8::is_word(static_cast<char32_t>(cp)) ? 1 : 0;
 }
+
+extern "C" unsigned int mg_utf8_toupper(unsigned int cp)
+{
+    return static_cast<unsigned int>(mg::utf8::to_upper(static_cast<char32_t>(cp)));
+}
+
+extern "C" unsigned int mg_utf8_tolower(unsigned int cp)
+{
+    return static_cast<unsigned int>(mg::utf8::to_lower(static_cast<char32_t>(cp)));
+}

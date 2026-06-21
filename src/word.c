@@ -19,10 +19,10 @@
 #ifdef ENABLE_CPP_UPGRADES
 #include "utf8/bridge.h"	/* word motion/classification over codepoints (U4) */
 /*
- * Case conversion only applies to ASCII letters: a multibyte char's lead byte
- * may look lower/upper in the Latin-1 byte table, and writing it would corrupt
- * the sequence. forwchar steps over the whole char, so it is just skipped.
- * (Non-ASCII case mapping is a later slice.)
+ * The ASCII letters go through the fast Latin-1 byte path; a multibyte char's
+ * lead byte may look lower/upper in that table, so non-ASCII bytes take the
+ * codepoint path (recase_char) instead, which decodes the whole char and
+ * case-maps it via mg.utf8.
  */
 #define ASCII_LETTER(c)		((unsigned int)(c) < 0x80)
 #else
@@ -31,6 +31,41 @@
 
 RSIZE	countfword(void);
 int	grabword(char **);
+
+#ifdef ENABLE_CPP_UPGRADES
+/*
+ * Upper/lower-case the non-ASCII codepoint at point in place, but only when the
+ * cased form has the same byte length -- the common Latin/Greek/Cyrillic case
+ * (e.g. e-acute -> E-acute). Codepoints whose case mapping would change the
+ * byte length (e.g. dotless i) or is multi-character are left unchanged. Does
+ * not move point; the caller's forwchar steps over the whole codepoint.
+ */
+static void
+recase_char(int upper)
+{
+	char		 in[4], out[4];
+	int		 i, blen, len, nlen;
+	unsigned int	 cp, ncp;
+
+	blen = llength(curwp->w_dotp) - curwp->w_doto;
+	if (blen > (int)sizeof(in))
+		blen = (int)sizeof(in);
+	for (i = 0; i < blen; i++)
+		in[i] = lgetc(curwp->w_dotp, curwp->w_doto + i);
+	len = mg_utf8_decode(in, blen, &cp, NULL);
+	if (len <= 1)
+		return;				/* ASCII -- handled by the caller */
+	ncp = upper ? mg_utf8_toupper(cp) : mg_utf8_tolower(cp);
+	if (ncp == cp)
+		return;				/* no case change */
+	nlen = mg_utf8_encode(ncp, out);
+	if (nlen != len)
+		return;				/* byte length would change: skip */
+	for (i = 0; i < len; i++)
+		lputc(curwp->w_dotp, curwp->w_doto + i, out[i]);
+	lchange(WFFULL);
+}
+#endif
 
 /*
  * Move one character forward/backward and return the number of *bytes* moved
@@ -319,11 +354,17 @@ upperword(int f, int n)
 
 		while (inword() != FALSE) {
 			c = lgetc(curwp->w_dotp, curwp->w_doto);
-			if (ASCII_LETTER(c) && ISLOWER(c) != FALSE) {
-				c = TOUPPER(c);
-				lputc(curwp->w_dotp, curwp->w_doto, c);
-				lchange(WFFULL);
+			if (ASCII_LETTER(c)) {
+				if (ISLOWER(c) != FALSE) {
+					c = TOUPPER(c);
+					lputc(curwp->w_dotp, curwp->w_doto, c);
+					lchange(WFFULL);
+				}
 			}
+#ifdef ENABLE_CPP_UPGRADES
+			else
+				recase_char(1);
+#endif
 			if (forwchar(FFRAND, 1) == FALSE)
 				return (TRUE);
 		}
@@ -360,11 +401,17 @@ lowerword(int f, int n)
 
 		while (inword() != FALSE) {
 			c = lgetc(curwp->w_dotp, curwp->w_doto);
-			if (ASCII_LETTER(c) && ISUPPER(c) != FALSE) {
-				c = TOLOWER(c);
-				lputc(curwp->w_dotp, curwp->w_doto, c);
-				lchange(WFFULL);
+			if (ASCII_LETTER(c)) {
+				if (ISUPPER(c) != FALSE) {
+					c = TOLOWER(c);
+					lputc(curwp->w_dotp, curwp->w_doto, c);
+					lchange(WFFULL);
+				}
 			}
+#ifdef ENABLE_CPP_UPGRADES
+			else
+				recase_char(0);
+#endif
 			if (forwchar(FFRAND, 1) == FALSE)
 				return (TRUE);
 		}
@@ -404,20 +451,32 @@ capword(int f, int n)
 
 		if (inword() != FALSE) {
 			c = lgetc(curwp->w_dotp, curwp->w_doto);
-			if (ASCII_LETTER(c) && ISLOWER(c) != FALSE) {
-				c = TOUPPER(c);
-				lputc(curwp->w_dotp, curwp->w_doto, c);
-				lchange(WFFULL);
+			if (ASCII_LETTER(c)) {
+				if (ISLOWER(c) != FALSE) {
+					c = TOUPPER(c);
+					lputc(curwp->w_dotp, curwp->w_doto, c);
+					lchange(WFFULL);
+				}
 			}
+#ifdef ENABLE_CPP_UPGRADES
+			else
+				recase_char(1);
+#endif
 			if (forwchar(FFRAND, 1) == FALSE)
 				return (TRUE);
 			while (inword() != FALSE) {
 				c = lgetc(curwp->w_dotp, curwp->w_doto);
-				if (ASCII_LETTER(c) && ISUPPER(c) != FALSE) {
-					c = TOLOWER(c);
-					lputc(curwp->w_dotp, curwp->w_doto, c);
-					lchange(WFFULL);
+				if (ASCII_LETTER(c)) {
+					if (ISUPPER(c) != FALSE) {
+						c = TOLOWER(c);
+						lputc(curwp->w_dotp, curwp->w_doto, c);
+						lchange(WFFULL);
+					}
 				}
+#ifdef ENABLE_CPP_UPGRADES
+				else
+					recase_char(0);
+#endif
 				if (forwchar(FFRAND, 1) == FALSE)
 					return (TRUE);
 			}

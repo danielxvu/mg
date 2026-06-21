@@ -113,3 +113,21 @@ TEST_CASE("is_space covers ASCII blanks and Unicode separators")
     CHECK_FALSE(is_space(U'A'));
     CHECK_FALSE(is_space(U'.'));
 }
+
+TEST_CASE("to_upper / to_lower map ASCII, accented Latin, Greek, Cyrillic")
+{
+    CHECK(to_upper(U'a') == U'A');
+    CHECK(to_lower(U'Z') == U'z');
+    CHECK(to_upper(U'é') == U'É');  // 1:1, same 2-byte length
+    CHECK(to_lower(U'Ñ') == U'ñ');
+    CHECK(to_upper(U'α') == U'Α');  // Greek
+    CHECK(to_lower(U'Я') == U'я');  // Cyrillic
+}
+
+TEST_CASE("to_upper / to_lower leave non-letters and same-case unchanged")
+{
+    CHECK(to_upper(U'5') == U'5');
+    CHECK(to_upper(U'日') == U'日'); // no case
+    CHECK(to_upper(U'A') == U'A');  // already upper
+    CHECK(to_lower(U'z') == U'z');  // already lower
+}

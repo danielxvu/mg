@@ -26,6 +26,11 @@ int mg_utf8_encode(unsigned int cp, char *out);
 /* Is `cp` a word constituent (letter/number/connector)?  1 or 0. */
 int mg_utf8_is_word(unsigned int cp);
 
+/* Simple (1:1) Unicode upper/lower case of `cp`; returns `cp` unchanged for
+ * non-letters, caseless codepoints, or multi-char mappings (e.g. U+00DF). */
+unsigned int mg_utf8_toupper(unsigned int cp);
+unsigned int mg_utf8_tolower(unsigned int cp);
+
 #ifdef __cplusplus
 }
 #endif

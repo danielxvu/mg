@@ -36,6 +36,12 @@ int encode(char32_t cp, char *out);
 // Word constituent: any letter/number, plus connector punctuation ('_' etc.).
 bool is_word(char32_t cp);
 
+// Simple (1:1) Unicode case mapping. Non-letters and codepoints with no case
+// map to themselves. Codepoints whose full case mapping is multi-character
+// (e.g. U+00DF) are left unchanged.
+char32_t to_upper(char32_t cp);
+char32_t to_lower(char32_t cp);
+
 // Whitespace: ASCII blanks/newlines/tabs and Unicode space/line/para separators.
 bool is_space(char32_t cp);
 
@@ -92,6 +98,18 @@ bool is_word(char32_t cp)
     default:
         return false;
     }
+}
+
+char32_t to_upper(char32_t cp)
+{
+    return static_cast<char32_t>(
+        utf8proc_toupper(static_cast<utf8proc_int32_t>(cp)));
+}
+
+char32_t to_lower(char32_t cp)
+{
+    return static_cast<char32_t>(
+        utf8proc_tolower(static_cast<utf8proc_int32_t>(cp)));
 }
 
 bool is_space(char32_t cp)
