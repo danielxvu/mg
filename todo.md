@@ -249,10 +249,14 @@ Next slices (each `#ifdef`-gated, OFF unchanged):
   via `fwd_bytes`/`bwd_bytes`; case ops ASCII-only guard; `grabword` whole-char.
   **🎉 Display+navigation UTF-8 target COMPLETE (U1–U4): UTF-8 files open & edit
   cleanly.**
-- **Later → Full** (optional, utf8proc has the primitives): grapheme-cluster
-  cursor moves (`utf8proc_grapheme_break`); NFC normalization on load/save
-  (`utf8proc_map`/`utf8proc_NFC`); non-ASCII case mapping (upper/lowerword over
-  codepoints, handling byte-length changes); extended-line (`updext`) UTF-8.
+- **Later → Full** (optional, utf8proc has the primitives):
+  ✅ **U5 done** — non-ASCII case mapping (PR #42, branch `u5-case`): mg.utf8
+  `to_upper`/`to_lower` + `M-u`/`M-l`/`M-c` recase non-ASCII codepoints in place
+  (same-byte-length common case; length-changing/multi-char mappings skipped).
+  Remaining: grapheme-cluster cursor moves (`utf8proc_grapheme_break`); NFC
+  normalization on load/save (`utf8proc_map`/`utf8proc_NFC`); byte-length-
+  changing case mappings (dotless i, ß→SS — needs splice + undo accounting);
+  extended-line (`updext`) UTF-8.
 Build: `cmake --build --preset cpp && ctest --preset cpp` +
 `cmake --build --preset c-legacy` (0 warnings). Freeze next branch on `u1-utf8`.
 
@@ -288,10 +292,10 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `fm-t-sections`→fm-s2-region (#34), `fm-b-branches`→fm-t-sections (#35),
   `fm-z-stash`→fm-b-branches (#36), `fm-l-log`→fm-z-stash (#37),
   `fm-x-rrm`→fm-l-log (#38), `fm-r-remotes`→fm-x-rrm (#39),
-  `fm-followups`→fm-r-remotes (#40), `fm-auth`→fm-followups (#41).
-  🎉 Full Magit clone FEATURE-COMPLETE (PRs #31-#41). No magit work outstanding;
-  the next milestone branch freezes on `fm-auth`. Natural next focus: the core
-  C++23 engine (todo.md "Core engine" / "Future goals").
+  `fm-followups`→fm-r-remotes (#40), `fm-auth`→fm-followups (#41),
+  `u5-case`→fm-auth (#42).
+  🎉 Full Magit clone FEATURE-COMPLETE (PRs #31-#41). Now extending UTF-8 to
+  "Full" (U5 non-ASCII case done, #42). Next UTF-8 branch freezes on `u5-case`.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
