@@ -147,6 +147,7 @@ static int	magit_todo_drop(int, int);
 static int	magit_todo_squash(int, int);
 static int	magit_todo_fixup(int, int);
 static int	magit_todo_reword(int, int);
+static int	magit_todo_edit(int, int);
 static int	magit_todo_up(int, int);
 static int	magit_todo_down(int, int);
 static int	magit_todo_execute(int, int);
@@ -499,6 +500,7 @@ static PF todo_d[] = { magit_todo_drop };
 static PF todo_s[] = { magit_todo_squash };
 static PF todo_f[] = { magit_todo_fixup };
 static PF todo_w[] = { magit_todo_reword };
+static PF todo_e[] = { magit_todo_edit };
 static PF todo_esc[] = { NULL };		/* ESC -> reorder submap */
 static PF todo_cc_pf[] = { magit_todo_execute };
 static PF todo_ck_pf[] = { magit_todo_abort };
@@ -525,9 +527,9 @@ static struct KEYMAPE (2) todo_ccmap = {
 	}
 };
 
-static struct KEYMAPE (8) magit_todomap = {
-	8,
-	8,
+static struct KEYMAPE (9) magit_todomap = {
+	9,
+	9,
 	rescan,
 	{
 		{ CCHR('C'), CCHR('C'), todo_esc,		/* C-c prefix */
@@ -535,6 +537,7 @@ static struct KEYMAPE (8) magit_todomap = {
 		{ CCHR('['), CCHR('['), todo_esc,		/* ESC prefix */
 		    (KEYMAP *)&todo_metamap },
 		{ 'd', 'd', todo_d, NULL },			/* d: drop */
+		{ 'e', 'e', todo_e, NULL },			/* e: edit (stop) */
 		{ 'f', 'f', todo_f, NULL },			/* f: fixup */
 		{ 'k', 'k', todo_d, NULL },			/* k: drop */
 		{ 'p', 'p', todo_p, NULL },			/* p: pick */
@@ -2844,6 +2847,7 @@ todo_action_name(int action)
 	case 2: return ("squash");
 	case 3: return ("fixup");
 	case 4: return ("reword");
+	case 5: return ("edit");
 	default: return ("pick");
 	}
 }
@@ -2882,7 +2886,7 @@ magit_rebase_todo_build(struct buffer *bp)
 		    magit_todo[i].text);
 	(void)addlinef(bp, "%s", "");
 	(void)addlinef(bp, "%s", "# p pick  d/k drop  s squash  f fixup  "
-	    "w reword  M-n/M-p reorder  C-c C-c run  C-c C-k abort");
+	    "w reword  e edit  M-n/M-p reorder  C-c C-c run  C-c C-k abort");
 
 	bp->b_dotp = bfirstlp(bp);
 	bp->b_doto = 0;
@@ -2957,6 +2961,7 @@ static int magit_todo_pick(int f, int n)   { return (magit_todo_set(0)); }
 static int magit_todo_drop(int f, int n)   { return (magit_todo_set(1)); }
 static int magit_todo_squash(int f, int n) { return (magit_todo_set(2)); }
 static int magit_todo_fixup(int f, int n)  { return (magit_todo_set(3)); }
+static int magit_todo_edit(int f, int n)   { return (magit_todo_set(5)); }
 
 /* w: reword -- mark the entry at point reword and collect the new message now
  * (so the executor never has to stop mid-sequence). */
@@ -3042,9 +3047,17 @@ magit_todo_execute(int f, int n)
 	rc = mg_magit_rebase_interactive(cwd, magit_todo_onto, steps,
 	    magit_todo_count);
 	magit_todo_leave(TRUE);
-	if (rc != 1) {
+	if (rc == 0) {
 		ewprintf("Interactive rebase failed (conflict? -- nothing changed)");
 		return (FALSE);
+	}
+	if (rc == 3) {
+		/* Stopped at an `edit`: HEAD is the marked commit; the Rebasing
+		 * section now drives r r (continue) / r a (abort). */
+		(void)magit_refresh(f, n);
+		ewprintf("Stopped for edit -- amend (c a / c e), then r r to "
+		    "continue");
+		return (TRUE);
 	}
 	ewprintf("Interactive rebase complete");
 	return (TRUE);

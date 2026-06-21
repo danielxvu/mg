@@ -30,7 +30,11 @@ static int rebase_code(
 {
     if (!r)
         return 0;
-    return *r == mg::git::rebase_result::conflicts ? 2 : 1;
+    if (*r == mg::git::rebase_result::conflicts)
+        return 2;
+    if (*r == mg::git::rebase_result::stopped)
+        return 3; // interactive `edit`: amend, then continue
+    return 1;
 }
 
 // Same mapping for apply-style ops (merge / revert / cherry-pick / pull):
@@ -933,15 +937,14 @@ extern "C" int mg_magit_rebase_interactive(const char *repo_path,
         case 2: a = mg::git::rebase_action::squash; break;
         case 3: a = mg::git::rebase_action::fixup; break;
         case 4: a = mg::git::rebase_action::reword; break;
+        case 5: a = mg::git::rebase_action::edit; break;
         default: a = mg::git::rebase_action::pick; break;
         }
         plan.push_back({a, steps[i].oid ? steps[i].oid : "",
                         steps[i].message ? steps[i].message : ""});
     }
-    return mg::git::rebase_interactive(repo_path, onto, std::move(plan))
-                   .has_value()
-               ? 1
-               : 0;
+    return rebase_code(
+        mg::git::rebase_interactive(repo_path, onto, std::move(plan)));
 }
 
 extern "C" int mg_magit_branch_create(const char *repo_path, const char *name)

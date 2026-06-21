@@ -996,6 +996,95 @@ TEST_CASE("mg_magit_rebase_interactive drops a commit via the plan")
     fs::remove_all(dir);
 }
 
+TEST_CASE("mg_magit_rebase_interactive stops at edit (3); continue finishes")
+{
+    auto dir = make_temp_dir();
+    auto repo = dir.string();
+    git_libgit2_init();
+    git_repository *r0 = nullptr;
+    REQUIRE(git_repository_init(&r0, repo.c_str(), 0) == 0);
+    git_config *cfg = nullptr;
+    REQUIRE(git_repository_config(&cfg, r0) == 0);
+    git_config_set_string(cfg, "user.name", "T");
+    git_config_set_string(cfg, "user.email", "t@t");
+    git_config_free(cfg);
+    git_repository_free(r0);
+    git_libgit2_shutdown();
+
+    auto commit = [&](const char *file, const char *body, const char *msg) {
+        git_libgit2_init();
+        git_repository *r2 = nullptr;
+        REQUIRE(git_repository_open(&r2, repo.c_str()) == 0);
+        std::ofstream(dir / file) << body;
+        git_index *idx = nullptr;
+        REQUIRE(git_repository_index(&idx, r2) == 0);
+        REQUIRE(git_index_add_bypath(idx, file) == 0);
+        REQUIRE(git_index_write(idx) == 0);
+        git_oid toid;
+        REQUIRE(git_index_write_tree(&toid, idx) == 0);
+        git_tree *tree = nullptr;
+        REQUIRE(git_tree_lookup(&tree, r2, &toid) == 0);
+        git_signature *sig = nullptr;
+        REQUIRE(git_signature_now(&sig, "T", "t@t") == 0);
+        git_oid head;
+        bool born = git_reference_name_to_id(&head, r2, "HEAD") == 0;
+        git_commit *parent = nullptr;
+        if (born)
+            git_commit_lookup(&parent, r2, &head);
+        const git_commit *parents[1] = {parent};
+        git_oid out;
+        REQUIRE(git_commit_create(&out, r2, "HEAD", sig, sig, nullptr, msg, tree,
+                                  born ? 1 : 0, born ? parents : nullptr) == 0);
+        if (parent)
+            git_commit_free(parent);
+        git_signature_free(sig);
+        git_tree_free(tree);
+        git_index_free(idx);
+        git_repository_free(r2);
+        git_libgit2_shutdown();
+    };
+    auto oid_of = [&](const char *rev) {
+        git_libgit2_init();
+        git_repository *r2 = nullptr;
+        REQUIRE(git_repository_open(&r2, repo.c_str()) == 0);
+        git_object *o = nullptr;
+        REQUIRE(git_revparse_single(&o, r2, rev) == 0);
+        char buf[GIT_OID_HEXSZ + 1];
+        git_oid_tostr(buf, sizeof buf, git_object_id(o));
+        git_object_free(o);
+        git_repository_free(r2);
+        git_libgit2_shutdown();
+        return std::string(buf);
+    };
+
+    commit("a.txt", "a\n", "C1");
+    commit("b.txt", "b\n", "C2");
+    commit("c.txt", "c\n", "C3");
+    commit("d.txt", "d\n", "C4");
+    std::string c1 = oid_of("HEAD~3"), c2 = oid_of("HEAD~2");
+    std::string c3 = oid_of("HEAD~1"), c4 = oid_of("HEAD");
+
+    mg_magit_rebase_step steps[3] = {
+        {0, c2.c_str(), nullptr}, // pick C2
+        {5, c3.c_str(), nullptr}, // edit C3: stop
+        {0, c4.c_str(), nullptr}, // pick C4
+    };
+    CHECK(mg_magit_rebase_interactive(repo.c_str(), c1.c_str(), steps, 3) == 3);
+    CHECK(mg_magit_rebase_in_progress(repo.c_str()) == 1);
+    CHECK(std::filesystem::exists(dir / "c.txt"));        // stopped at C3
+    CHECK_FALSE(std::filesystem::exists(dir / "d.txt"));  // C4 not yet
+
+    // Amend during the stop, then continue.
+    std::ofstream(dir / "edited.txt") << "x\n";
+    REQUIRE(mg_magit_stage(repo.c_str(), "edited.txt") == 1);
+    REQUIRE(mg_magit_commit(repo.c_str(), "edit work") == 1);
+    CHECK(mg_magit_rebase_continue(repo.c_str()) == 1);   // done
+    CHECK(mg_magit_rebase_in_progress(repo.c_str()) == 0);
+    CHECK(std::filesystem::exists(dir / "d.txt"));         // C4 replayed
+    CHECK(std::filesystem::exists(dir / "edited.txt"));    // edit survived
+    fs::remove_all(dir);
+}
+
 TEST_CASE("mg_magit_bisect finds the first bad commit through the bridge")
 {
     // a.txt(good) -> b.txt -> c.txt(bug) -> d.txt, all on the default branch.

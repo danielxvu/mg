@@ -177,8 +177,8 @@ int mg_magit_rebase_abort(const char *repo_path);
 int mg_magit_rebase_in_progress(const char *repo_path);
 
 /* One interactive-rebase plan step: `action` 0=pick, 1=drop, 2=squash,
- * 3=fixup, 4=reword; `oid` is the commit's full sha-1 hex; `message` is the new
- * message for reword (NULL otherwise). */
+ * 3=fixup, 4=reword, 5=edit; `oid` is the commit's full sha-1 hex; `message` is
+ * the new message for reword (NULL otherwise). */
 struct mg_magit_rebase_step {
 	int action;
 	const char *oid;
@@ -191,9 +191,10 @@ struct mg_magit_rebase_step {
 int mg_magit_rebase_todo(const char *repo_path, const char *onto,
                          mg_magit_emit_fn emit, void *ctx);
 
-/* Interactive rebase: replay `steps[0..n)` (oldest first) onto `onto`, then
- * move the current branch to the result. Returns 1 on success, 0 on failure
- * (incl. conflict, which leaves the repo untouched). reword/edit unsupported. */
+/* Interactive rebase: replay `steps[0..n)` (oldest first) onto `onto`, then move
+ * the current branch to the result. 1 done, 3 stopped at an `edit` (amend, then
+ * mg_magit_rebase_continue), 0 failure (incl. a conflict, which leaves the repo
+ * untouched). */
 int mg_magit_rebase_interactive(const char *repo_path, const char *onto,
                                 const struct mg_magit_rebase_step *steps, int n);
 

@@ -805,6 +805,65 @@ TEST_CASE("rebase_interactive reword replaces a commit's message")
     fs::remove_all(dir);
 }
 
+TEST_CASE("rebase_interactive edit stops at the marked commit, continue resumes")
+{
+    using mg::git::rebase_action;
+    using mg::git::rebase_result;
+    using mg::git::rebase_step;
+    auto dir = make_repo_for_interactive(); // feature: C1->C2(b)->C3(c)->C4(d)
+
+    std::vector<rebase_step> plan = {
+        {rebase_action::pick, oid_of(dir, "feature~2"), ""}, // C2
+        {rebase_action::edit, oid_of(dir, "feature~1"), ""}, // C3: stop here
+        {rebase_action::pick, oid_of(dir, "feature"), ""},   // C4
+    };
+    auto r = mg::git::rebase_interactive(dir.string(), "master", plan);
+    REQUIRE(r.has_value());
+    CHECK(*r == rebase_result::stopped);
+    CHECK(fs::exists(dir / "b.txt"));       // C2 applied
+    CHECK(fs::exists(dir / "c.txt"));       // stopped AT C3
+    CHECK_FALSE(fs::exists(dir / "d.txt")); // C4 not yet
+    CHECK(mg::git::rebase_in_progress(dir.string()));
+
+    // Simulate the user's edit: an extra commit while stopped.
+    commit_file(dir, "extra.txt", "e\n", "extra during edit");
+    auto cont = mg::git::rebase_continue(dir.string());
+    REQUIRE(cont.has_value());
+    CHECK(*cont == rebase_result::done);
+    CHECK(fs::exists(dir / "d.txt"));       // C4 replayed after the edit
+    CHECK(fs::exists(dir / "extra.txt"));   // the edit survived
+    CHECK_FALSE(mg::git::rebase_in_progress(dir.string()));
+    fs::remove_all(dir);
+}
+
+TEST_CASE("rebase_interactive edit can be aborted back to the original branch")
+{
+    using mg::git::rebase_action;
+    using mg::git::rebase_result;
+    using mg::git::rebase_step;
+    auto dir = make_repo_for_interactive();
+
+    std::vector<rebase_step> plan = {
+        {rebase_action::pick, oid_of(dir, "feature~2"), ""},
+        {rebase_action::edit, oid_of(dir, "feature~1"), ""},
+        {rebase_action::pick, oid_of(dir, "feature"), ""},
+    };
+    auto r = mg::git::rebase_interactive(dir.string(), "master", plan);
+    REQUIRE(r.has_value());
+    CHECK(*r == rebase_result::stopped);
+
+    REQUIRE(mg::git::rebase_abort(dir.string()).has_value());
+    CHECK_FALSE(mg::git::rebase_in_progress(dir.string()));
+    // Restored to the original feature tip: all of C2/C3/C4 present.
+    CHECK(fs::exists(dir / "b.txt"));
+    CHECK(fs::exists(dir / "c.txt"));
+    CHECK(fs::exists(dir / "d.txt"));
+    auto h = mg::git::read_head(dir.string());
+    REQUIRE(h.has_value());
+    CHECK(h->summary == "C4");
+    fs::remove_all(dir);
+}
+
 TEST_CASE("rebase_interactive fixup folds a commit into the previous one")
 {
     using mg::git::rebase_action;

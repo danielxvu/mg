@@ -287,9 +287,10 @@ revert_commit(std::string repo, std::string rev);
 std::expected<apply_result, error>
 merge_branch(std::string repo, std::string name);
 
-// Outcome of a rebase step: finished, or paused on a conflict (the on-disk
-// rebase state is left in place for continue/skip/abort).
-enum class rebase_result { done, conflicts };
+// Outcome of a rebase step: finished, paused on a conflict (the on-disk rebase
+// state is left for continue/skip/abort), or stopped at an interactive `edit`
+// (the remaining plan is persisted; amend, then continue).
+enum class rebase_result { done, conflicts, stopped };
 
 // Cherry-pick commit `rev` onto HEAD as a new commit (keeping its author +
 // message). On conflict, leaves the conflicted tree + CHERRY_PICK_HEAD in place
@@ -314,7 +315,7 @@ std::expected<void, error> rebase_abort(std::string repo);
 bool rebase_in_progress(std::string repo);
 
 // One entry of an interactive-rebase plan: what to do with a commit.
-enum class rebase_action { pick, drop, squash, fixup, reword };
+enum class rebase_action { pick, drop, squash, fixup, reword, edit };
 struct rebase_step {
     rebase_action action;
     std::string oid;       // full sha-1 hex of the commit
@@ -324,10 +325,12 @@ struct rebase_step {
 // Interactive rebase: replay `plan` (oldest first) on top of `onto`, then move
 // the current branch to the result. pick = apply as-is; drop = omit;
 // squash/fixup = fold into the previous kept commit (squash concatenates the
-// messages, fixup keeps the previous message); reordering is just the plan
-// order. Built on cherry-pick (in-memory), so a conflict leaves the repo
-// untouched and returns an error. reword/edit are a later slice.
-std::expected<void, error>
+// messages, fixup keeps the previous message); reword = new message; edit =
+// apply, then STOP with the commit checked out (amend, then rebase_continue);
+// reordering is just the plan order. Built on cherry-pick (in-memory). Returns
+// `done`, `stopped` (paused at an edit; remaining plan persisted), or an error
+// (a cherry-pick conflict leaves the repo untouched).
+std::expected<rebase_result, error>
 rebase_interactive(std::string repo, std::string onto,
                    std::vector<rebase_step> plan);
 
@@ -2064,6 +2067,202 @@ rebase_onto(std::string repo, std::string upstream)
     return rebase_drive(r.get(), rebase.get(), sig.get(), /*commit_current=*/false);
 }
 
+// ---- interactive-rebase `edit`: persist the remaining plan across a stop ----
+namespace {
+std::filesystem::path rebase_todo_file(git_repository *repo)
+{
+    return std::filesystem::path(git_repository_path(repo)) / "MG_REBASE_TODO";
+}
+
+char action_to_char(rebase_action a)
+{
+    switch (a) {
+    case rebase_action::drop:   return 'd';
+    case rebase_action::squash: return 's';
+    case rebase_action::fixup:  return 'f';
+    case rebase_action::reword: return 'w';
+    case rebase_action::edit:   return 'e';
+    default:                    return 'p';
+    }
+}
+
+rebase_action action_from_char(char c)
+{
+    switch (c) {
+    case 'd': return rebase_action::drop;
+    case 's': return rebase_action::squash;
+    case 'f': return rebase_action::fixup;
+    case 'w': return rebase_action::reword;
+    case 'e': return rebase_action::edit;
+    default:  return rebase_action::pick;
+    }
+}
+
+// Persist {orig_head, remaining steps}; one step per line "<char> <oid> <msg>".
+void write_rebase_todo(git_repository *repo, const std::string &orig_head,
+                       const std::vector<rebase_step> &rest)
+{
+    std::ofstream out(rebase_todo_file(repo), std::ios::trunc);
+    out << orig_head << "\n";
+    for (const auto &s : rest)
+        out << action_to_char(s.action) << ' ' << s.oid << ' ' << s.message
+            << "\n";
+}
+
+struct todo_state {
+    std::string orig_head;
+    std::vector<rebase_step> steps;
+};
+
+std::optional<todo_state> read_rebase_todo(git_repository *repo)
+{
+    std::ifstream in(rebase_todo_file(repo));
+    if (!in)
+        return std::nullopt;
+    todo_state st;
+    if (!std::getline(in, st.orig_head))
+        return std::nullopt;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.size() < 2)
+            continue;
+        rebase_step s;
+        s.action = action_from_char(line[0]);
+        std::size_t sp = line.find(' ', 2); // after "<char> "
+        if (sp == std::string::npos) {
+            s.oid = line.substr(2);
+        } else {
+            s.oid = line.substr(2, sp - 2);
+            s.message = line.substr(sp + 1);
+        }
+        st.steps.push_back(std::move(s));
+    }
+    return st;
+}
+
+// Move the current branch to `commit` and reset the working tree to it.
+std::expected<void, error>
+set_head_to(git_repository *repo, git_commit *commit, const char *reflog)
+{
+    git_reference *raw_head = nullptr;
+    if (git_repository_head(&raw_head, repo) != 0)
+        return std::unexpected(last_error());
+    detail::ref_ptr head(raw_head);
+    git_reference *raw_new = nullptr;
+    if (git_reference_set_target(&raw_new, head.get(), git_commit_id(commit),
+                                 reflog) != 0)
+        return std::unexpected(last_error());
+    git_reference_free(raw_new);
+
+    git_checkout_options chk;
+    git_checkout_options_init(&chk, GIT_CHECKOUT_OPTIONS_VERSION);
+    chk.checkout_strategy = GIT_CHECKOUT_FORCE;
+    if (git_checkout_tree(repo, reinterpret_cast<git_object *>(commit), &chk) !=
+        0)
+        return std::unexpected(last_error());
+    return {};
+}
+
+// Replay `plan` onto `tip` (owned). On an `edit` step: materialize HEAD at the
+// applied commit, persist {orig_head, remaining}, return stopped. Else finish
+// (move HEAD to the final tip) -> done. A cherry-pick conflict -> error.
+std::expected<rebase_result, error>
+run_plan(git_repository *repo, git_signature *sig, detail::commit_ptr tip,
+         bool have_tip, const std::vector<rebase_step> &plan,
+         const std::string &orig_head)
+{
+    for (std::size_t i = 0; i < plan.size(); ++i) {
+        const rebase_step &step = plan[i];
+        if (step.action == rebase_action::drop)
+            continue;
+
+        git_oid aoid;
+        if (git_oid_fromstr(&aoid, step.oid.c_str()) != 0)
+            return std::unexpected(error{0, "bad commit id in rebase plan"});
+        git_commit *raw_apply = nullptr;
+        if (git_commit_lookup(&raw_apply, repo, &aoid) != 0)
+            return std::unexpected(last_error());
+        detail::commit_ptr apply(raw_apply);
+
+        rebase_action act = step.action;
+        if ((act == rebase_action::squash || act == rebase_action::fixup) &&
+            !have_tip)
+            act = rebase_action::pick; // nothing to fold into yet
+
+        git_index *raw_idx = nullptr;
+        if (git_cherrypick_commit(&raw_idx, repo, apply.get(), tip.get(), 0,
+                                  nullptr) != 0)
+            return std::unexpected(last_error());
+        detail::index_ptr idx(raw_idx);
+        if (git_index_has_conflicts(idx.get()))
+            return std::unexpected(
+                error{0, "interactive rebase conflict (aborted)"});
+
+        git_oid tree_oid;
+        if (git_index_write_tree_to(&tree_oid, idx.get(), repo) != 0)
+            return std::unexpected(last_error());
+        git_tree *raw_tree = nullptr;
+        if (git_tree_lookup(&raw_tree, repo, &tree_oid) != 0)
+            return std::unexpected(last_error());
+        detail::tree_ptr tree(raw_tree);
+
+        git_oid new_oid;
+        if (act == rebase_action::pick || act == rebase_action::reword ||
+            act == rebase_action::edit) {
+            const char *msg = act == rebase_action::reword
+                                  ? step.message.c_str()
+                                  : git_commit_message(apply.get());
+            const git_commit *parents[1] = {tip.get()};
+            if (git_commit_create(&new_oid, repo, nullptr,
+                                  git_commit_author(apply.get()), sig, nullptr,
+                                  msg, tree.get(), 1, parents) != 0)
+                return std::unexpected(last_error());
+        } else { // squash / fixup: replace `tip` with the combined commit
+            detail::commit_ptr tparent(nullptr);
+            const git_commit *parents[1];
+            int nparents = 0;
+            if (git_commit_parentcount(tip.get()) > 0) {
+                git_commit *raw_tp = nullptr;
+                if (git_commit_parent(&raw_tp, tip.get(), 0) != 0)
+                    return std::unexpected(last_error());
+                tparent.reset(raw_tp);
+                parents[0] = tparent.get();
+                nparents = 1;
+            }
+            std::string msg = git_commit_message(tip.get());
+            if (act == rebase_action::squash) {
+                const char *am = git_commit_message(apply.get());
+                msg += "\n\n";
+                msg += (am != nullptr ? am : "");
+            }
+            if (git_commit_create(&new_oid, repo, nullptr,
+                                  git_commit_author(tip.get()), sig, nullptr,
+                                  msg.c_str(), tree.get(), nparents,
+                                  nparents ? parents : nullptr) != 0)
+                return std::unexpected(last_error());
+        }
+
+        git_commit *raw_new = nullptr;
+        if (git_commit_lookup(&raw_new, repo, &new_oid) != 0)
+            return std::unexpected(last_error());
+        tip.reset(raw_new);
+        have_tip = true;
+
+        if (step.action == rebase_action::edit) {
+            if (auto m = set_head_to(repo, tip.get(), "rebase -i (edit)"); !m)
+                return std::unexpected(m.error());
+            write_rebase_todo(repo, orig_head,
+                              {plan.begin() + (std::ptrdiff_t)i + 1, plan.end()});
+            return rebase_result::stopped;
+        }
+    }
+
+    if (auto m = set_head_to(repo, tip.get(), "rebase -i (finish)"); !m)
+        return std::unexpected(m.error());
+    return rebase_result::done;
+}
+} // namespace
+
 // Reopen a paused rebase and resume it (commit_current: commit the resolved
 // op first = continue; false = drop it = skip).
 static std::expected<rebase_result, error>
@@ -2090,7 +2289,33 @@ rebase_resume(std::string repo, bool commit_current)
 
 std::expected<rebase_result, error> rebase_continue(std::string repo)
 {
-    return rebase_resume(std::move(repo), /*commit_current=*/true);
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    // Interactive `edit` stop: resume the persisted plan from the user's HEAD.
+    if (auto todo = read_rebase_todo(r.get())) {
+        detail::sig_ptr sig = default_signature(r.get());
+        if (!sig)
+            return std::unexpected(last_error());
+        git_oid head_oid;
+        if (git_reference_name_to_id(&head_oid, r.get(), "HEAD") != 0)
+            return std::unexpected(last_error());
+        git_commit *raw_tip = nullptr;
+        if (git_commit_lookup(&raw_tip, r.get(), &head_oid) != 0)
+            return std::unexpected(last_error());
+        detail::commit_ptr tip(raw_tip);
+        auto res = run_plan(r.get(), sig.get(), std::move(tip),
+                            /*have_tip=*/true, todo->steps, todo->orig_head);
+        if (res && *res == rebase_result::done) {
+            std::error_code ec;
+            std::filesystem::remove(rebase_todo_file(r.get()), ec);
+        }
+        return res;
+    }
+    return rebase_resume(repo, /*commit_current=*/true);
 }
 
 std::expected<rebase_result, error> rebase_skip(std::string repo)
@@ -2105,6 +2330,22 @@ std::expected<void, error> rebase_abort(std::string repo)
     if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
         return std::unexpected(last_error());
     detail::repo_ptr r(raw);
+
+    // Interactive `edit` stop: reset hard to the saved original HEAD.
+    if (auto todo = read_rebase_todo(r.get())) {
+        git_oid oid;
+        if (git_oid_fromstr(&oid, todo->orig_head.c_str()) == 0) {
+            git_object *raw_obj = nullptr;
+            if (git_object_lookup(&raw_obj, r.get(), &oid, GIT_OBJECT_COMMIT) ==
+                0) {
+                detail::object_ptr obj(raw_obj);
+                git_reset(r.get(), obj.get(), GIT_RESET_HARD, nullptr);
+            }
+        }
+        std::error_code ec;
+        std::filesystem::remove(rebase_todo_file(r.get()), ec);
+        return {};
+    }
 
     git_rebase_options ropts;
     git_rebase_options_init(&ropts, GIT_REBASE_OPTIONS_VERSION);
@@ -2125,13 +2366,15 @@ bool rebase_in_progress(std::string repo)
     if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
         return false;
     detail::repo_ptr r(raw);
+    if (std::filesystem::exists(rebase_todo_file(r.get())))
+        return true; // interactive `edit` stop
     const int st = git_repository_state(r.get());
     return st == GIT_REPOSITORY_STATE_REBASE ||
            st == GIT_REPOSITORY_STATE_REBASE_INTERACTIVE ||
            st == GIT_REPOSITORY_STATE_REBASE_MERGE;
 }
 
-std::expected<void, error>
+std::expected<rebase_result, error>
 rebase_interactive(std::string repo, std::string onto,
                    std::vector<rebase_step> plan)
 {
@@ -2145,7 +2388,13 @@ rebase_interactive(std::string repo, std::string onto,
     if (!sig)
         return std::unexpected(last_error());
 
-    // Resolve `onto` -> the base commit; `tip` is the running result.
+    // Remember the original branch tip so an `edit` stop can be aborted.
+    std::string orig_head;
+    git_oid head_oid;
+    if (git_reference_name_to_id(&head_oid, r.get(), "HEAD") == 0)
+        orig_head = detail::full_oid(&head_oid);
+
+    // Resolve `onto` -> the base commit; run the plan onto it.
     git_object *raw_onto = nullptr;
     if (git_revparse_single(&raw_onto, r.get(), onto.c_str()) != 0)
         return std::unexpected(last_error());
@@ -2154,105 +2403,9 @@ rebase_interactive(std::string repo, std::string onto,
     if (git_commit_lookup(&raw_tip, r.get(), git_object_id(onto_obj.get())) != 0)
         return std::unexpected(last_error());
     detail::commit_ptr tip(raw_tip);
-    bool have_tip = false; // any kept commit yet (squash/fixup need one)
 
-    for (const auto &step : plan) {
-        if (step.action == rebase_action::drop)
-            continue;
-
-        git_oid aoid;
-        if (git_oid_fromstr(&aoid, step.oid.c_str()) != 0)
-            return std::unexpected(error{0, "bad commit id in rebase plan"});
-        git_commit *raw_apply = nullptr;
-        if (git_commit_lookup(&raw_apply, r.get(), &aoid) != 0)
-            return std::unexpected(last_error());
-        detail::commit_ptr apply(raw_apply);
-
-        rebase_action act = step.action;
-        if ((act == rebase_action::squash || act == rebase_action::fixup) &&
-            !have_tip)
-            act = rebase_action::pick; // nothing to fold into yet
-
-        // Cherry-pick `apply` onto `tip` in memory (workdir/refs untouched).
-        git_index *raw_idx = nullptr;
-        if (git_cherrypick_commit(&raw_idx, r.get(), apply.get(), tip.get(), 0,
-                                  nullptr) != 0)
-            return std::unexpected(last_error());
-        detail::index_ptr idx(raw_idx);
-        if (git_index_has_conflicts(idx.get()))
-            return std::unexpected(
-                error{0, "interactive rebase conflict (aborted)"});
-
-        git_oid tree_oid;
-        if (git_index_write_tree_to(&tree_oid, idx.get(), r.get()) != 0)
-            return std::unexpected(last_error());
-        git_tree *raw_tree = nullptr;
-        if (git_tree_lookup(&raw_tree, r.get(), &tree_oid) != 0)
-            return std::unexpected(last_error());
-        detail::tree_ptr tree(raw_tree);
-
-        git_oid new_oid;
-        if (act == rebase_action::pick || act == rebase_action::reword) {
-            // reword keeps the commit but uses the plan's message.
-            const char *msg = act == rebase_action::reword
-                                  ? step.message.c_str()
-                                  : git_commit_message(apply.get());
-            const git_commit *parents[1] = {tip.get()};
-            if (git_commit_create(&new_oid, r.get(), nullptr,
-                                  git_commit_author(apply.get()), sig.get(),
-                                  nullptr, msg, tree.get(), 1, parents) != 0)
-                return std::unexpected(last_error());
-        } else { // squash / fixup: replace `tip` with the combined commit
-            detail::commit_ptr tparent(nullptr);
-            const git_commit *parents[1];
-            int nparents = 0;
-            if (git_commit_parentcount(tip.get()) > 0) {
-                git_commit *raw_tp = nullptr;
-                if (git_commit_parent(&raw_tp, tip.get(), 0) != 0)
-                    return std::unexpected(last_error());
-                tparent.reset(raw_tp);
-                parents[0] = tparent.get();
-                nparents = 1;
-            }
-            std::string msg = git_commit_message(tip.get());
-            if (act == rebase_action::squash) {
-                const char *am = git_commit_message(apply.get());
-                msg += "\n\n";
-                msg += (am != nullptr ? am : "");
-            }
-            if (git_commit_create(&new_oid, r.get(), nullptr,
-                                  git_commit_author(tip.get()), sig.get(),
-                                  nullptr, msg.c_str(), tree.get(), nparents,
-                                  nparents ? parents : nullptr) != 0)
-                return std::unexpected(last_error());
-        }
-
-        git_commit *raw_new = nullptr;
-        if (git_commit_lookup(&raw_new, r.get(), &new_oid) != 0)
-            return std::unexpected(last_error());
-        tip.reset(raw_new);
-        have_tip = true;
-    }
-
-    // Point the current branch at the rebuilt tip and refresh the work tree.
-    git_oid final_oid = *git_commit_id(tip.get());
-    git_reference *raw_head = nullptr;
-    if (git_repository_head(&raw_head, r.get()) != 0)
-        return std::unexpected(last_error());
-    detail::ref_ptr head(raw_head);
-    git_reference *raw_newref = nullptr;
-    if (git_reference_set_target(&raw_newref, head.get(), &final_oid,
-                                 "rebase -i (finish)") != 0)
-        return std::unexpected(last_error());
-    git_reference_free(raw_newref);
-
-    git_checkout_options chk;
-    git_checkout_options_init(&chk, GIT_CHECKOUT_OPTIONS_VERSION);
-    chk.checkout_strategy = GIT_CHECKOUT_FORCE;
-    if (git_checkout_tree(r.get(), reinterpret_cast<git_object *>(tip.get()),
-                          &chk) != 0)
-        return std::unexpected(last_error());
-    return {};
+    return run_plan(r.get(), sig.get(), std::move(tip), /*have_tip=*/false, plan,
+                    orig_head);
 }
 
 // Process-wide credential prompt (set by the UI via set_cred_prompt).
