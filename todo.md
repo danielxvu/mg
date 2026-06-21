@@ -320,7 +320,8 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `fm-ediff-5-cell-color`→fm-ediff-4-refine (#70),
   `fm-ediff-6-sync-scroll`→fm-ediff-5-cell-color (#71),
   `fm-ediff-perf`→fm-ediff-6-sync-scroll (#72),
-  `fm-status-perf`→fm-ediff-perf (#73), `fm-log-perf`→fm-status-perf (#74).
+  `fm-status-perf`→fm-ediff-perf (#73), `fm-log-perf`→fm-status-perf (#74),
+  `fm-status-perf2`→fm-log-perf (#75).
   Magit core (A+B, #31-#41) done; UTF-8 "Full" U5-U8 (#42-#45). **Phase C**
   (honest gap vs real magit; spec
   `docs/superpowers/specs/2026-06-21-fm-phase-c-roadmap.md`): ✅ FM-RB-1
