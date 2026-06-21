@@ -256,9 +256,13 @@ Next slices (each `#ifdef`-gated, OFF unchanged):
   ✅ **U6 done** — extended-line (`updext`) UTF-8 (PR #43, branch `u6-updext`):
   `vtputeuc` + `vt_render_line_ext` render horizontally-scrolled lines by
   codepoint (was byte-wise mojibake); tmux-verified.
-  Remaining: grapheme-cluster cursor moves (`utf8proc_grapheme_break`); NFC
-  normalization on load/save (`utf8proc_map`/`utf8proc_NFC`); byte-length-
-  changing case mappings (dotless i, ß→SS — needs splice + undo accounting).
+  ✅ **U7 done** — grapheme-cluster cursor moves (PR #44, branch `u7-grapheme`):
+  mg.utf8 `grapheme_break`/`grapheme_len`/`grapheme_back`; forwchar/backchar +
+  forwdel/backdel step/delete whole base+combining clusters; pty-verified on NFD.
+  Remaining: NFC normalization (`utf8proc_map`/`utf8proc_NFC`, best as an
+  `M-x normalize-buffer` command); byte-length-changing case mappings (dotless
+  i, ß→SS — needs splice + undo accounting); combining-mark *display*
+  composition (vtcell model holds one cp/cell, so marks are dropped — U2 note).
 Build: `cmake --build --preset cpp && ctest --preset cpp` +
 `cmake --build --preset c-legacy` (0 warnings). Freeze next branch on `u1-utf8`.
 
@@ -295,10 +299,12 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `fm-z-stash`→fm-b-branches (#36), `fm-l-log`→fm-z-stash (#37),
   `fm-x-rrm`→fm-l-log (#38), `fm-r-remotes`→fm-x-rrm (#39),
   `fm-followups`→fm-r-remotes (#40), `fm-auth`→fm-followups (#41),
-  `u5-case`→fm-auth (#42), `u6-updext`→u5-case (#43).
-  🎉 Full Magit clone FEATURE-COMPLETE (PRs #31-#41). Extending UTF-8 to "Full"
-  (U5 non-ASCII case #42, U6 extended-line #43). Next UTF-8 branch freezes on
-  `u6-updext`. Remaining UTF-8: grapheme clusters, NFC, length-changing case.
+  `u5-case`→fm-auth (#42), `u6-updext`→u5-case (#43),
+  `u7-grapheme`→u6-updext (#44).
+  🎉 Full Magit clone FEATURE-COMPLETE (PRs #31-#41). UTF-8 "Full": U5 case #42,
+  U6 extended-line #43, U7 grapheme clusters #44. Next UTF-8 branch freezes on
+  `u7-grapheme`. Remaining UTF-8 (all niche): NFC normalize command, length-
+  changing case mappings, combining-mark display composition.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
