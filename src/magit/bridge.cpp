@@ -276,6 +276,13 @@ extern "C" int mg_magit_status_buffer(const char *repo_path,
                 b.name.c_str());
     }
 
+    if (auto tags = mg::git::tags(repo_path); tags && !tags->empty()) {
+        out("");
+        out("Tags (" + std::to_string(tags->size()) + ")", MG_LINE_SECTION);
+        for (const auto &t : *tags)
+            out("  " + t, MG_LINE_TAG, t.c_str());
+    }
+
     return n;
 }
 
@@ -573,6 +580,24 @@ static int rebase_code(
     if (!r)
         return 0;
     return *r == mg::git::rebase_result::conflicts ? 2 : 1;
+}
+
+extern "C" int mg_magit_tag_create(const char *repo_path, const char *name,
+                                   const char *target)
+{
+    if (repo_path == nullptr || name == nullptr || name[0] == '\0')
+        return 0;
+    return mg::git::create_tag(repo_path, name, target ? target : "HEAD")
+                   .has_value()
+               ? 1
+               : 0;
+}
+
+extern "C" int mg_magit_tag_delete(const char *repo_path, const char *name)
+{
+    if (repo_path == nullptr || name == nullptr || name[0] == '\0')
+        return 0;
+    return mg::git::delete_tag(repo_path, name).has_value() ? 1 : 0;
 }
 
 extern "C" int mg_magit_cherrypick(const char *repo_path, const char *rev)

@@ -50,6 +50,8 @@ static int	magit_checkout(int, int);
 static int	magit_branch_create(int, int);
 static int	magit_branch_delete(int, int);
 static int	magit_branch_rename(int, int);
+static int	magit_tag_create_cmd(int, int);
+static int	magit_tag_delete_cmd(int, int);
 static int	magit_stage_all(int, int);
 static int	magit_unstage_all(int, int);
 static int	magit_region(int *, char **, int *, int *);
@@ -162,8 +164,26 @@ static PF magit_q[] = { delwind };
 static PF magit_l[] = { magit_log };
 static PF magit_r[] = { NULL };			/* r -> rebase menu prefix */
 static PF magit_s[] = { magit_stage };
+static PF magit_t[] = { NULL };			/* t -> tag menu prefix */
 static PF magit_u[] = { magit_unstage };
 static PF magit_z[] = { NULL };			/* z -> stash menu prefix */
+
+/*
+ * Tag menu: `t` prefixes into this. t=create (at HEAD), k=delete (the tag at
+ * point, else prompt). Entries ascending.
+ */
+static PF tag_k[] = { magit_tag_delete_cmd };
+static PF tag_t[] = { magit_tag_create_cmd };
+
+static struct KEYMAPE (2) magit_tagmenu = {
+	2,
+	2,
+	rescan,
+	{
+		{ 'k', 'k', tag_k, NULL },	/* t k: delete */
+		{ 't', 't', tag_t, NULL }	/* t t: create */
+	}
+};
 
 /*
  * *magit-log* keymap: RET shows a commit's diff, V reverts the commit at point,
@@ -355,9 +375,9 @@ static struct KEYMAPE (4) magit_commitmenu = {
 };
 
 /* Entries MUST stay in ascending key order -- doscan() relies on it. */
-static struct KEYMAPE (24) magitmap = {
-	24,
-	24,
+static struct KEYMAPE (25) magitmap = {
+	25,
+	25,
 	rescan,
 	{
 		{ CCHR('I'), CCHR('I'), magit_tab, NULL },	/* TAB: expand/collapse */
@@ -383,6 +403,7 @@ static struct KEYMAPE (24) magitmap = {
 		{ 'q', 'q', magit_q, NULL },
 		{ 'r', 'r', magit_r, (KEYMAP *)&magit_rebasemenu }, /* r: rebase menu */
 		{ 's', 's', magit_s, NULL },
+		{ 't', 't', magit_t, (KEYMAP *)&magit_tagmenu }, /* t: tag menu */
 		{ 'u', 'u', magit_u, NULL },
 		{ 'z', 'z', magit_z, (KEYMAP *)&magit_stashmenu } /* z: stash menu */
 	}
@@ -992,6 +1013,7 @@ magit_help(int f, int n)
 		"  a        apply the stash at point",
 		"  A        cherry-pick (commit at point in the log, else prompt)",
 		"  b b/c/k/m  branch: checkout / create / delete / rename",
+		"  t t/k    tag: create at HEAD / delete",
 		"  c c/a/e/w  commit / amend / extend / reword",
 		"  z z/p    stash: push / pop",
 		"  l        log buffer (RET shows a commit's diff, V reverts it)",
@@ -1232,6 +1254,47 @@ magit_branch_rename(int f, int n)
 		return (FALSE);
 	if (mg_magit_branch_rename(cwd, from, to) != 1) {
 		ewprintf("Branch rename failed");
+		return (FALSE);
+	}
+	return (magit_refresh(f, n));
+}
+
+/* t t: create a lightweight tag at HEAD (prompts for the name). */
+static int
+magit_tag_create_cmd(int f, int n)
+{
+	char	name[PATH_MAX], cwd[PATH_MAX];
+
+	if (eread("Create tag: ", name, sizeof(name), EFNEW | EFCR) == NULL ||
+	    name[0] == '\0')
+		return (ABORT);
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	if (mg_magit_tag_create(cwd, name, "HEAD") != 1) {
+		ewprintf("Tag create failed");
+		return (FALSE);
+	}
+	return (magit_refresh(f, n));
+}
+
+/* t k: delete a tag (the tag at point, else prompt). */
+static int
+magit_tag_delete_cmd(int f, int n)
+{
+	char	*path = NULL;
+	char	 name[PATH_MAX], cwd[PATH_MAX];
+	int	 kind, hunk;
+
+	kind = magit_at_point(&path, &hunk);
+	if (kind == MG_LINE_TAG)
+		(void)strlcpy(name, path, sizeof(name));
+	else if (eread("Delete tag: ", name, sizeof(name), EFNEW | EFCR) ==
+	    NULL || name[0] == '\0')
+		return (ABORT);
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	if (mg_magit_tag_delete(cwd, name) != 1) {
+		ewprintf("Tag delete failed");
 		return (FALSE);
 	}
 	return (magit_refresh(f, n));

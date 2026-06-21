@@ -717,6 +717,33 @@ TEST_CASE("mg_magit_rebase replays the current branch onto upstream")
     fs::remove_all(dir);
 }
 
+TEST_CASE("mg_magit_tag_create/delete and the Tags section through the bridge")
+{
+    auto dir = make_repo_one_hunk(); // a committed repo
+    auto repo = dir.string();
+    auto status_text = [&] {
+        std::string t;
+        mg_magit_status_buffer(
+            repo.c_str(), nullptr, 0,
+            [](void *ctx, const char *line, int, const char *, int) {
+                (static_cast<std::string *>(ctx))->append(line).append("\n");
+            },
+            &t);
+        return t;
+    };
+
+    CHECK(status_text().find("Tags") == std::string::npos); // none yet
+    CHECK(mg_magit_tag_create(repo.c_str(), "v2.0", "HEAD") == 1);
+    std::string s = status_text();
+    CHECK(s.find("Tags (1)") != std::string::npos);
+    CHECK(s.find("v2.0") != std::string::npos);
+
+    CHECK(mg_magit_tag_delete(repo.c_str(), "v2.0") == 1);
+    CHECK(status_text().find("Tags") == std::string::npos); // gone
+    CHECK(mg_magit_tag_delete(repo.c_str(), "v2.0") == 0);  // already gone
+    fs::remove_all(dir);
+}
+
 TEST_CASE("mg_magit_cherrypick applies another branch's commit onto HEAD")
 {
     auto dir = make_temp_dir();

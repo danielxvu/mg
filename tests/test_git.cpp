@@ -1399,6 +1399,30 @@ TEST_CASE("stash_push with nothing to stash is an error")
     fs::remove_all(dir);
 }
 
+TEST_CASE("create_tag / tags / delete_tag round-trip")
+{
+    auto dir = make_repo_with_commit("base");
+
+    auto empty = mg::git::tags(dir.string());
+    REQUIRE(empty.has_value());
+    CHECK(empty->empty());
+
+    REQUIRE(mg::git::create_tag(dir.string(), "v1.0", "HEAD").has_value());
+    auto ts = mg::git::tags(dir.string());
+    REQUIRE(ts.has_value());
+    REQUIRE(ts->size() == 1);
+    CHECK((*ts)[0] == "v1.0");
+
+    REQUIRE(mg::git::delete_tag(dir.string(), "v1.0").has_value());
+    auto ts2 = mg::git::tags(dir.string());
+    REQUIRE(ts2.has_value());
+    CHECK(ts2->empty());
+
+    // Deleting a missing tag is an error.
+    CHECK_FALSE(mg::git::delete_tag(dir.string(), "nope").has_value());
+    fs::remove_all(dir);
+}
+
 TEST_CASE("create_branch makes a new branch at HEAD without checking it out")
 {
     auto dir = make_repo_with_commit("base"); // on master

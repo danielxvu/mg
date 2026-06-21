@@ -312,6 +312,16 @@ std::expected<void, error> delete_branch(std::string repo, std::string name);
 std::expected<void, error>
 rename_branch(std::string repo, std::string from, std::string to);
 
+// Create a lightweight tag `name` at `target` (a revspec, e.g. "HEAD").
+std::expected<void, error>
+create_tag(std::string repo, std::string name, std::string target);
+
+// Delete tag `name`.
+std::expected<void, error> delete_tag(std::string repo, std::string name);
+
+// The repository's tag names (sorted by libgit2).
+std::expected<std::vector<std::string>, error> tags(std::string repo);
+
 // Stage `file` (relative to the repo root) into the index.
 std::expected<void, error> stage(std::string repo, std::string file);
 
@@ -850,6 +860,58 @@ rename_branch(std::string repo, std::string from, std::string to)
         return std::unexpected(last_error());
     git_reference_free(raw_new);
     return {};
+}
+
+std::expected<void, error>
+create_tag(std::string repo, std::string name, std::string target)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    git_object *raw_obj = nullptr;
+    if (git_revparse_single(&raw_obj, r.get(), target.c_str()) != 0)
+        return std::unexpected(last_error());
+    detail::object_ptr obj(raw_obj);
+
+    git_oid oid;
+    if (git_tag_create_lightweight(&oid, r.get(), name.c_str(), obj.get(),
+                                   /*force=*/0) != 0)
+        return std::unexpected(last_error());
+    return {};
+}
+
+std::expected<void, error> delete_tag(std::string repo, std::string name)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+    if (git_tag_delete(r.get(), name.c_str()) != 0)
+        return std::unexpected(last_error());
+    return {};
+}
+
+std::expected<std::vector<std::string>, error> tags(std::string repo)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    git_strarray arr = {nullptr, 0};
+    if (git_tag_list(&arr, r.get()) != 0)
+        return std::unexpected(last_error());
+    std::vector<std::string> out;
+    out.reserve(arr.count);
+    for (std::size_t i = 0; i < arr.count; ++i)
+        out.emplace_back(arr.strings[i]);
+    git_strarray_dispose(&arr);
+    return out;
 }
 
 // Configured identity, falling back to a placeholder so commits/reverts/merges
