@@ -72,6 +72,15 @@ static int	magit_rebase_elsewhere(int, int);
 static int	magit_rebase_continue(int, int);
 static int	magit_rebase_skip(int, int);
 static int	magit_rebase_abort(int, int);
+static int	magit_rebase_interactive_cmd(int, int);
+static int	magit_todo_pick(int, int);
+static int	magit_todo_drop(int, int);
+static int	magit_todo_squash(int, int);
+static int	magit_todo_fixup(int, int);
+static int	magit_todo_up(int, int);
+static int	magit_todo_down(int, int);
+static int	magit_todo_execute(int, int);
+static int	magit_todo_abort(int, int);
 
 /*
  * line -> {kind, hunk, path} map for the most recent render of *magit-status*.
@@ -93,6 +102,18 @@ static int	magit_expanded_count;
 #define MAGIT_OID_LEN 64
 static char	magit_log_oid[MAGIT_MAX_LINES][MAGIT_OID_LEN];
 static int	magit_log_count;
+
+/* Interactive-rebase plan backing the *git-rebase-todo* buffer. Each entry is
+ * one commit; the buffer is a rendered view of this array (line i = entry i). */
+#define MAGIT_MAX_TODO 256
+struct magit_todo_entry {
+	int	action;			/* 0 pick, 1 drop, 2 squash, 3 fixup */
+	char	oid[MAGIT_OID_LEN];
+	char	text[160];		/* "shortoid summary" */
+};
+static struct magit_todo_entry	magit_todo[MAGIT_MAX_TODO];
+static int	magit_todo_count;
+static char	magit_todo_onto[PATH_MAX];	/* the base to rebase onto */
 
 /* Section titles (count suffix stripped) whose bodies are currently folded. */
 #define MAGIT_MAX_FOLDED 32
@@ -228,20 +249,74 @@ static struct KEYMAPE (4) magit_branchmenu = {
  */
 static PF rebase_a[] = { magit_rebase_abort };
 static PF rebase_e[] = { magit_rebase_elsewhere };
+static PF rebase_i[] = { magit_rebase_interactive_cmd };
 static PF rebase_r[] = { magit_rebase_continue };
 static PF rebase_s[] = { magit_rebase_skip };
 static PF rebase_u[] = { magit_rebase_upstream };
 
-static struct KEYMAPE (5) magit_rebasemenu = {
-	5,
-	5,
+static struct KEYMAPE (6) magit_rebasemenu = {
+	6,
+	6,
 	rescan,
 	{
 		{ 'a', 'a', rebase_a, NULL },	/* r a: abort */
 		{ 'e', 'e', rebase_e, NULL },	/* r e: onto a branch */
+		{ 'i', 'i', rebase_i, NULL },	/* r i: interactive */
 		{ 'r', 'r', rebase_r, NULL },	/* r r: continue */
 		{ 's', 's', rebase_s, NULL },	/* r s: skip */
 		{ 'u', 'u', rebase_u, NULL }	/* r u: onto upstream */
+	}
+};
+
+/*
+ * *git-rebase-todo* (magit-rebase-todo-mode) keymap: p/d/k/s/f set the action
+ * on the line at point; ESC n / ESC p reorder; C-c C-c runs the plan, C-c C-k
+ * aborts. Other keys fall through to fundamental (C-n/C-p navigate).
+ */
+static PF todo_p[] = { magit_todo_pick };
+static PF todo_d[] = { magit_todo_drop };
+static PF todo_s[] = { magit_todo_squash };
+static PF todo_f[] = { magit_todo_fixup };
+static PF todo_esc[] = { NULL };		/* ESC -> reorder submap */
+static PF todo_cc_pf[] = { magit_todo_execute };
+static PF todo_ck_pf[] = { magit_todo_abort };
+static PF todo_meta_n[] = { magit_todo_down };
+static PF todo_meta_p[] = { magit_todo_up };
+
+static struct KEYMAPE (2) todo_metamap = {
+	2,
+	2,
+	rescan,
+	{
+		{ 'n', 'n', todo_meta_n, NULL }, /* ESC n: move down */
+		{ 'p', 'p', todo_meta_p, NULL }  /* ESC p: move up */
+	}
+};
+
+static struct KEYMAPE (2) todo_ccmap = {
+	2,
+	2,
+	rescan,
+	{
+		{ CCHR('C'), CCHR('C'), todo_cc_pf, NULL },	/* C-c C-c: run */
+		{ CCHR('K'), CCHR('K'), todo_ck_pf, NULL }	/* C-c C-k: abort */
+	}
+};
+
+static struct KEYMAPE (7) magit_todomap = {
+	7,
+	7,
+	rescan,
+	{
+		{ CCHR('C'), CCHR('C'), todo_esc,		/* C-c prefix */
+		    (KEYMAP *)&todo_ccmap },
+		{ CCHR('['), CCHR('['), todo_esc,		/* ESC prefix */
+		    (KEYMAP *)&todo_metamap },
+		{ 'd', 'd', todo_d, NULL },			/* d: drop */
+		{ 'f', 'f', todo_f, NULL },			/* f: fixup */
+		{ 'k', 'k', todo_d, NULL },			/* k: drop */
+		{ 'p', 'p', todo_p, NULL },			/* p: pick */
+		{ 's', 's', todo_s, NULL }			/* s: squash */
 	}
 };
 
@@ -481,6 +556,7 @@ magit_status(int f, int n)
 		 * the commit-view buffer without ever going through `l`. */
 		maps_add((KEYMAP *)&maglogmap, "magit-log-mode");
 		maps_add((KEYMAP *)&magcommitmap, "magit-commit-view-mode");
+		maps_add((KEYMAP *)&magit_todomap, "magit-rebase-todo-mode");
 		mg_magit_set_cred_prompt(magit_cred_prompt); /* HTTPS user/pass auth */
 		initialized = 1;
 	}
@@ -886,6 +962,7 @@ magit_help(int f, int n)
 		"  m        merge a branch into HEAD",
 		"  r e/u    rebase onto a branch / upstream",
 		"  r r/s/a  rebase continue / skip / abort",
+		"  r i      interactive rebase (todo buffer)",
 		"  V        revert a commit",
 		"  X h/m/s  reset HEAD: hard / mixed / soft",
 		"  f / F / P  fetch / pull / push (origin)",
@@ -1703,6 +1780,202 @@ magit_commit_abort(int f, int n)
 {
 	magit_commit_leave(curbp, FALSE);
 	ewprintf("Commit aborted");
+	return (TRUE);
+}
+
+/* ---- interactive rebase: the *git-rebase-todo* buffer (FM-RB-3b) ---------- */
+
+static const char *
+todo_action_name(int action)
+{
+	switch (action) {
+	case 1: return ("drop");
+	case 2: return ("squash");
+	case 3: return ("fixup");
+	default: return ("pick");
+	}
+}
+
+/* emit callback for mg_magit_rebase_todo: collect each commit (action defaults
+ * to pick). Does not touch a buffer -- the buffer is rendered from this state. */
+static void
+magit_todo_emit(void *ctx, const char *line, int kind, const char *path,
+    int hunk)
+{
+	(void)ctx;
+	(void)hunk;
+	if (kind != MG_LINE_COMMIT || path == NULL ||
+	    magit_todo_count >= MAGIT_MAX_TODO)
+		return;
+	magit_todo[magit_todo_count].action = 0; /* pick */
+	(void)strlcpy(magit_todo[magit_todo_count].oid, path, MAGIT_OID_LEN);
+	(void)strlcpy(magit_todo[magit_todo_count].text, line,
+	    sizeof(magit_todo[0].text));
+	magit_todo_count++;
+}
+
+/* Render the plan into the *git-rebase-todo* buffer (line i = entry i). */
+static int
+magit_rebase_todo_build(struct buffer *bp)
+{
+	struct mgwin	*wp;
+	int		 i;
+
+	bp->b_flag |= BFIGNDIRTY;
+	if (bclear(bp) != TRUE)
+		return (FALSE);
+	bp->b_flag |= BFREADONLY;
+	for (i = 0; i < magit_todo_count; i++)
+		(void)addlinef(bp, "%s %s", todo_action_name(magit_todo[i].action),
+		    magit_todo[i].text);
+	(void)addlinef(bp, "%s", "");
+	(void)addlinef(bp, "%s", "# p pick  d/k drop  s squash  f fixup  "
+	    "M-n/M-p reorder  C-c C-c run  C-c C-k abort");
+
+	bp->b_dotp = bfirstlp(bp);
+	bp->b_doto = 0;
+	for (wp = wheadp; wp != NULL; wp = wp->w_wndp)
+		if (wp->w_bufp == bp) {
+			wp->w_dotp = bp->b_dotp;
+			wp->w_doto = 0;
+			wp->w_markp = NULL;
+			wp->w_marko = 0;
+			wp->w_rflag |= WFFULL;
+		}
+	return (TRUE);
+}
+
+/* r i: open the interactive-rebase todo buffer for commits after a prompted
+ * base (e.g. a branch, @{u}, or HEAD~N). */
+static int
+magit_rebase_interactive_cmd(int f, int n)
+{
+	struct buffer	*bp;
+	struct mgwin	*wp;
+	char		 onto[PATH_MAX], cwd[PATH_MAX];
+
+	if (eread("Rebase interactively onto: ", onto, sizeof(onto),
+	    EFNEW | EFCR) == NULL || onto[0] == '\0')
+		return (ABORT);
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+
+	magit_todo_count = 0;
+	(void)strlcpy(magit_todo_onto, onto, sizeof(magit_todo_onto));
+	if (mg_magit_rebase_todo(cwd, onto, magit_todo_emit, NULL) <= 0) {
+		ewprintf("Nothing to rebase onto %s", onto);
+		return (FALSE);
+	}
+
+	if ((bp = bfind("*git-rebase-todo*", TRUE)) == NULL)
+		return (FALSE);
+	if (magit_rebase_todo_build(bp) != TRUE)
+		return (FALSE);
+	if ((wp = popbuf(bp, WNONE)) == NULL)
+		return (FALSE);
+	curwp = wp;
+	curbp = bp;
+	wp->w_dotp = bp->b_dotp;
+	wp->w_doto = bp->b_doto;
+	bp->b_modes[1] = name_mode("magit-rebase-todo-mode");
+	bp->b_nmodes = 1;
+	return (TRUE);
+}
+
+/* Set the action of the entry at point and re-render (keeping point). */
+static int
+magit_todo_set(int action)
+{
+	struct buffer	*bp;
+	int		 idx = magit_line_index();
+
+	if (idx < 0 || idx >= magit_todo_count) {
+		ewprintf("Not on a rebase line");
+		return (FALSE);
+	}
+	magit_todo[idx].action = action;
+	if ((bp = bfind("*git-rebase-todo*", FALSE)) == NULL)
+		return (FALSE);
+	(void)magit_rebase_todo_build(bp);
+	magit_goto_index(idx);
+	return (TRUE);
+}
+
+static int magit_todo_pick(int f, int n)   { return (magit_todo_set(0)); }
+static int magit_todo_drop(int f, int n)   { return (magit_todo_set(1)); }
+static int magit_todo_squash(int f, int n) { return (magit_todo_set(2)); }
+static int magit_todo_fixup(int f, int n)  { return (magit_todo_set(3)); }
+
+/* Move the entry at point by `dir` (+1 down, -1 up), re-render, follow it. */
+static int
+magit_todo_move(int dir)
+{
+	struct buffer	*bp;
+	int		 i = magit_line_index(), j = i + dir;
+
+	if (i < 0 || i >= magit_todo_count || j < 0 || j >= magit_todo_count)
+		return (FALSE);
+	{
+		struct magit_todo_entry tmp = magit_todo[i];
+		magit_todo[i] = magit_todo[j];
+		magit_todo[j] = tmp;
+	}
+	if ((bp = bfind("*git-rebase-todo*", FALSE)) == NULL)
+		return (FALSE);
+	(void)magit_rebase_todo_build(bp);
+	magit_goto_index(j);
+	return (TRUE);
+}
+
+static int magit_todo_down(int f, int n) { return (magit_todo_move(1)); }
+static int magit_todo_up(int f, int n)   { return (magit_todo_move(-1)); }
+
+/* Close the todo buffer and return to (refreshing) the status buffer. */
+static void
+magit_todo_leave(int refresh)
+{
+	struct buffer	*sbp;
+
+	if ((sbp = bfind("*magit-status*", TRUE)) != NULL) {
+		(void)showbuffer(sbp, curwp, WFFULL);
+		curbp = sbp;
+		if (refresh)
+			(void)magit_build(sbp);
+	}
+	sgarbf = TRUE;
+}
+
+/* C-c C-c: execute the plan via the engine, then return to the status buffer. */
+static int
+magit_todo_execute(int f, int n)
+{
+	struct mg_magit_rebase_step	steps[MAGIT_MAX_TODO];
+	char				cwd[PATH_MAX];
+	int				i, rc;
+
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	for (i = 0; i < magit_todo_count; i++) {
+		steps[i].action = magit_todo[i].action;
+		steps[i].oid = magit_todo[i].oid;
+	}
+	rc = mg_magit_rebase_interactive(cwd, magit_todo_onto, steps,
+	    magit_todo_count);
+	magit_todo_leave(TRUE);
+	if (rc != 1) {
+		ewprintf("Interactive rebase failed (conflict? -- nothing changed)");
+		return (FALSE);
+	}
+	ewprintf("Interactive rebase complete");
+	return (TRUE);
+}
+
+/* C-c C-k: discard the plan and return to the status buffer. */
+static int
+magit_todo_abort(int f, int n)
+{
+	magit_todo_leave(FALSE);
+	ewprintf("Interactive rebase aborted");
 	return (TRUE);
 }
 

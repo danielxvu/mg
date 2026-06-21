@@ -187,6 +187,11 @@ std::expected<upstream_info, error> upstream_status(std::string path);
 std::expected<std::vector<commit_brief>, error>
 upstream_commits(std::string path, bool unpushed);
 
+// Commits in (onto, HEAD], oldest first -- the commits an interactive rebase
+// onto `onto` would replay, in todo order.
+std::expected<std::vector<commit_brief>, error>
+commits_range(std::string path, std::string onto);
+
 std::expected<std::vector<commit_brief>, error>
 recent_commits(std::string path, std::size_t n);
 
@@ -544,6 +549,48 @@ upstream_commits(std::string path, bool unpushed)
     if (git_revwalk_push(walk.get(), push) != 0 ||
         git_revwalk_hide(walk.get(), hide) != 0)
         return std::unexpected(last_error());
+
+    git_oid oid;
+    while (git_revwalk_next(&oid, walk.get()) == 0) {
+        commit_brief cb;
+        cb.short_oid = detail::short_oid(&oid);
+        cb.oid = detail::full_oid(&oid);
+        git_commit *raw_commit = nullptr;
+        if (git_commit_lookup(&raw_commit, repo.get(), &oid) == 0) {
+            detail::commit_ptr commit(raw_commit);
+            if (const char *s = git_commit_summary(commit.get()))
+                cb.summary = s;
+        }
+        out.push_back(std::move(cb));
+    }
+    return out;
+}
+
+std::expected<std::vector<commit_brief>, error>
+commits_range(std::string path, std::string onto)
+{
+    detail::init_guard guard;
+    git_repository *raw_repo = nullptr;
+    if (git_repository_open_ext(&raw_repo, path.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr repo(raw_repo);
+
+    std::vector<commit_brief> out;
+
+    git_object *raw_onto = nullptr;
+    if (git_revparse_single(&raw_onto, repo.get(), onto.c_str()) != 0)
+        return std::unexpected(last_error());
+    detail::object_ptr onto_obj(raw_onto);
+
+    git_revwalk *raw_walk = nullptr;
+    if (git_revwalk_new(&raw_walk, repo.get()) != 0)
+        return std::unexpected(last_error());
+    detail::revwalk_ptr walk(raw_walk);
+    // Topological + reverse -> oldest first, which is rebase todo order.
+    git_revwalk_sorting(walk.get(), GIT_SORT_TOPOLOGICAL | GIT_SORT_REVERSE);
+    if (git_revwalk_push_head(walk.get()) != 0)
+        return out;
+    git_revwalk_hide(walk.get(), git_object_id(onto_obj.get()));
 
     git_oid oid;
     while (git_revwalk_next(&oid, walk.get()) == 0) {

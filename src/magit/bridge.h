@@ -163,6 +163,12 @@ struct mg_magit_rebase_step {
 	const char *oid;
 };
 
+/* Emit the commits an interactive rebase onto `onto` would replay -- one
+ * MG_LINE_COMMIT line "shortoid summary" each (oldest first), full oid in
+ * `path`. Returns the count; 0 on error. (Seeds the *git-rebase-todo* buffer.) */
+int mg_magit_rebase_todo(const char *repo_path, const char *onto,
+                         mg_magit_emit_fn emit, void *ctx);
+
 /* Interactive rebase: replay `steps[0..n)` (oldest first) onto `onto`, then
  * move the current branch to the result. Returns 1 on success, 0 on failure
  * (incl. conflict, which leaves the repo untouched). reword/edit unsupported. */

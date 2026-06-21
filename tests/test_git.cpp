@@ -639,6 +639,20 @@ static std::string oid_of(const fs::path &dir, const char *rev)
     return std::string(buf);
 }
 
+TEST_CASE("commits_range lists commits after onto, oldest first")
+{
+    auto dir = make_repo_for_interactive(); // feature: C1->C2->C3->C4
+
+    auto cs = mg::git::commits_range(dir.string(), "master"); // master = C1
+    REQUIRE(cs.has_value());
+    REQUIRE(cs->size() == 3);
+    CHECK((*cs)[0].summary == "C2"); // oldest first
+    CHECK((*cs)[1].summary == "C3");
+    CHECK((*cs)[2].summary == "C4");
+    CHECK((*cs)[0].oid.size() == 40);
+    fs::remove_all(dir);
+}
+
 TEST_CASE("rebase_interactive drops a commit from the middle of the plan")
 {
     using mg::git::rebase_action;

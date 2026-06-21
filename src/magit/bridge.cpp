@@ -610,6 +610,23 @@ extern "C" int mg_magit_rebase_in_progress(const char *repo_path)
     return mg::git::rebase_in_progress(repo_path) ? 1 : 0;
 }
 
+extern "C" int mg_magit_rebase_todo(const char *repo_path, const char *onto,
+                                    mg_magit_emit_fn emit, void *ctx)
+{
+    if (repo_path == nullptr || onto == nullptr || emit == nullptr)
+        return 0;
+    auto cs = mg::git::commits_range(repo_path, onto);
+    if (!cs)
+        return 0;
+    int n = 0;
+    for (const auto &c : *cs) {
+        emit(ctx, (c.short_oid + " " + c.summary).c_str(), MG_LINE_COMMIT,
+             c.oid.c_str(), -1);
+        ++n;
+    }
+    return n;
+}
+
 extern "C" int mg_magit_rebase_interactive(const char *repo_path,
                                            const char *onto,
                                            const struct mg_magit_rebase_step *steps,
