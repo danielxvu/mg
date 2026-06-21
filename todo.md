@@ -163,11 +163,23 @@ https://github.com/magit/magit`). ✅ **FM-C done** (PR #31, branch `fm-c-commit
 `c` is a commit menu — `c c` commit / `c a` amend / `c e` extend / `c w` reword
 (mg.git `commit_amend`/`extend`/`reword`/`head_message`; message buffer prefills
 + dispatches). Next, in priority order (Phase A — complete existing):
-- **FM-S — line/region staging** (magit's signature) + stage-all (S)/unstage-all
-  (U). Region = a one-hunk patch with only the marked +/- lines as changes,
-  others context; `git_apply` to index. Needs the status buffer to track a
-  selected line range; start with stage-all/unstage-all (easy: `git_index_add_all`
-  / reset all) then region.
+- ✅ **FM-S1 done** (stage-all `S` / unstage-all `U`, PR #32, branch
+  `fm-s1-stageall`): mg.git `stage_all`/`unstage_all`.
+- **FM-S2 — line/region staging** (magit's signature; the hard one). Algorithm
+  (magit-apply-region), worked out — implement `stage_region(repo, path,
+  hunk_index, sel_first, sel_last)` in mg.git: get the unstaged `git_patch` for
+  the file's delta; for the target hunk build a **partial unified-diff patch**
+  walking its lines by index `li`: context `' '` → keep (old++,new++); `'+'`
+  selected → keep (new++), unselected → **drop**; `'-'` selected → keep (old++),
+  unselected → **convert to context** `' '` (old++,new++). Header
+  `@@ -OLD_START,old_count +OLD_START,new_count @@` using the hunk's `old_start`
+  for both starts (applying onto the index baseline). Wrap with
+  `diff --git a/P b/P\n--- a/P\n+++ b/P\n` + body; `git_diff_from_buffer` →
+  `git_apply` to `GIT_APPLY_LOCATION_INDEX`. Unstage-region = reverse
+  (index_tree→HEAD, like `unstage_hunk`). Test: file with two changes in one
+  hunk; stage only the first → only it staged, second still unstaged. UI:
+  status buffer tracks the marked line range (mark↔point over MG_LINE_DIFF
+  lines); `s`/`u`/`k` on a region act on it. Verify via pty + git.
 - **FM-T — status sections**: unpushed/unpulled (ahead/behind upstream),
   push/pull remote in headers, TAB folding on ANY section header.
 - **FM-B — branch create/delete/rename**; **FM-Z — stash push/pop/show**.
@@ -229,8 +241,9 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `c2a3-line`→c2a2-line (#24), `c2b1-line`→c2a3-line (#25),
   `c2b2-line`→c2b1-line (#26), `u1-utf8`→c2b2-line (#27),
   `u2-display`→u1-utf8 (#28), `u3-cursor`→u2-display (#29),
-  `u4-classify`→u3-cursor (#30), `fm-c-commit`→u4-classify (#31).
-  Next Full-Magit slice (FM-S) freezes on `fm-c-commit`.
+  `u4-classify`→u3-cursor (#30), `fm-c-commit`→u4-classify (#31),
+  `fm-s1-stageall`→fm-c-commit (#32).
+  Next Full-Magit slice (FM-S2 region staging) freezes on `fm-s1-stageall`.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
