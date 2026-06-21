@@ -178,9 +178,14 @@ https://github.com/magit/magit`). ✅ **FM-C done** (PR #31, branch `fm-c-commit
   Verified via pty + system git (stage one of two changes; unstage one of two).
   ⚠ region-discard (`k` on a region) deferred — needs a workdir-baseline
   reverse patch (no workdir tree); follow-up. Per-slice commits FM-S2-1/2/3.
-- **FM-T — status sections (NEXT)**: unpushed/unpulled (ahead/behind upstream),
-  push/pull remote in headers, TAB folding on ANY section header.
-- **FM-B — branch create/delete/rename**; **FM-Z — stash push/pop/show**.
+- ✅ **FM-T done** (status sections, PR #34, branch `fm-t-sections`).
+  FM-T-1 `upstream_status` engine (`git_branch_upstream` + `git_graph_ahead_
+  behind`); FM-T-2 header `Upstream: <name> [ahead N, behind M]`; FM-T-3
+  `upstream_commits` revwalk → "Unpulled commits"/"Unpushed commits" sections;
+  FM-T-4 TAB folds ANY MG_LINE_SECTION header (folds keyed by title minus the
+  " (N)" count; `magit_emit` suppresses a folded body). Engine+bridge via
+  doctest (1-ahead/1-behind libgit2 fixture), folding via tmux capture-pane.
+- **FM-B — branch create/delete/rename (NEXT)**; **FM-Z — stash push/pop/show**.
 Phase B (new, highest value): **FM-L log buffer**, **FM-R push/pull/fetch**
 (⚠ network — verify libssh2/TLS transports first), **FM-X reset/revert/merge**.
 Per-slice TDD (test_git → test_bridge → magit_cmd.c → pty) + stacked PR.
@@ -240,8 +245,9 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `c2b2-line`→c2b1-line (#26), `u1-utf8`→c2b2-line (#27),
   `u2-display`→u1-utf8 (#28), `u3-cursor`→u2-display (#29),
   `u4-classify`→u3-cursor (#30), `fm-c-commit`→u4-classify (#31),
-  `fm-s1-stageall`→fm-c-commit (#32), `fm-s2-region`→fm-s1-stageall (#33).
-  Next Full-Magit slice (FM-T status sections) freezes on `fm-s2-region`.
+  `fm-s1-stageall`→fm-c-commit (#32), `fm-s2-region`→fm-s1-stageall (#33),
+  `fm-t-sections`→fm-s2-region (#34).
+  Next Full-Magit slice (FM-B branches) freezes on `fm-t-sections`.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
