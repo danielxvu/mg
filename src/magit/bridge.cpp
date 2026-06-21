@@ -475,6 +475,30 @@ extern "C" int mg_magit_checkout(const char *repo_path, const char *name)
     return mg::git::checkout_branch(repo_path, name).has_value() ? 1 : 0;
 }
 
+extern "C" int mg_magit_reset(const char *repo_path, const char *rev, int mode)
+{
+    if (repo_path == nullptr || rev == nullptr || mode < 0 || mode > 2)
+        return 0;
+    const mg::git::reset_mode m = mode == 0   ? mg::git::reset_mode::soft
+                                  : mode == 2 ? mg::git::reset_mode::hard
+                                              : mg::git::reset_mode::mixed;
+    return mg::git::reset_to(repo_path, rev, m).has_value() ? 1 : 0;
+}
+
+extern "C" int mg_magit_revert(const char *repo_path, const char *rev)
+{
+    if (repo_path == nullptr || rev == nullptr)
+        return 0;
+    return mg::git::revert_commit(repo_path, rev).has_value() ? 1 : 0;
+}
+
+extern "C" int mg_magit_merge(const char *repo_path, const char *name)
+{
+    if (repo_path == nullptr || name == nullptr || name[0] == '\0')
+        return 0;
+    return mg::git::merge_branch(repo_path, name).has_value() ? 1 : 0;
+}
+
 extern "C" int mg_magit_branch_create(const char *repo_path, const char *name)
 {
     if (repo_path == nullptr || name == nullptr || name[0] == '\0')

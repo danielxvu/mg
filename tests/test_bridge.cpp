@@ -611,6 +611,44 @@ TEST_CASE("mg_magit_stash_push then stash_pop round-trip through the bridge")
     fs::remove_all(dir);
 }
 
+TEST_CASE("mg_magit_revert and mg_magit_merge act through the bridge")
+{
+    // make_repo_one_hunk: committed f.txt with a dirty working-tree change.
+    // Commit that change so there are two commits, then revert the top one.
+    auto dir = make_repo_one_hunk();
+    auto repo = dir.string();
+    REQUIRE(mg_magit_stage(repo.c_str(), "f.txt") == 1);
+    REQUIRE(mg_magit_commit(repo.c_str(), "second") == 1);
+
+    auto head = [&] {
+        char buf[256] = {0};
+        mg_magit_head_message(repo.c_str(), buf, sizeof buf);
+        return std::string(buf);
+    };
+    CHECK(head() == "second");
+
+    // Revert HEAD -> a new "Revert ..." commit on top.
+    char oid[64] = {0};
+    {   // grab HEAD's oid via the log buffer
+        struct cap { std::string oid; } c;
+        mg_magit_log_buffer(
+            repo.c_str(), 1,
+            [](void *ctx, const char *, int kind, const char *path, int) {
+                if (kind == MG_LINE_COMMIT && path)
+                    static_cast<cap *>(ctx)->oid = path;
+            },
+            &c);
+        REQUIRE(c.oid.size() == 40);
+        std::snprintf(oid, sizeof oid, "%s", c.oid.c_str());
+    }
+    CHECK(mg_magit_revert(repo.c_str(), oid) == 1);
+    CHECK(head().find("Revert") != std::string::npos);
+
+    // Bad branch name -> merge fails gracefully.
+    CHECK(mg_magit_merge(repo.c_str(), "no-such-branch") == 0);
+    fs::remove_all(dir);
+}
+
 TEST_CASE("mg_magit_branch_create/rename/delete act through the bridge")
 {
     auto dir = make_repo_one_hunk(); // a commit on the default branch

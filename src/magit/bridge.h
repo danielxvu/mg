@@ -114,6 +114,13 @@ int mg_magit_stash_pop(const char *repo_path, int index);
  * 1 on success, 0 on failure (e.g. conflicting local changes). */
 int mg_magit_checkout(const char *repo_path, const char *name);
 
+/* Reset HEAD to `rev` (mode 0=soft, 1=mixed, 2=hard) / revert commit `rev`
+ * (records the inverse on HEAD) / merge local branch `name` into HEAD (ff or a
+ * merge commit; conflicts abort). Return 1 on success, 0 on failure. */
+int mg_magit_reset(const char *repo_path, const char *rev, int mode);
+int mg_magit_revert(const char *repo_path, const char *rev);
+int mg_magit_merge(const char *repo_path, const char *name);
+
 /* Create / delete / rename a local branch. create makes `name` at HEAD without
  * switching; rename moves `from` to `to`. Return 1 on success, 0 on failure. */
 int mg_magit_branch_create(const char *repo_path, const char *name);
