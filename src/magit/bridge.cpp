@@ -403,6 +403,23 @@ extern "C" int mg_magit_stash_drop(const char *repo_path, int index)
     return mg::git::stash_drop(repo_path, index).has_value() ? 1 : 0;
 }
 
+extern "C" int mg_magit_stash_push(const char *repo_path, const char *message)
+{
+    if (repo_path == nullptr)
+        return 0;
+    return mg::git::stash_push(repo_path, message == nullptr ? "" : message)
+                   .has_value()
+               ? 1
+               : 0;
+}
+
+extern "C" int mg_magit_stash_pop(const char *repo_path, int index)
+{
+    if (repo_path == nullptr || index < 0)
+        return 0;
+    return mg::git::stash_pop(repo_path, index).has_value() ? 1 : 0;
+}
+
 extern "C" int mg_magit_checkout(const char *repo_path, const char *name)
 {
     if (repo_path == nullptr || name == nullptr)

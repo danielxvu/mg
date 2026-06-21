@@ -552,6 +552,29 @@ TEST_CASE("mg_magit_status_buffer emits Unpushed and Unpulled sections")
     fs::remove_all(dir);
 }
 
+TEST_CASE("mg_magit_stash_push then stash_pop round-trip through the bridge")
+{
+    auto dir = make_repo_one_hunk(); // committed f.txt with a dirty change
+    auto repo = dir.string();
+    auto status_text = [&] {
+        std::string t;
+        mg_magit_status_buffer(
+            repo.c_str(), nullptr, 0,
+            [](void *ctx, const char *line, int, const char *, int) {
+                (static_cast<std::string *>(ctx))->append(line).append("\n");
+            },
+            &t);
+        return t;
+    };
+
+    CHECK(mg_magit_stash_push(repo.c_str(), "WIP") == 1);
+    CHECK(status_text().find("Stashes (1)") != std::string::npos); // stashed
+
+    CHECK(mg_magit_stash_pop(repo.c_str(), 0) == 1);
+    CHECK(status_text().find("Stashes") == std::string::npos);     // popped
+    fs::remove_all(dir);
+}
+
 TEST_CASE("mg_magit_branch_create/rename/delete act through the bridge")
 {
     auto dir = make_repo_one_hunk(); // a commit on the default branch

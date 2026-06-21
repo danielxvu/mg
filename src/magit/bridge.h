@@ -92,6 +92,11 @@ int mg_magit_unstage_region(const char *repo_path, const char *path, int hunk,
 int mg_magit_stash_apply(const char *repo_path, int index);
 int mg_magit_stash_drop(const char *repo_path, int index);
 
+/* Create a stash from the working tree (`message` may be NULL) / pop stash
+ * `index` (apply then drop). Return 1 on success, 0 on failure. */
+int mg_magit_stash_push(const char *repo_path, const char *message);
+int mg_magit_stash_pop(const char *repo_path, int index);
+
 /* Check out local branch `name` (moves HEAD + updates the worktree). Returns
  * 1 on success, 0 on failure (e.g. conflicting local changes). */
 int mg_magit_checkout(const char *repo_path, const char *name);
