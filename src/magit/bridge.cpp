@@ -264,7 +264,7 @@ extern "C" int mg_magit_status_buffer(const char *repo_path,
         if (auto cf = mg::git::conflicts(repo_path); cf && !cf->empty()) {
             out("");
             out("Conflicts (" + std::to_string(cf->size()) +
-                    ") -- e o keep ours / e t keep theirs / RET edit",
+                    ") -- e o/e t whole file - E ediff (per region) - RET edit",
                 MG_LINE_SECTION);
             for (const auto &c : *cf)
                 out("  " + c.path, MG_LINE_CONFLICT, c.path.c_str());
@@ -758,6 +758,34 @@ extern "C" int mg_magit_conflict_hunks(const char *repo_path, const char *path,
         emit_block(i, "=== theirs", (*hs)[i].theirs);
         emit(ctx, "", MG_LINE_CONFLICT_HUNK, path, i);
         ++n;
+    }
+    return n;
+}
+
+extern "C" int mg_magit_conflict_hunk_side(const char *repo_path,
+                                           const char *path, int index,
+                                           int side, mg_magit_emit_fn emit,
+                                           void *ctx)
+{
+    if (repo_path == nullptr || path == nullptr || emit == nullptr ||
+        index < 0 || side < 0 || side > 1)
+        return 0;
+    auto hs = mg::git::conflict_hunks(repo_path, path);
+    if (!hs || index >= static_cast<int>(hs->size()))
+        return 0;
+    const std::string &text = side == 0 ? (*hs)[index].ours : (*hs)[index].theirs;
+
+    int n = 0;
+    std::size_t pos = 0;
+    while (pos < text.size()) {
+        std::size_t nl = text.find('\n', pos);
+        std::size_t end = nl == std::string::npos ? text.size() : nl;
+        emit(ctx, text.substr(pos, end - pos).c_str(), MG_LINE_CONFLICT_HUNK,
+             path, index);
+        ++n;
+        if (nl == std::string::npos)
+            break;
+        pos = nl + 1;
     }
     return n;
 }

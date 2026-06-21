@@ -24,6 +24,9 @@
 
 #ifdef ENABLE_NATIVE_MAGIT
 #include "magit/bridge.h"	/* mg_magit_modeline() */
+/* True when `lp` of `bp` is in the *magit-ediff* active conflict region, so the
+ * redisplay loop renders it in standout (defined in magit_cmd.c). */
+int	magit_line_highlighted(struct buffer *, struct line *);
 #endif
 
 /*
@@ -621,6 +624,10 @@ update(int modelinecolor)
 				lp = lforw(lp);
 			}
 			vscreen[i]->v_color = CTEXT;
+#ifdef ENABLE_NATIVE_MAGIT
+			if (magit_line_highlighted(wp->w_bufp, lp))
+				vscreen[i]->v_color = CMODE;
+#endif
 			vscreen[i]->v_flag |= (VFCHG | VFHBAD);
 			vtmove(i, 0);
 #ifdef ENABLE_CPP_UPGRADES
@@ -634,6 +641,11 @@ update(int modelinecolor)
 			hflag = TRUE;
 			while (i < wp->w_toprow + wp->w_ntrows) {
 				vscreen[i]->v_color = CTEXT;
+#ifdef ENABLE_NATIVE_MAGIT
+				if (lp != wp->w_bufp->b_headp &&
+				    magit_line_highlighted(wp->w_bufp, lp))
+					vscreen[i]->v_color = CMODE;
+#endif
 				vscreen[i]->v_flag |= (VFCHG | VFHBAD);
 				vtmove(i, 0);
 				if (lp != wp->w_bufp->b_headp) {

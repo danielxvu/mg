@@ -227,6 +227,13 @@ int mg_magit_resolve_conflict(const char *repo_path, const char *path,
 int mg_magit_conflict_hunks(const char *repo_path, const char *path,
                             mg_magit_emit_fn emit, void *ctx);
 
+/* Emit the lines of conflict region `index`'s one `side` (0 ours / 1 theirs) of
+ * `path`, each on MG_LINE_CONFLICT_HUNK. Returns the line count (the *magit-
+ * ediff* side panes). */
+int mg_magit_conflict_hunk_side(const char *repo_path, const char *path,
+                                int index, int side, mg_magit_emit_fn emit,
+                                void *ctx);
+
 /* Resolve conflict region `index` of `path` by keeping side 0 ours / 1 theirs /
  * 2 both, rewriting the working-tree file. 1 ok, 0 fail. */
 int mg_magit_resolve_conflict_hunk(const char *repo_path, const char *path,

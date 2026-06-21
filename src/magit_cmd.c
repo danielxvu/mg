@@ -95,7 +95,8 @@ static int	magit_ediff(int, int);
 static int	magit_ediff_ours(int, int);
 static int	magit_ediff_theirs(int, int);
 static int	magit_ediff_both(int, int);
-static int	magit_ediff_refresh(int, int);
+static int	magit_ediff_next(int, int);
+static int	magit_ediff_prev(int, int);
 static int	magit_ediff_quit(int, int);
 static int	magit_menu_pull(int, int);
 static int	magit_menu_push(int, int);
@@ -183,9 +184,14 @@ static int	magit_log_limit = 100;
 
 /* For *magit-ediff*: the file being resolved + the conflict-region index per
  * buffer line (-1 for header/blank lines). */
-static char	magit_ediff_path[PATH_MAX];
-static int	magit_ediff_hunk[MAGIT_MAX_LINES];
-static int	magit_ediff_count;
+/* *magit-ediff* (3-pane visual conflict resolver): the file, the current
+ * region, and the merged-pane lines to render in standout (the active region). */
+static char		magit_ediff_path[PATH_MAX];
+static int		magit_ediff_region;	/* current conflict region */
+static struct buffer	*magit_ediff_merged_bp;	/* the highlighted pane */
+#define MAGIT_EDIFF_HL_MAX 1024
+static struct line	*magit_ediff_hl[MAGIT_EDIFF_HL_MAX];
+static int		magit_ediff_hl_n;
 
 /* Interactive-rebase plan backing the *git-rebase-todo* buffer. Each entry is
  * one commit; the buffer is a rendered view of this array (line i = entry i). */
@@ -385,22 +391,24 @@ static struct KEYMAPE (6) maglogmap = {
 	}
 };
 
-/* *magit-ediff* mode: RET both, a ours, b theirs, g refresh, q close. */
+/* *magit-ediff* mode: n/p step regions, a ours, b theirs, RET both, q close. */
 static PF magediff_ret[] = { magit_ediff_both };
 static PF magediff_a[] = { magit_ediff_ours };
 static PF magediff_b[] = { magit_ediff_theirs };
-static PF magediff_g[] = { magit_ediff_refresh };
+static PF magediff_n[] = { magit_ediff_next };
+static PF magediff_p[] = { magit_ediff_prev };
 static PF magediff_q[] = { magit_ediff_quit };
 
-static struct KEYMAPE (5) magediffmap = {
-	5,
-	5,
+static struct KEYMAPE (6) magediffmap = {
+	6,
+	6,
 	rescan,
 	{
 		{ CCHR('M'), CCHR('M'), magediff_ret, NULL },	/* RET: keep both */
 		{ 'a', 'a', magediff_a, NULL },			/* a: keep ours */
 		{ 'b', 'b', magediff_b, NULL },			/* b: keep theirs */
-		{ 'g', 'g', magediff_g, NULL },			/* g: refresh */
+		{ 'n', 'n', magediff_n, NULL },			/* n: next region */
+		{ 'p', 'p', magediff_p, NULL },			/* p: prev region */
 		{ 'q', 'q', magediff_q, NULL }			/* q: close */
 	}
 };
@@ -1154,77 +1162,155 @@ magit_log_build(struct buffer *bp)
 	return (TRUE);
 }
 
-/* emit callback for *magit-ediff*: record each line's conflict-region index. */
-static void
-magit_ediff_emit(void *ctx, const char *line, int kind, const char *path,
-    int hunk)
+/* True for the merged-pane lines in the active region -> rendered in standout.
+ * Called from display.c's redisplay loop (ENABLE_NATIVE_MAGIT). */
+int
+magit_line_highlighted(struct buffer *bp, struct line *lp)
 {
-	if (magit_ediff_count < MAGIT_MAX_LINES)
-		magit_ediff_hunk[magit_ediff_count++] =
-		    (kind == MG_LINE_CONFLICT_HUNK) ? hunk : -1;
-	(void)addlinef((struct buffer *)ctx, "%s", (char *)line);
+	int	i;
+
+	if (bp != magit_ediff_merged_bp)
+		return (0);
+	for (i = 0; i < magit_ediff_hl_n; i++)
+		if (magit_ediff_hl[i] == lp)
+			return (1);
+	return (0);
 }
 
-/* (Re)build the *magit-ediff* buffer for magit_ediff_path + its per-line map.
- * Returns the number of conflict regions still present. */
-static int
-magit_ediff_build(struct buffer *bp, int *nregions)
+/* Point the window showing `bp` at `dot` and force a redraw. */
+static void
+magit_window_to(struct buffer *bp, struct line *dot)
 {
 	struct mgwin	*wp;
-	char		 cwd[PATH_MAX];
-	int		 i, regions = 0;
 
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
-		return (FALSE);
-	bp->b_flag |= BFIGNDIRTY;
-	if (bclear(bp) != TRUE)
-		return (FALSE);
-	bp->b_flag |= BFREADONLY;
-
-	magit_ediff_count = 0;
-	(void)mg_magit_conflict_hunks(cwd, magit_ediff_path, magit_ediff_emit, bp);
-	for (i = 0; i < magit_ediff_count; i++)
-		if (magit_ediff_hunk[i] + 1 > regions)
-			regions = magit_ediff_hunk[i] + 1;
-	if (nregions != NULL)
-		*nregions = regions;
-
-	bp->b_dotp = bfirstlp(bp);
-	bp->b_doto = 0;
 	for (wp = wheadp; wp != NULL; wp = wp->w_wndp)
 		if (wp->w_bufp == bp) {
-			wp->w_dotp = bp->b_dotp;
+			wp->w_dotp = dot;
 			wp->w_doto = 0;
 			wp->w_markp = NULL;
 			wp->w_marko = 0;
-			wp->w_rflag |= WFFULL;
+			wp->w_rflag |= WFFULL | WFFRAME;
 		}
+}
+
+/* Fill `bp` with conflict region `magit_ediff_region`'s one `side`. */
+static void
+magit_ediff_fill_side(struct buffer *bp, int side)
+{
+	char	cwd[PATH_MAX];
+
+	bp->b_flag |= BFIGNDIRTY;
+	(void)bclear(bp);
+	bp->b_flag |= BFREADONLY;
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return;
+	(void)addlinef(bp, "--- %s (region %d) ---",
+	    side == 0 ? "ours" : "theirs", magit_ediff_region + 1);
+	(void)mg_magit_conflict_hunk_side(cwd, magit_ediff_path,
+	    magit_ediff_region, side, magit_plain_emit, bp);
+	bp->b_dotp = bfirstlp(bp);
+	bp->b_doto = 0;
+	magit_window_to(bp, bp->b_dotp);
+}
+
+/*
+ * (Re)build the merged pane from the working file (markers), recording the
+ * active region's lines for highlighting + the dot to scroll to. Returns the
+ * number of conflict regions in the file.
+ */
+static int
+magit_ediff_build_merged(struct buffer *bp)
+{
+	FILE		*fp;
+	char		 cwd[PATH_MAX], full[PATH_MAX], buf[4096];
+	struct line	*first = NULL;
+	int		 scan = -1, in_block = 0, regions = 0;
+
+	bp->b_flag |= BFIGNDIRTY;
+	(void)bclear(bp);
+	bp->b_flag |= BFREADONLY;
+	magit_ediff_hl_n = 0;
+	magit_ediff_merged_bp = bp;
+
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (0);
+	(void)snprintf(full, sizeof(full), "%s/%s", cwd, magit_ediff_path);
+	if ((fp = fopen(full, "r")) != NULL) {
+		while (fgets(buf, sizeof(buf), fp) != NULL) {
+			size_t len = strlen(buf);
+			if (len > 0 && buf[len - 1] == '\n')
+				buf[len - 1] = '\0';
+			if (strncmp(buf, "<<<<<<<", 7) == 0) {
+				scan++;
+				if (scan + 1 > regions)
+					regions = scan + 1;
+				in_block = 1;
+			}
+			(void)addlinef(bp, "%s", buf);
+			if (in_block && scan == magit_ediff_region &&
+			    magit_ediff_hl_n < MAGIT_EDIFF_HL_MAX) {
+				struct line *added = lback(bp->b_headp);
+				if (first == NULL)
+					first = added;
+				magit_ediff_hl[magit_ediff_hl_n++] = added;
+			}
+			if (strncmp(buf, ">>>>>>>", 7) == 0)
+				in_block = 0;
+		}
+		(void)fclose(fp);
+	}
+	bp->b_dotp = (first != NULL) ? first : bfirstlp(bp);
+	bp->b_doto = 0;
+	magit_window_to(bp, bp->b_dotp);
+	return (regions);
+}
+
+/* Refill all three panes for the current region. Returns region count. */
+static int
+magit_ediff_sync(void)
+{
+	struct buffer	*merged, *ours, *theirs;
+	int		 regions;
+
+	if ((merged = bfind("*ediff-merged*", FALSE)) == NULL ||
+	    (ours = bfind("*ediff-ours*", FALSE)) == NULL ||
+	    (theirs = bfind("*ediff-theirs*", FALSE)) == NULL)
+		return (0);
+	regions = magit_ediff_build_merged(merged);
+	magit_ediff_fill_side(ours, 0);
+	magit_ediff_fill_side(theirs, 1);
+	return (regions);
+}
+
+/* Tear down the 3 panes and return to a single *magit-status* window. */
+static int
+magit_ediff_quit(int f, int n)
+{
+	struct buffer	*st;
+
+	magit_ediff_merged_bp = NULL;
+	magit_ediff_hl_n = 0;
+	(void)onlywind(f, n);
+	if ((st = bfind("*magit-status*", FALSE)) != NULL) {
+		(void)showbuffer(st, curwp, WFFULL | WFFRAME);
+		curbp = st;
+		(void)magit_refresh(f, n);
+	}
 	return (TRUE);
 }
 
-/* The conflict-region index of the *magit-ediff* line at point, or -1. */
-static int
-magit_ediff_hunk_at_point(void)
-{
-	struct line	*lp;
-	int		 idx = 0;
-
-	for (lp = bfirstlp(curbp);
-	    lp != curwp->w_dotp && lp != curbp->b_headp; lp = lforw(lp))
-		idx++;
-	if (idx >= magit_ediff_count)
-		return (-1);
-	return (magit_ediff_hunk[idx]);
-}
-
-/* E (on a Conflicts line): open *magit-ediff* for the file at point. */
+/*
+ * E (on a Conflicts line): open the 3-pane *magit-ediff* -- merged (top,
+ * active region in standout), theirs (middle), ours (bottom). Only the merged
+ * pane is interactive (n/p step regions, a/b/RET resolve, q close).
+ */
 static int
 magit_ediff(int f, int n)
 {
-	struct buffer	*bp;
-	struct mgwin	*wp;
+	struct buffer	*merged, *ours, *theirs;
+	struct mgwin	*top, *mid, *bot;
 	char		*path = NULL;
-	int		 kind, hunk, regions = 0;
+	int		 kind, hunk;
 
 	kind = magit_at_point(&path, &hunk);
 	if (kind != MG_LINE_CONFLICT || path == NULL || path[0] == '\0') {
@@ -1232,54 +1318,69 @@ magit_ediff(int f, int n)
 		return (FALSE);
 	}
 	(void)strlcpy(magit_ediff_path, path, sizeof(magit_ediff_path));
-	if ((bp = bfind("*magit-ediff*", TRUE)) == NULL)
+	magit_ediff_region = 0;
+
+	if ((merged = bfind("*ediff-merged*", TRUE)) == NULL ||
+	    (theirs = bfind("*ediff-theirs*", TRUE)) == NULL ||
+	    (ours = bfind("*ediff-ours*", TRUE)) == NULL)
 		return (FALSE);
-	if (magit_ediff_build(bp, &regions) != TRUE)
+	(void)magit_ediff_sync();
+
+	/*
+	 * Collapse to one window, then split twice WHILE it still shows the
+	 * status buffer (consistent w_linep/w_dotp -- splitwind walks them, and
+	 * showbuffer leaves w_linep stale). Assign the pane buffers afterward.
+	 */
+	(void)onlywind(f, n);
+	curwp->w_dotp = bfirstlp(curbp);	/* dot at top -> predictable split */
+	curwp->w_doto = 0;
+	if (splitwind(f, n) != TRUE)
 		return (FALSE);
-	if ((wp = popbuf(bp, WNONE)) == NULL)
+	if (splitwind(f, n) != TRUE)
 		return (FALSE);
-	curwp = wp;
-	curbp = bp;
-	wp->w_dotp = bp->b_dotp;
-	wp->w_doto = bp->b_doto;
-	bp->b_modes[1] = name_mode("magit-ediff-mode");
-	bp->b_nmodes = 1;
+	top = wheadp;			/* top / mid / bot, in order */
+	mid = top->w_wndp;
+	bot = mid->w_wndp;
+
+	(void)showbuffer(merged, top, WFFULL | WFFRAME);
+	(void)showbuffer(theirs, mid, WFFULL | WFFRAME);
+	(void)showbuffer(ours, bot, WFFULL | WFFRAME);
+	top->w_dotp = merged->b_dotp;
+	top->w_doto = 0;
+	merged->b_modes[1] = name_mode("magit-ediff-mode");
+	merged->b_nmodes = 1;
+
+	curwp = top;		/* focus the interactive merged pane */
+	curbp = merged;
 	return (TRUE);
 }
 
 /*
- * Resolve the region at point by keeping `side` (0 ours / 1 theirs / 2 both).
- * Rebuild; when the last region is resolved, stage the file and report.
+ * Resolve the current region (0 ours / 1 theirs / 2 both). When the last region
+ * is resolved, stage the now-clean file and close the session.
  */
 static int
 magit_ediff_resolve(int side, int f, int n)
 {
-	struct buffer	*bp;
-	char		 cwd[PATH_MAX];
-	int		 region, regions = 0;
+	char	cwd[PATH_MAX];
+	int	regions;
 
-	region = magit_ediff_hunk_at_point();
-	if (region < 0) {
-		ewprintf("Point is not on a conflict region");
-		return (FALSE);
-	}
 	if (getcwd(cwd, sizeof(cwd)) == NULL)
 		return (FALSE);
-	if (mg_magit_resolve_conflict_hunk(cwd, magit_ediff_path, region, side) !=
-	    1) {
+	if (mg_magit_resolve_conflict_hunk(cwd, magit_ediff_path,
+	    magit_ediff_region, side) != 1) {
 		ewprintf("Resolve failed");
 		return (FALSE);
 	}
-	if ((bp = bfind("*magit-ediff*", FALSE)) == NULL)
-		return (FALSE);
-	if (magit_ediff_build(bp, &regions) != TRUE)
-		return (FALSE);
+	regions = magit_ediff_sync();
 	if (regions == 0) {
-		/* All regions resolved: stage the now-clean file and close. */
 		(void)mg_magit_stage(cwd, magit_ediff_path);
 		ewprintf("%s resolved", magit_ediff_path);
 		return (magit_ediff_quit(f, n));
 	}
+	if (magit_ediff_region >= regions)
+		magit_ediff_region = regions - 1;
+	regions = magit_ediff_sync(); /* re-render at the clamped region */
 	ewprintf("%d conflict region%s left", regions, regions == 1 ? "" : "s");
 	return (TRUE);
 }
@@ -1302,22 +1403,39 @@ magit_ediff_both(int f, int n)
 	return (magit_ediff_resolve(2, f, n));
 }
 
-/* g: rebuild the *magit-ediff* buffer. */
+/* n / p: step to the next / previous conflict region (all panes follow). */
 static int
-magit_ediff_refresh(int f, int n)
+magit_ediff_step(int delta, int f, int n)
 {
-	struct buffer	*bp;
+	struct buffer	*merged;
+	int		 regions;
 
-	if ((bp = bfind("*magit-ediff*", FALSE)) == NULL)
+	if ((merged = bfind("*ediff-merged*", FALSE)) == NULL)
 		return (FALSE);
-	return (magit_ediff_build(bp, NULL));
+	/* count regions without disturbing the view yet */
+	regions = magit_ediff_build_merged(merged);
+	if (regions <= 0)
+		return (FALSE);
+	magit_ediff_region += delta;
+	if (magit_ediff_region < 0)
+		magit_ediff_region = 0;
+	if (magit_ediff_region >= regions)
+		magit_ediff_region = regions - 1;
+	(void)magit_ediff_sync();
+	ewprintf("Region %d/%d", magit_ediff_region + 1, regions);
+	return (TRUE);
 }
 
-/* q: close the *magit-ediff* window. */
 static int
-magit_ediff_quit(int f, int n)
+magit_ediff_next(int f, int n)
 {
-	return (delwind(f, n));
+	return (magit_ediff_step(1, f, n));
+}
+
+static int
+magit_ediff_prev(int f, int n)
+{
+	return (magit_ediff_step(-1, f, n));
 }
 
 /* Build + pop the *magit-log* buffer (honoring magit_log_file_path). */
