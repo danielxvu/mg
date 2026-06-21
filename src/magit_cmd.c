@@ -54,6 +54,9 @@ static int	magit_stage_all(int, int);
 static int	magit_unstage_all(int, int);
 static int	magit_region(int *, char **, int *, int *);
 static int	magit_line_index(void);
+static int	magit_log(int, int);
+static int	magit_log_visit(int, int);
+static int	magit_log_refresh(int, int);
 
 /*
  * line -> {kind, hunk, path} map for the most recent render of *magit-status*.
@@ -70,6 +73,11 @@ static int	magit_meta_count;
 /* Paths whose diffs are currently expanded inline. */
 static char	magit_expanded[MAGIT_MAX_EXPANDED][PATH_MAX];
 static int	magit_expanded_count;
+
+/* For *magit-log*: the full commit oid per buffer line ("" for non-commits). */
+#define MAGIT_OID_LEN 64
+static char	magit_log_oid[MAGIT_MAX_LINES][MAGIT_OID_LEN];
+static int	magit_log_count;
 
 /* Section titles (count suffix stripped) whose bodies are currently folded. */
 #define MAGIT_MAX_FOLDED 32
@@ -90,9 +98,38 @@ static PF magit_c[] = { NULL };			/* c -> commit menu prefix */
 static PF magit_g[] = { magit_refresh };
 static PF magit_k[] = { magit_discard };
 static PF magit_q[] = { delwind };
+static PF magit_l[] = { magit_log };
 static PF magit_s[] = { magit_stage };
 static PF magit_u[] = { magit_unstage };
 static PF magit_z[] = { NULL };			/* z -> stash menu prefix */
+
+/* *magit-log* keymap: RET shows a commit's diff, g refreshes, q closes. */
+static PF maglog_ret[] = { magit_log_visit };
+static PF maglog_g[] = { magit_log_refresh };
+static PF maglog_q[] = { delwind };
+
+static struct KEYMAPE (3) maglogmap = {
+	3,
+	3,
+	rescan,
+	{
+		{ CCHR('M'), CCHR('M'), maglog_ret, NULL },	/* RET: show commit */
+		{ 'g', 'g', maglog_g, NULL },			/* g: refresh */
+		{ 'q', 'q', maglog_q, NULL }			/* q: close */
+	}
+};
+
+/* *magit-commit* view keymap: q closes (the diff is read-only). */
+static PF magcommit_q[] = { delwind };
+
+static struct KEYMAPE (1) magcommitmap = {
+	1,
+	1,
+	rescan,
+	{
+		{ 'q', 'q', magcommit_q, NULL }			/* q: close */
+	}
+};
 
 /*
  * ESC submap: M-n / M-p jump between section headers. map_default is rescan, so
@@ -171,9 +208,9 @@ static struct KEYMAPE (4) magit_commitmenu = {
 };
 
 /* Entries MUST stay in ascending key order -- doscan() relies on it. */
-static struct KEYMAPE (15) magitmap = {
-	15,
-	15,
+static struct KEYMAPE (16) magitmap = {
+	16,
+	16,
 	rescan,
 	{
 		{ CCHR('I'), CCHR('I'), magit_tab, NULL },	/* TAB: expand/collapse */
@@ -188,6 +225,7 @@ static struct KEYMAPE (15) magitmap = {
 		{ 'c', 'c', magit_c, (KEYMAP *)&magit_commitmenu }, /* c: commit menu */
 		{ 'g', 'g', magit_g, NULL },
 		{ 'k', 'k', magit_k, NULL },
+		{ 'l', 'l', magit_l, NULL },			/* l: log buffer */
 		{ 'q', 'q', magit_q, NULL },
 		{ 's', 's', magit_s, NULL },
 		{ 'u', 'u', magit_u, NULL },
@@ -394,6 +432,148 @@ magit_refresh(int f, int n)
 	return (magit_build(bp));
 }
 
+/* emit callback for *magit-log*: record the oid of each commit line. */
+static void
+magit_log_emit(void *ctx, const char *line, int kind, const char *path,
+    int hunk)
+{
+	if (magit_log_count < MAGIT_MAX_LINES) {
+		if (kind == MG_LINE_COMMIT && path != NULL)
+			(void)strlcpy(magit_log_oid[magit_log_count], path,
+			    MAGIT_OID_LEN);
+		else
+			magit_log_oid[magit_log_count][0] = '\0';
+		magit_log_count++;
+	}
+	(void)addlinef((struct buffer *)ctx, "%s", (char *)line);
+}
+
+/* emit callback for read-only views (e.g. *magit-commit*): text only. */
+static void
+magit_plain_emit(void *ctx, const char *line, int kind, const char *path,
+    int hunk)
+{
+	(void)addlinef((struct buffer *)ctx, "%s", (char *)line);
+}
+
+/* (Re)build the *magit-log* buffer + its per-line oid map. */
+static int
+magit_log_build(struct buffer *bp)
+{
+	struct mgwin	*wp;
+	char		 cwd[PATH_MAX];
+
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	bp->b_flag |= BFIGNDIRTY;
+	if (bclear(bp) != TRUE)
+		return (FALSE);
+	bp->b_flag |= BFREADONLY;
+
+	magit_log_count = 0;
+	(void)mg_magit_log_buffer(cwd, 100, magit_log_emit, bp);
+
+	bp->b_dotp = bfirstlp(bp);
+	bp->b_doto = 0;
+	for (wp = wheadp; wp != NULL; wp = wp->w_wndp)
+		if (wp->w_bufp == bp) {
+			wp->w_dotp = bp->b_dotp;
+			wp->w_doto = 0;
+			wp->w_markp = NULL;
+			wp->w_marko = 0;
+			wp->w_rflag |= WFFULL;
+		}
+	return (TRUE);
+}
+
+/* l: open the *magit-log* buffer (commit history, newest first). */
+static int
+magit_log(int f, int n)
+{
+	static int	 initialized = 0;
+	struct buffer	*bp;
+	struct mgwin	*wp;
+
+	if (!initialized) {
+		maps_add((KEYMAP *)&maglogmap, "magit-log-mode");
+		maps_add((KEYMAP *)&magcommitmap, "magit-commit-view-mode");
+		initialized = 1;
+	}
+	if ((bp = bfind("*magit-log*", TRUE)) == NULL)
+		return (FALSE);
+	if (magit_log_build(bp) != TRUE)
+		return (FALSE);
+	if ((wp = popbuf(bp, WNONE)) == NULL)
+		return (FALSE);
+	curwp = wp;
+	curbp = bp;
+	wp->w_dotp = bp->b_dotp;
+	wp->w_doto = bp->b_doto;
+	bp->b_modes[1] = name_mode("magit-log-mode");
+	bp->b_nmodes = 1;
+	return (TRUE);
+}
+
+static int
+magit_log_refresh(int f, int n)
+{
+	struct buffer	*bp;
+
+	if ((bp = bfind("*magit-log*", TRUE)) == NULL)
+		return (FALSE);
+	return (magit_log_build(bp));
+}
+
+/* The full oid of the commit at point in *magit-log*, or NULL. */
+static const char *
+magit_log_oid_at_point(void)
+{
+	struct line	*lp;
+	int		 idx = 0;
+
+	for (lp = bfirstlp(curbp);
+	    lp != curwp->w_dotp && lp != curbp->b_headp; lp = lforw(lp))
+		idx++;
+	if (idx >= magit_log_count || magit_log_oid[idx][0] == '\0')
+		return (NULL);
+	return (magit_log_oid[idx]);
+}
+
+/* RET in *magit-log*: pop a read-only *magit-commit* buffer with the diff. */
+static int
+magit_log_visit(int f, int n)
+{
+	const char	*oid;
+	struct buffer	*bp;
+	struct mgwin	*wp;
+	char		 cwd[PATH_MAX];
+
+	if ((oid = magit_log_oid_at_point()) == NULL) {
+		ewprintf("Not on a commit");
+		return (FALSE);
+	}
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	if ((bp = bfind("*magit-commit*", TRUE)) == NULL)
+		return (FALSE);
+	bp->b_flag |= BFIGNDIRTY;
+	if (bclear(bp) != TRUE)
+		return (FALSE);
+	bp->b_flag |= BFREADONLY;
+	(void)mg_magit_commit_diff(cwd, oid, magit_plain_emit, bp);
+	bp->b_dotp = bfirstlp(bp);
+	bp->b_doto = 0;
+	if ((wp = popbuf(bp, WNONE)) == NULL)
+		return (FALSE);
+	curwp = wp;
+	curbp = bp;
+	wp->w_dotp = bp->b_dotp;
+	wp->w_doto = bp->b_doto;
+	bp->b_modes[1] = name_mode("magit-commit-view-mode");
+	bp->b_nmodes = 1;
+	return (TRUE);
+}
+
 /* Resolve the kind/path/hunk of the row under the cursor. */
 static int
 magit_at_point(char **path_out, int *hunk_out)
@@ -585,6 +765,7 @@ magit_help(int f, int n)
 		"  b b/c/k/m  branch: checkout / create / delete / rename",
 		"  c c/a/e/w  commit / amend / extend / reword",
 		"  z z/p    stash: push / pop",
+		"  l        log buffer (RET on a commit shows its diff)",
 		"  g        refresh",
 		"  q        quit this window",
 		"  ?        this help",
