@@ -421,6 +421,60 @@ vt_render_line(struct line *lp, struct mgwin *wp)
 		j += n;
 	}
 }
+
+/*
+ * Codepoint counterpart of vtpute (the horizontally-scrolled "extended line"):
+ * like vtputuc but, mirroring vtpute, only writes a cell once vtcol has reached
+ * the visible left edge (vtcol >= 0) -- cells scrolled off the left are still
+ * counted so the column math stays right.
+ */
+static void
+vtputeuc(unsigned int cp, int width, struct mgwin *wp)
+{
+	struct video	*vp = vscreen[vtrow];
+
+	(void)wp;
+	if (width <= 0)
+		return;
+	if (vtcol >= ncol) {
+		vp->v_text[ncol - 1] = '$';
+		return;
+	}
+	if (width == 2 && vtcol + 2 > ncol) {	/* wide char won't fit */
+		vp->v_text[vtcol >= 0 ? vtcol : ncol - 1] = '$';
+		vtcol++;
+		return;
+	}
+	if (vtcol >= 0)
+		vp->v_text[vtcol] = (vtcell)cp;
+	vtcol++;
+	if (width == 2) {
+		if (vtcol >= 0)
+			vp->v_text[vtcol] = VT_CONT;
+		vtcol++;
+	}
+}
+
+/* vt_render_line for an extended (scrolled) line: ASCII/tab/control keep
+ * vtpute's offscreen+overflow handling; bytes >= 0x80 take the codepoint path. */
+static void
+vt_render_line_ext(struct line *lp, struct mgwin *wp)
+{
+	int		 j = 0, len = llength(lp);
+	unsigned int	 cp;
+	int		 w, n;
+
+	while (j < len) {
+		n = mg_utf8_decode(&ltext(lp)[j], len - j, &cp, &w);
+		if (n <= 0)
+			n = 1;
+		if (cp < 0x80)
+			vtpute((int)cp, wp);
+		else
+			vtputeuc(cp, w, wp);
+		j += n;
+	}
+}
 #endif /* ENABLE_CPP_UPGRADES */
 
 /*
@@ -779,7 +833,6 @@ void
 updext(int currow, int curcol)
 {
 	struct line	*lp;			/* pointer to current line */
-	int	 j;			/* index into line */
 
 	if (ncol < 2)
 		return;
@@ -796,8 +849,16 @@ updext(int currow, int curcol)
 	 */
 	vtmove(currow, -lbound);		/* start scanning offscreen */
 	lp = curwp->w_dotp;			/* line to output */
-	for (j = 0; j < llength(lp); ++j)	/* until the end-of-line */
-		vtpute(lgetc(lp, j), curwp);
+#ifdef ENABLE_CPP_UPGRADES
+	vt_render_line_ext(lp, curwp);		/* codepoint-aware (UTF-8) */
+#else
+	{
+		int	j;			/* index into line */
+
+		for (j = 0; j < llength(lp); ++j) /* until the end-of-line */
+			vtpute(lgetc(lp, j), curwp);
+	}
+#endif
 	vteeol();				/* truncate the virtual line */
 	vscreen[currow]->v_text[0] = '$';	/* and put a '$' in column 1 */
 }
