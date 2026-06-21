@@ -122,6 +122,36 @@ fs::path make_repo_unstaged()
     git_libgit2_shutdown();
     return dir;
 }
+// A repo whose committed file has two changes close enough to land in ONE
+// unstaged hunk (line indices: 0 ' a, 1 -b, 2 +B, 3 ' c, 4 -d, 5 +D, 6 ' e).
+fs::path make_repo_one_hunk()
+{
+    auto dir = make_temp_dir();
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_init(&repo, dir.string().c_str(), 0) == 0);
+    std::ofstream(dir / "f.txt") << "a\nb\nc\nd\ne\n";
+    git_index *idx = nullptr;
+    REQUIRE(git_repository_index(&idx, repo) == 0);
+    REQUIRE(git_index_add_bypath(idx, "f.txt") == 0);
+    REQUIRE(git_index_write(idx) == 0);
+    git_oid toid;
+    REQUIRE(git_index_write_tree(&toid, idx) == 0);
+    git_tree *tree = nullptr;
+    REQUIRE(git_tree_lookup(&tree, repo, &toid) == 0);
+    git_signature *sig = nullptr;
+    REQUIRE(git_signature_now(&sig, "T", "t@t") == 0);
+    git_oid coid;
+    REQUIRE(git_commit_create(&coid, repo, "HEAD", sig, sig, nullptr, "c1", tree,
+                              0, nullptr) == 0);
+    git_signature_free(sig);
+    git_tree_free(tree);
+    git_index_free(idx);
+    std::ofstream(dir / "f.txt") << "a\nB\nc\nD\ne\n"; // two unstaged changes
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+    return dir;
+}
 // A repo with one commit, an extra branch, and one stashed modification.
 fs::path make_repo_stash_branch()
 {
@@ -406,6 +436,43 @@ TEST_CASE("mg_magit_stage_hunk stages just one hunk through the bridge")
     }
     CHECK(staged_section);
     CHECK(staged_add);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("mg_magit_stage_region stages just the selected lines through the bridge")
+{
+    auto dir = make_repo_one_hunk(); // one hunk: b->B and d->D
+    // Stage only the b->B change (hunk 0, line indices 1..2).
+    CHECK(mg_magit_stage_region(dir.string().c_str(), "f.txt", 0, 1, 2) == 1);
+
+    // The expanded staged view carries +B but not +D.
+    const char *expanded[1] = {"f.txt"};
+    struct row { std::string line; int kind; };
+    std::vector<row> rows;
+    mg_magit_status_buffer(
+        dir.string().c_str(), expanded, 1,
+        [](void *ctx, const char *line, int kind, const char *, int) {
+            static_cast<std::vector<row> *>(ctx)->push_back({line, kind});
+        },
+        &rows);
+
+    // Scan only the Staged section's diff lines (the Unstaged section still
+    // shows +D, which we must not mistake for a staged change).
+    bool in_staged = false, staged_B = false, staged_D = false;
+    for (const auto &r : rows) {
+        if (r.line.find("Staged changes") != std::string::npos)
+            in_staged = true;
+        else if (r.line.find("Unstaged changes") != std::string::npos)
+            in_staged = false;
+        if (in_staged && r.kind == MG_LINE_DIFF && r.line[0] == '+') {
+            if (r.line.find('B') != std::string::npos)
+                staged_B = true;
+            if (r.line.find('D') != std::string::npos)
+                staged_D = true;
+        }
+    }
+    CHECK(staged_B);
+    CHECK_FALSE(staged_D);
     fs::remove_all(dir);
 }
 

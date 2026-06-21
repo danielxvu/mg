@@ -79,6 +79,14 @@ int mg_magit_head_message(const char *repo_path, char *buf, size_t buflen);
 int mg_magit_stage_hunk(const char *repo_path, const char *path, int hunk);
 int mg_magit_unstage_hunk(const char *repo_path, const char *path, int hunk);
 
+/* Stage / unstage only the lines [first, last] (0-based, inclusive, as numbered
+ * within hunk `hunk` of the rendered diff) of `path` -- magit line/region
+ * staging. Returns 1 on success, 0 on failure. */
+int mg_magit_stage_region(const char *repo_path, const char *path, int hunk,
+                          int first, int last);
+int mg_magit_unstage_region(const char *repo_path, const char *path, int hunk,
+                            int first, int last);
+
 /* Apply (reapply, keep) / drop (delete) stash number `index`. Returns 1 on
  * success, 0 on failure. */
 int mg_magit_stash_apply(const char *repo_path, int index);

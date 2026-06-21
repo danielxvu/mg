@@ -343,6 +343,29 @@ extern "C" int mg_magit_unstage_hunk(const char *repo_path, const char *path,
     return mg::git::unstage_hunk(repo_path, path, hunk).has_value() ? 1 : 0;
 }
 
+extern "C" int mg_magit_stage_region(const char *repo_path, const char *path,
+                                     int hunk, int first, int last)
+{
+    if (repo_path == nullptr || path == nullptr || hunk < 0 || first < 0 ||
+        last < first)
+        return 0;
+    return mg::git::stage_region(repo_path, path, hunk, first, last).has_value()
+               ? 1
+               : 0;
+}
+
+extern "C" int mg_magit_unstage_region(const char *repo_path, const char *path,
+                                       int hunk, int first, int last)
+{
+    if (repo_path == nullptr || path == nullptr || hunk < 0 || first < 0 ||
+        last < first)
+        return 0;
+    return mg::git::unstage_region(repo_path, path, hunk, first, last)
+                   .has_value()
+               ? 1
+               : 0;
+}
+
 extern "C" int mg_magit_stash_apply(const char *repo_path, int index)
 {
     if (repo_path == nullptr || index < 0)
