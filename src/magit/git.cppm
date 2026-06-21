@@ -189,6 +189,12 @@ std::expected<std::vector<stash_entry>, error> stashes(std::string path);
 std::expected<std::vector<branch_entry>, error> branches(std::string path);
 
 // Reapply stash `index` to the working tree, keeping it in the stash list.
+// Stash the working-tree + index changes away with `message` (magit's z z).
+std::expected<void, error> stash_push(std::string repo, std::string message);
+
+// Apply stash `index` and drop it on success (magit's z p).
+std::expected<void, error> stash_pop(std::string repo, std::size_t index);
+
 std::expected<void, error> stash_apply(std::string repo, std::size_t index);
 
 // Delete stash `index` from the stash list.
@@ -536,6 +542,43 @@ std::expected<std::vector<branch_entry>, error> branches(std::string path)
     if (rc != GIT_ITEROVER)
         return std::unexpected(last_error());
     return out;
+}
+
+std::expected<void, error> stash_push(std::string repo, std::string message)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    // Prefer the configured identity; fall back to a placeholder so a stash
+    // still works in a repo with no user.name/user.email.
+    git_signature *raw_sig = nullptr;
+    if (git_signature_default(&raw_sig, r.get()) != 0 &&
+        git_signature_now(&raw_sig, "mg", "mg@localhost") != 0)
+        return std::unexpected(last_error());
+    detail::sig_ptr sig(raw_sig);
+
+    git_oid oid;
+    // GIT_STASH_DEFAULT stashes tracked changes (index + working tree). A clean
+    // tree -> GIT_ENOTFOUND, surfaced as an error (nothing to stash).
+    if (git_stash_save(&oid, r.get(), sig.get(), message.c_str(),
+                       GIT_STASH_DEFAULT) != 0)
+        return std::unexpected(last_error());
+    return {};
+}
+
+std::expected<void, error> stash_pop(std::string repo, std::size_t index)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+    if (git_stash_pop(r.get(), index, nullptr) != 0) // applies, then drops
+        return std::unexpected(last_error());
+    return {};
 }
 
 std::expected<void, error> stash_apply(std::string repo, std::size_t index)

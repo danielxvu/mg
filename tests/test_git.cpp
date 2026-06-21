@@ -693,6 +693,41 @@ TEST_CASE("stage_region stages only the selected lines of a single hunk")
     fs::remove_all(dir);
 }
 
+TEST_CASE("stash_push stashes the working tree, stash_pop restores it")
+{
+    auto dir = make_repo_with_commit("base"); // a.txt = "content"
+    set_test_config(dir);                      // for the stasher signature
+    std::ofstream(dir / "a.txt") << "dirty change"; // unstaged modification
+
+    REQUIRE(mg::git::stash_push(dir.string(), "WIP").has_value());
+
+    // Working tree is clean and the stash list has one entry.
+    auto st = mg::git::repo_status(dir.string());
+    REQUIRE(st.has_value());
+    CHECK(st->empty());
+    auto sl = mg::git::stashes(dir.string());
+    REQUIRE(sl.has_value());
+    REQUIRE(sl->size() == 1);
+
+    // Pop brings the change back and empties the stash list.
+    REQUIRE(mg::git::stash_pop(dir.string(), 0).has_value());
+    auto st2 = mg::git::repo_status(dir.string());
+    REQUIRE(st2.has_value());
+    CHECK_FALSE(st2->empty());
+    auto sl2 = mg::git::stashes(dir.string());
+    REQUIRE(sl2.has_value());
+    CHECK(sl2->empty());
+    fs::remove_all(dir);
+}
+
+TEST_CASE("stash_push with nothing to stash is an error")
+{
+    auto dir = make_repo_with_commit("base"); // clean tree
+    set_test_config(dir);
+    CHECK_FALSE(mg::git::stash_push(dir.string(), "nope").has_value());
+    fs::remove_all(dir);
+}
+
 TEST_CASE("create_branch makes a new branch at HEAD without checking it out")
 {
     auto dir = make_repo_with_commit("base"); // on master
