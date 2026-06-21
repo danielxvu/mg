@@ -211,6 +211,19 @@ std::expected<void, error> stash_drop(std::string repo, std::size_t index);
 // Check out local branch `name`, moving HEAD and updating the working tree.
 std::expected<void, error> checkout_branch(std::string repo, std::string name);
 
+enum class reset_mode { soft, mixed, hard };
+
+// Reset HEAD (and per `mode` the index/working tree) to commit `rev`.
+std::expected<void, error>
+reset_to(std::string repo, std::string rev, reset_mode mode);
+
+// Revert commit `rev`, recording the inverse as a new commit on HEAD.
+std::expected<void, error> revert_commit(std::string repo, std::string rev);
+
+// Merge local branch `name` into HEAD: fast-forward when possible, else a
+// merge commit. Errors (leaving the tree clean) on conflicts.
+std::expected<void, error> merge_branch(std::string repo, std::string name);
+
 // Create local branch `name` at HEAD (does not switch to it).
 std::expected<void, error> create_branch(std::string repo, std::string name);
 
@@ -709,6 +722,217 @@ rename_branch(std::string repo, std::string from, std::string to)
     if (git_branch_move(&raw_new, ref.get(), to.c_str(), /*force=*/0) != 0)
         return std::unexpected(last_error());
     git_reference_free(raw_new);
+    return {};
+}
+
+// Configured identity, falling back to a placeholder so commits/reverts/merges
+// still work in a repo with no user.name/user.email.
+static detail::sig_ptr default_signature(git_repository *repo)
+{
+    git_signature *raw = nullptr;
+    if (git_signature_default(&raw, repo) != 0 &&
+        git_signature_now(&raw, "mg", "mg@localhost") != 0)
+        return detail::sig_ptr(nullptr);
+    return detail::sig_ptr(raw);
+}
+
+std::expected<void, error>
+reset_to(std::string repo, std::string rev, reset_mode mode)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    git_object *raw_obj = nullptr;
+    if (git_revparse_single(&raw_obj, r.get(), rev.c_str()) != 0)
+        return std::unexpected(last_error());
+    detail::object_ptr obj(raw_obj);
+
+    const git_reset_t t = mode == reset_mode::soft   ? GIT_RESET_SOFT
+                          : mode == reset_mode::hard ? GIT_RESET_HARD
+                                                     : GIT_RESET_MIXED;
+    if (git_reset(r.get(), obj.get(), t, nullptr) != 0)
+        return std::unexpected(last_error());
+    return {};
+}
+
+std::expected<void, error> revert_commit(std::string repo, std::string rev)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    git_object *raw_obj = nullptr;
+    if (git_revparse_single(&raw_obj, r.get(), rev.c_str()) != 0)
+        return std::unexpected(last_error());
+    detail::object_ptr obj(raw_obj);
+    git_commit *raw_target = nullptr;
+    if (git_commit_lookup(&raw_target, r.get(), git_object_id(obj.get())) != 0)
+        return std::unexpected(last_error());
+    detail::commit_ptr target(raw_target);
+
+    git_oid head_oid;
+    if (git_reference_name_to_id(&head_oid, r.get(), "HEAD") != 0)
+        return std::unexpected(last_error());
+    git_commit *raw_head = nullptr;
+    if (git_commit_lookup(&raw_head, r.get(), &head_oid) != 0)
+        return std::unexpected(last_error());
+    detail::commit_ptr head(raw_head);
+
+    // Compute the reverted tree in memory (no working-tree state machine).
+    git_index *raw_idx = nullptr;
+    if (git_revert_commit(&raw_idx, r.get(), target.get(), head.get(), 0,
+                          nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::index_ptr idx(raw_idx);
+    if (git_index_has_conflicts(idx.get()))
+        return std::unexpected(error{0, "revert has conflicts"});
+
+    git_oid tree_oid;
+    if (git_index_write_tree_to(&tree_oid, idx.get(), r.get()) != 0)
+        return std::unexpected(last_error());
+    git_tree *raw_tree = nullptr;
+    if (git_tree_lookup(&raw_tree, r.get(), &tree_oid) != 0)
+        return std::unexpected(last_error());
+    detail::tree_ptr tree(raw_tree);
+
+    detail::sig_ptr sig = default_signature(r.get());
+    if (!sig)
+        return std::unexpected(last_error());
+
+    const char *summary = git_commit_summary(target.get());
+    std::string msg = "Revert \"" + std::string(summary ? summary : "") + "\"";
+    const git_commit *parents[1] = {head.get()};
+    git_oid commit_oid;
+    if (git_commit_create(&commit_oid, r.get(), "HEAD", sig.get(), sig.get(),
+                          nullptr, msg.c_str(), tree.get(), 1, parents) != 0)
+        return std::unexpected(last_error());
+
+    // Bring the working tree + index to the new commit's content.
+    git_checkout_options opts;
+    git_checkout_options_init(&opts, GIT_CHECKOUT_OPTIONS_VERSION);
+    opts.checkout_strategy = GIT_CHECKOUT_FORCE;
+    if (git_checkout_tree(r.get(), reinterpret_cast<git_object *>(tree.get()),
+                          &opts) != 0)
+        return std::unexpected(last_error());
+    return {};
+}
+
+std::expected<void, error> merge_branch(std::string repo, std::string name)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    git_reference *raw_ref = nullptr;
+    if (git_branch_lookup(&raw_ref, r.get(), name.c_str(), GIT_BRANCH_LOCAL) != 0)
+        return std::unexpected(last_error());
+    detail::ref_ptr ref(raw_ref);
+
+    git_annotated_commit *raw_their = nullptr;
+    if (git_annotated_commit_from_ref(&raw_their, r.get(), ref.get()) != 0)
+        return std::unexpected(last_error());
+    std::unique_ptr<git_annotated_commit, decltype(&git_annotated_commit_free)>
+        their(raw_their, git_annotated_commit_free);
+
+    const git_annotated_commit *heads[1] = {their.get()};
+    git_merge_analysis_t analysis;
+    git_merge_preference_t pref;
+    if (git_merge_analysis(&analysis, &pref, r.get(), heads, 1) != 0)
+        return std::unexpected(last_error());
+
+    if (analysis & GIT_MERGE_ANALYSIS_UP_TO_DATE)
+        return {}; // already contains their commit
+
+    const git_oid *their_oid = git_annotated_commit_id(their.get());
+
+    if (analysis & GIT_MERGE_ANALYSIS_FASTFORWARD) {
+        git_object *raw_target = nullptr;
+        if (git_object_lookup(&raw_target, r.get(), their_oid,
+                              GIT_OBJECT_COMMIT) != 0)
+            return std::unexpected(last_error());
+        detail::object_ptr target(raw_target);
+
+        git_checkout_options copts;
+        git_checkout_options_init(&copts, GIT_CHECKOUT_OPTIONS_VERSION);
+        copts.checkout_strategy = GIT_CHECKOUT_SAFE;
+        if (git_checkout_tree(r.get(), target.get(), &copts) != 0)
+            return std::unexpected(last_error());
+
+        git_reference *raw_head = nullptr;
+        if (git_repository_head(&raw_head, r.get()) != 0)
+            return std::unexpected(last_error());
+        detail::ref_ptr head(raw_head);
+        git_reference *raw_new = nullptr;
+        if (git_reference_set_target(&raw_new, head.get(), their_oid,
+                                     "merge: fast-forward") != 0)
+            return std::unexpected(last_error());
+        git_reference_free(raw_new);
+        return {};
+    }
+
+    // True merge: write the merge into index + working tree.
+    git_merge_options mopts;
+    git_merge_options_init(&mopts, GIT_MERGE_OPTIONS_VERSION);
+    git_checkout_options copts;
+    git_checkout_options_init(&copts, GIT_CHECKOUT_OPTIONS_VERSION);
+    copts.checkout_strategy = GIT_CHECKOUT_SAFE;
+    if (git_merge(r.get(), heads, 1, &mopts, &copts) != 0)
+        return std::unexpected(last_error());
+
+    git_index *raw_idx = nullptr;
+    if (git_repository_index(&raw_idx, r.get()) != 0)
+        return std::unexpected(last_error());
+    detail::index_ptr idx(raw_idx);
+    if (git_index_has_conflicts(idx.get())) {
+        // Abort: drop the conflicted state and roll the tree back to HEAD.
+        git_repository_state_cleanup(r.get());
+        git_object *raw_head_obj = nullptr;
+        if (git_revparse_single(&raw_head_obj, r.get(), "HEAD") == 0) {
+            detail::object_ptr ho(raw_head_obj);
+            git_reset(r.get(), ho.get(), GIT_RESET_HARD, nullptr);
+        }
+        return std::unexpected(error{0, "merge conflicts"});
+    }
+
+    git_oid tree_oid;
+    if (git_index_write_tree(&tree_oid, idx.get()) != 0)
+        return std::unexpected(last_error());
+    git_tree *raw_tree = nullptr;
+    if (git_tree_lookup(&raw_tree, r.get(), &tree_oid) != 0)
+        return std::unexpected(last_error());
+    detail::tree_ptr tree(raw_tree);
+
+    git_oid head_oid;
+    if (git_reference_name_to_id(&head_oid, r.get(), "HEAD") != 0)
+        return std::unexpected(last_error());
+    git_commit *raw_head_commit = nullptr;
+    if (git_commit_lookup(&raw_head_commit, r.get(), &head_oid) != 0)
+        return std::unexpected(last_error());
+    detail::commit_ptr head_commit(raw_head_commit);
+    git_commit *raw_their_commit = nullptr;
+    if (git_commit_lookup(&raw_their_commit, r.get(), their_oid) != 0)
+        return std::unexpected(last_error());
+    detail::commit_ptr their_commit(raw_their_commit);
+
+    detail::sig_ptr sig = default_signature(r.get());
+    if (!sig)
+        return std::unexpected(last_error());
+
+    std::string msg = "Merge branch '" + name + "'";
+    const git_commit *parents[2] = {head_commit.get(), their_commit.get()};
+    git_oid merge_oid;
+    if (git_commit_create(&merge_oid, r.get(), "HEAD", sig.get(), sig.get(),
+                          nullptr, msg.c_str(), tree.get(), 2, parents) != 0)
+        return std::unexpected(last_error());
+
+    git_repository_state_cleanup(r.get());
     return {};
 }
 

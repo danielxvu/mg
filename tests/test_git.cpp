@@ -259,7 +259,133 @@ fs::path make_repo_with_branch(const char *extra)
     git_libgit2_shutdown();
     return dir;
 }
+// master at C1; branch "feature" one commit ahead (adds b.txt). HEAD stays on
+// master, so merging feature is a fast-forward.
+fs::path make_repo_ff_branch()
+{
+    auto dir = make_repo_with_commit("C1"); // master @ C1 with a.txt
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_open(&repo, dir.string().c_str()) == 0);
+
+    git_oid c1;
+    REQUIRE(git_reference_name_to_id(&c1, repo, "HEAD") == 0);
+    git_commit *base = nullptr;
+    REQUIRE(git_commit_lookup(&base, repo, &c1) == 0);
+    git_reference *feature = nullptr;
+    REQUIRE(git_branch_create(&feature, repo, "feature", base, 0) == 0);
+    git_reference_free(feature);
+
+    // Build a tree with a.txt (from C1) + a new b.txt, commit it onto feature.
+    std::ofstream(dir / "b.txt") << "bee\n";
+    git_index *idx = nullptr;
+    REQUIRE(git_repository_index(&idx, repo) == 0);
+    REQUIRE(git_index_add_bypath(idx, "b.txt") == 0);
+    git_oid tree_oid;
+    REQUIRE(git_index_write_tree(&tree_oid, idx) == 0);
+    git_tree *tree = nullptr;
+    REQUIRE(git_tree_lookup(&tree, repo, &tree_oid) == 0);
+    git_signature *sig = nullptr;
+    REQUIRE(git_signature_now(&sig, "T", "t@t") == 0);
+    const git_commit *parents[1] = {base};
+    git_oid c2;
+    REQUIRE(git_commit_create(&c2, repo, "refs/heads/feature", sig, sig, nullptr,
+                              "C2 on feature", tree, 1, parents) == 0);
+    // Leave the working tree/index matching C1 (remove the staged b.txt).
+    REQUIRE(git_index_remove_bypath(idx, "b.txt") == 0);
+    REQUIRE(git_index_write(idx) == 0);
+    std::filesystem::remove(dir / "b.txt");
+
+    git_signature_free(sig);
+    git_tree_free(tree);
+    git_index_free(idx);
+    git_commit_free(base);
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+    return dir;
+}
+// master and feature diverge by touching DIFFERENT files (a clean merge):
+// C1 base; feature adds b.txt; master then changes a.txt. HEAD on master.
+fs::path make_repo_diverged()
+{
+    auto dir = make_repo_ff_branch(); // master @ C1; feature 1 ahead (b.txt)
+    // Advance master with its own commit (changes a.txt), diverging from feature.
+    commit_file(dir, "a.txt", "content\nmaster line\n", "C2 on master");
+    return dir;
+}
 } // namespace
+
+TEST_CASE("merge_branch makes a merge commit for a clean divergent merge")
+{
+    auto dir = make_repo_diverged(); // master and feature changed different files
+
+    REQUIRE(mg::git::merge_branch(dir.string(), "feature").has_value());
+
+    // A merge commit (two parents) now sits on HEAD, with both changes present.
+    auto h = mg::git::read_head(dir.string());
+    REQUIRE(h.has_value());
+    CHECK(h->summary.find("Merge branch 'feature'") != std::string::npos);
+    CHECK(fs::exists(dir / "b.txt"));            // feature's file
+    std::ifstream f(dir / "a.txt");
+    std::string body((std::istreambuf_iterator<char>(f)), {});
+    CHECK(body.find("master line") != std::string::npos); // master's change kept
+    fs::remove_all(dir);
+}
+
+TEST_CASE("reset_to hard moves HEAD and resets the working tree")
+{
+    auto dir = make_repo_with_commit("C1"); // a.txt = "content"
+    commit_file(dir, "a.txt", "content\nmore\n", "C2");
+
+    auto cs = mg::git::recent_commits(dir.string(), 2); // [C2, C1]
+    REQUIRE(cs.has_value());
+    REQUIRE(cs->size() == 2);
+
+    REQUIRE(mg::git::reset_to(dir.string(), (*cs)[1].oid,
+                              mg::git::reset_mode::hard)
+                .has_value());
+
+    auto h = mg::git::read_head(dir.string());
+    REQUIRE(h.has_value());
+    CHECK(h->summary == "C1");                 // HEAD moved back
+    std::ifstream f(dir / "a.txt");
+    std::string body((std::istreambuf_iterator<char>(f)), {});
+    CHECK(body == "content");                  // working tree reset (no "more")
+    fs::remove_all(dir);
+}
+
+TEST_CASE("revert_commit undoes a commit in a new commit")
+{
+    auto dir = make_repo_with_commit("C1"); // a.txt = "content"
+    commit_file(dir, "a.txt", "content\nmore\n", "C2 add more");
+
+    auto cs = mg::git::recent_commits(dir.string(), 1); // newest = C2
+    REQUIRE(cs.has_value());
+
+    REQUIRE(mg::git::revert_commit(dir.string(), (*cs)[0].oid).has_value());
+
+    auto h = mg::git::read_head(dir.string());
+    REQUIRE(h.has_value());
+    CHECK(h->summary.find("Revert") != std::string::npos); // a new revert commit
+    std::ifstream f(dir / "a.txt");
+    std::string body((std::istreambuf_iterator<char>(f)), {});
+    CHECK(body == "content");                  // C2's change undone
+    fs::remove_all(dir);
+}
+
+TEST_CASE("merge_branch fast-forwards onto an ahead branch")
+{
+    auto dir = make_repo_ff_branch(); // master @ C1, feature 1 ahead (adds b.txt)
+
+    REQUIRE(mg::git::merge_branch(dir.string(), "feature").has_value());
+
+    // Fast-forwarded: HEAD now at feature's commit, b.txt in the working tree.
+    auto h = mg::git::read_head(dir.string());
+    REQUIRE(h.has_value());
+    CHECK(h->summary == "C2 on feature");
+    CHECK(fs::exists(dir / "b.txt"));
+    fs::remove_all(dir);
+}
 
 TEST_CASE("repo_status reports a staged and an untracked entry")
 {
