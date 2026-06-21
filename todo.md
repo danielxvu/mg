@@ -259,10 +259,12 @@ Next slices (each `#ifdef`-gated, OFF unchanged):
   ✅ **U7 done** — grapheme-cluster cursor moves (PR #44, branch `u7-grapheme`):
   mg.utf8 `grapheme_break`/`grapheme_len`/`grapheme_back`; forwchar/backchar +
   forwdel/backdel step/delete whole base+combining clusters; pty-verified on NFD.
-  Remaining: NFC normalization (`utf8proc_map`/`utf8proc_NFC`, best as an
-  `M-x normalize-buffer` command); byte-length-changing case mappings (dotless
-  i, ß→SS — needs splice + undo accounting); combining-mark *display*
-  composition (vtcell model holds one cp/cell, so marks are dropped — U2 note).
+  ✅ **U8 done** — NFC normalize command (PR #45, branch `u8-nfc`): mg.utf8
+  `normalize_nfc` + `M-x normalize-buffer` rewrites each line to NFC
+  (ldelete+region_put_data); pty-verified vs Python NFC.
+  Remaining (niche): byte-length-changing case mappings (dotless i, ß→SS —
+  splice + undo accounting); combining-mark *display* composition (vtcell model
+  holds one cp/cell, so marks are dropped — U2 note).
 Build: `cmake --build --preset cpp && ctest --preset cpp` +
 `cmake --build --preset c-legacy` (0 warnings). Freeze next branch on `u1-utf8`.
 
@@ -300,11 +302,11 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `fm-x-rrm`→fm-l-log (#38), `fm-r-remotes`→fm-x-rrm (#39),
   `fm-followups`→fm-r-remotes (#40), `fm-auth`→fm-followups (#41),
   `u5-case`→fm-auth (#42), `u6-updext`→u5-case (#43),
-  `u7-grapheme`→u6-updext (#44).
+  `u7-grapheme`→u6-updext (#44), `u8-nfc`→u7-grapheme (#45).
   🎉 Full Magit clone FEATURE-COMPLETE (PRs #31-#41). UTF-8 "Full": U5 case #42,
-  U6 extended-line #43, U7 grapheme clusters #44. Next UTF-8 branch freezes on
-  `u7-grapheme`. Remaining UTF-8 (all niche): NFC normalize command, length-
-  changing case mappings, combining-mark display composition.
+  U6 extended-line #43, U7 grapheme clusters #44, U8 NFC command #45. Next UTF-8
+  branch freezes on `u8-nfc`. Remaining UTF-8 (niche): length-changing case
+  mappings, combining-mark display composition.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
