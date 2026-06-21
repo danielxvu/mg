@@ -313,7 +313,8 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `fm-sub`→fm-bisect (#60), `fm-lp`→fm-sub (#61),
   `fm-tr-popup`→fm-lp (#62), `fm-ediff-conflict`→fm-tr-popup (#63),
   `fm-ediff-apply`→fm-ediff-conflict (#64), `fm-ediff-2-hunks`→fm-ediff-apply (#65),
-  `fm-rb-edit`→fm-ediff-2-hunks (#66).
+  `fm-rb-edit`→fm-ediff-2-hunks (#66),
+  `fm-rb-replay-conflict`→fm-rb-edit (#67).
   Magit core (A+B, #31-#41) done; UTF-8 "Full" U5-U8 (#42-#45). **Phase C**
   (honest gap vs real magit; spec
   `docs/superpowers/specs/2026-06-21-fm-phase-c-roadmap.md`): ✅ FM-RB-1
@@ -344,8 +345,11 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   resolving the last region stages the file. ✅ **interactive rebase `edit`**
   (#66): `rebase_action::edit` + `rebase_result::stopped`; the executor stops at
   an edit, persists the remaining plan to `.git/MG_REBASE_TODO`, and `r r`
-  resumes from the amended HEAD (`r a` aborts) — completes interactive rebase.
-  Next branch freezes on `fm-rb-edit`.
+  resumes from the amended HEAD (`r a` aborts). ✅ **conflict-resumable
+  interactive replay** (#67): a cherry-pick conflict mid-replay now pauses
+  (materialize on disk + persist the rest) instead of aborting — resolve via
+  `e o`/`e t`, `c c`, then `r r`. 🎉 **Interactive rebase fully complete.** Next
+  branch freezes on `fm-rb-replay-conflict`.
 
   **Phase C status — implemented:** rebase (onto/sequencer/interactive +
   reword), cherry-pick, tags (lightweight+annotated+section), push/pull
@@ -359,11 +363,11 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
       search. (File log + act-at-point RET/A/V done.)
     · FM-CV commit variants: instant fixup/squash (use `r i` for now),
       signoff/no-verify; **GPG sign** (needs an external signing key).
-    · interactive-rebase replay is not **conflict-resumable**: a cherry-pick
-      conflict mid-replay still aborts (the in-memory executor would need state
-      persisted on every step, not just at `edit`). `edit` itself is done (#66);
-      conflict-resume for non-interactive rebase + merge/cherry/revert is done
-      (#63/#64).
+    · conflicting `squash`/`fixup` during interactive replay resolves as a
+      normal pick (separate commit), not folded into the previous commit —
+      folding-after-resolve would need to re-run the squash on continue. Rare;
+      documented in the FM-RB-REPLAY-CONFLICT spec. (Pick/edit/reword replay
+      conflicts resume fully, #67.)
     · submodule **add/update/sync** — clone + network (testable via a local bare
       remote, but not yet built); listing only for now.
     · **ediff visual polish (only):** synchronized ours|merged|theirs *live
