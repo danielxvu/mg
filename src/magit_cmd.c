@@ -51,6 +51,7 @@ static int	magit_branch_create(int, int);
 static int	magit_branch_delete(int, int);
 static int	magit_branch_rename(int, int);
 static int	magit_tag_create_cmd(int, int);
+static int	magit_tag_annotate_cmd(int, int);
 static int	magit_tag_delete_cmd(int, int);
 static int	magit_stage_all(int, int);
 static int	magit_unstage_all(int, int);
@@ -206,16 +207,18 @@ static PF magit_z[] = { NULL };			/* z -> stash menu prefix */
  * Tag menu: `t` prefixes into this. t=create (at HEAD), k=delete (the tag at
  * point, else prompt). Entries ascending.
  */
+static PF tag_a[] = { magit_tag_annotate_cmd };
 static PF tag_k[] = { magit_tag_delete_cmd };
 static PF tag_t[] = { magit_tag_create_cmd };
 
-static struct KEYMAPE (2) magit_tagmenu = {
-	2,
-	2,
+static struct KEYMAPE (3) magit_tagmenu = {
+	3,
+	3,
 	rescan,
 	{
+		{ 'a', 'a', tag_a, NULL },	/* t a: annotated */
 		{ 'k', 'k', tag_k, NULL },	/* t k: delete */
-		{ 't', 't', tag_t, NULL }	/* t t: create */
+		{ 't', 't', tag_t, NULL }	/* t t: create (lightweight) */
 	}
 };
 
@@ -1047,7 +1050,7 @@ magit_help(int f, int n)
 		"  a        apply the stash at point",
 		"  A        cherry-pick (commit at point in the log, else prompt)",
 		"  b b/c/k/m  branch: checkout / create / delete / rename",
-		"  t t/k    tag: create at HEAD / delete",
+		"  t t/a/k  tag: lightweight / annotated / delete",
 		"  c c/a/e/w  commit / amend / extend / reword",
 		"  z z/p    stash: push / pop",
 		"  l        log buffer (RET shows a commit's diff, V reverts it)",
@@ -1295,22 +1298,40 @@ magit_branch_rename(int f, int n)
 	return (magit_refresh(f, n));
 }
 
-/* t t: create a lightweight tag at HEAD (prompts for the name). */
+/* Shared tag-create: lightweight (msg NULL) or annotated (prompt a message). */
 static int
-magit_tag_create_cmd(int f, int n)
+magit_do_tag_create(int annotated, int f, int n)
 {
-	char	name[PATH_MAX], cwd[PATH_MAX];
+	char	name[PATH_MAX], msg[PATH_MAX], cwd[PATH_MAX];
 
 	if (eread("Create tag: ", name, sizeof(name), EFNEW | EFCR) == NULL ||
 	    name[0] == '\0')
 		return (ABORT);
+	if (annotated &&
+	    (eread("Tag message: ", msg, sizeof(msg), EFNEW | EFCR) == NULL ||
+	    msg[0] == '\0'))
+		return (ABORT);
 	if (getcwd(cwd, sizeof(cwd)) == NULL)
 		return (FALSE);
-	if (mg_magit_tag_create(cwd, name, "HEAD") != 1) {
+	if (mg_magit_tag_create(cwd, name, "HEAD", annotated ? msg : NULL) != 1) {
 		ewprintf("Tag create failed");
 		return (FALSE);
 	}
 	return (magit_refresh(f, n));
+}
+
+/* t t: create a lightweight tag at HEAD. */
+static int
+magit_tag_create_cmd(int f, int n)
+{
+	return (magit_do_tag_create(0, f, n));
+}
+
+/* t a: create an annotated tag at HEAD (prompts for name + message). */
+static int
+magit_tag_annotate_cmd(int f, int n)
+{
+	return (magit_do_tag_create(1, f, n));
 }
 
 /* t k: delete a tag (the tag at point, else prompt). */

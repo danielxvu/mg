@@ -733,7 +733,7 @@ TEST_CASE("mg_magit_tag_create/delete and the Tags section through the bridge")
     };
 
     CHECK(status_text().find("Tags") == std::string::npos); // none yet
-    CHECK(mg_magit_tag_create(repo.c_str(), "v2.0", "HEAD") == 1);
+    CHECK(mg_magit_tag_create(repo.c_str(), "v2.0", "HEAD", NULL) == 1);
     std::string s = status_text();
     CHECK(s.find("Tags (1)") != std::string::npos);
     CHECK(s.find("v2.0") != std::string::npos);

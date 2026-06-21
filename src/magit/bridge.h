@@ -191,10 +191,11 @@ int mg_magit_branch_delete(const char *repo_path, const char *name);
 int mg_magit_branch_rename(const char *repo_path, const char *from,
                            const char *to);
 
-/* Create a lightweight tag `name` at `target` (revspec, NULL -> "HEAD") /
- * delete tag `name`. Return 1 on success, 0 on failure. */
+/* Create a tag `name` at `target` (revspec, NULL -> "HEAD"); a non-NULL/
+ * non-empty `message` makes it annotated, else lightweight. / delete tag
+ * `name`. Return 1 on success, 0 on failure. */
 int mg_magit_tag_create(const char *repo_path, const char *name,
-                        const char *target);
+                        const char *target, const char *message);
 int mg_magit_tag_delete(const char *repo_path, const char *name);
 
 #ifdef __cplusplus

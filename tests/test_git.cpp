@@ -1472,6 +1472,32 @@ TEST_CASE("create_tag / tags / delete_tag round-trip")
     fs::remove_all(dir);
 }
 
+TEST_CASE("create_tag with a message makes an annotated tag")
+{
+    auto dir = make_repo_with_commit("base");
+    set_test_config(dir); // tagger signature
+
+    // Lightweight: refs/tags/lw resolves directly to a commit.
+    REQUIRE(mg::git::create_tag(dir.string(), "lw", "HEAD").has_value());
+    // Annotated: refs/tags/ann resolves to a tag object.
+    REQUIRE(mg::git::create_tag(dir.string(), "ann", "HEAD", "release notes")
+                .has_value());
+
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_open(&repo, dir.string().c_str()) == 0);
+    git_object *lw = nullptr, *ann = nullptr;
+    REQUIRE(git_revparse_single(&lw, repo, "refs/tags/lw") == 0);
+    REQUIRE(git_revparse_single(&ann, repo, "refs/tags/ann") == 0);
+    CHECK(git_object_type(lw) == GIT_OBJECT_COMMIT);  // lightweight -> commit
+    CHECK(git_object_type(ann) == GIT_OBJECT_TAG);    // annotated -> tag object
+    git_object_free(lw);
+    git_object_free(ann);
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+    fs::remove_all(dir);
+}
+
 TEST_CASE("create_branch makes a new branch at HEAD without checking it out")
 {
     auto dir = make_repo_with_commit("base"); // on master

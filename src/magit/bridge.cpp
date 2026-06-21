@@ -595,11 +595,12 @@ extern "C" int mg_magit_merge(const char *repo_path, const char *name)
 // 0 failure.
 
 extern "C" int mg_magit_tag_create(const char *repo_path, const char *name,
-                                   const char *target)
+                                   const char *target, const char *message)
 {
     if (repo_path == nullptr || name == nullptr || name[0] == '\0')
         return 0;
-    return mg::git::create_tag(repo_path, name, target ? target : "HEAD")
+    return mg::git::create_tag(repo_path, name, target ? target : "HEAD",
+                               message ? message : "")
                    .has_value()
                ? 1
                : 0;

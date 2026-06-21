@@ -320,9 +320,11 @@ std::expected<void, error> delete_branch(std::string repo, std::string name);
 std::expected<void, error>
 rename_branch(std::string repo, std::string from, std::string to);
 
-// Create a lightweight tag `name` at `target` (a revspec, e.g. "HEAD").
+// Create tag `name` at `target` (a revspec, e.g. "HEAD"). An empty `message`
+// makes a lightweight tag; otherwise an annotated tag with that message.
 std::expected<void, error>
-create_tag(std::string repo, std::string name, std::string target);
+create_tag(std::string repo, std::string name, std::string target,
+           std::string message = "");
 
 // Delete tag `name`.
 std::expected<void, error> delete_tag(std::string repo, std::string name);
@@ -415,6 +417,9 @@ static error last_error()
     return error{e ? e->klass : 0,
                  e && e->message ? e->message : "unknown libgit2 error"};
 }
+
+// Defined below; used by create_tag (annotated) before its definition.
+static detail::sig_ptr default_signature(git_repository *repo);
 
 std::expected<std::vector<mg::magit::file_status>, error>
 repo_status(std::string path)
@@ -871,7 +876,8 @@ rename_branch(std::string repo, std::string from, std::string to)
 }
 
 std::expected<void, error>
-create_tag(std::string repo, std::string name, std::string target)
+create_tag(std::string repo, std::string name, std::string target,
+           std::string message)
 {
     detail::init_guard guard;
     git_repository *raw = nullptr;
@@ -885,9 +891,18 @@ create_tag(std::string repo, std::string name, std::string target)
     detail::object_ptr obj(raw_obj);
 
     git_oid oid;
-    if (git_tag_create_lightweight(&oid, r.get(), name.c_str(), obj.get(),
-                                   /*force=*/0) != 0)
-        return std::unexpected(last_error());
+    if (message.empty()) {
+        if (git_tag_create_lightweight(&oid, r.get(), name.c_str(), obj.get(),
+                                       /*force=*/0) != 0)
+            return std::unexpected(last_error());
+    } else {
+        detail::sig_ptr sig = default_signature(r.get());
+        if (!sig)
+            return std::unexpected(last_error());
+        if (git_tag_create(&oid, r.get(), name.c_str(), obj.get(), sig.get(),
+                           message.c_str(), /*force=*/0) != 0)
+            return std::unexpected(last_error());
+    }
     return {};
 }
 
