@@ -56,6 +56,10 @@ int mg_magit_stage(const char *repo_path, const char *path);
 int mg_magit_unstage(const char *repo_path, const char *path);
 int mg_magit_discard(const char *repo_path, const char *path);
 
+/* Stage every change / unstage everything (the S and U keys). 1 ok, 0 fail. */
+int mg_magit_stage_all(const char *repo_path);
+int mg_magit_unstage_all(const char *repo_path);
+
 /* Commit the staged tree with `message`. Returns 1 on success, 0 on failure
  * (e.g. user.name/user.email unset, or nothing staged). */
 int mg_magit_commit(const char *repo_path, const char *message);

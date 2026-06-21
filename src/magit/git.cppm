@@ -186,6 +186,12 @@ std::expected<void, error> stage(std::string repo, std::string file);
 // Unstage `file`: reset its index entry to HEAD (or drop it if unborn).
 std::expected<void, error> unstage(std::string repo, std::string file);
 
+// Stage every change (modifications, new files, deletions) -- like `git add -A`.
+std::expected<void, error> stage_all(std::string repo);
+
+// Unstage everything: reset the index to HEAD, keeping the working tree.
+std::expected<void, error> unstage_all(std::string repo);
+
 // Discard `file`'s changes: delete it if untracked, else revert it to HEAD.
 std::expected<void, error> discard(std::string repo, std::string file);
 
@@ -496,6 +502,56 @@ std::expected<void, error> unstage(std::string repo, std::string file)
     detail::index_ptr idx(raw_idx);
     if (git_index_remove_bypath(idx.get(), file.c_str()) != 0 ||
         git_index_write(idx.get()) != 0)
+        return std::unexpected(last_error());
+    return {};
+}
+
+std::expected<void, error> stage_all(std::string repo)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    git_index *raw_idx = nullptr;
+    if (git_repository_index(&raw_idx, r.get()) != 0)
+        return std::unexpected(last_error());
+    detail::index_ptr idx(raw_idx);
+
+    git_strarray all = {nullptr, 0}; // empty pathspec = every path
+    // add_all stages new + modified; update_all also records deletions.
+    if (git_index_add_all(idx.get(), &all, GIT_INDEX_ADD_DEFAULT, nullptr,
+                          nullptr) != 0 ||
+        git_index_update_all(idx.get(), &all, nullptr, nullptr) != 0 ||
+        git_index_write(idx.get()) != 0)
+        return std::unexpected(last_error());
+    return {};
+}
+
+std::expected<void, error> unstage_all(std::string repo)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    git_object *raw_head = nullptr;
+    if (git_revparse_single(&raw_head, r.get(), "HEAD") == 0) {
+        detail::object_ptr head(raw_head);
+        // Reset the index to HEAD; HEAD == target so the branch does not move,
+        // and MIXED leaves the working tree untouched.
+        if (git_reset(r.get(), head.get(), GIT_RESET_MIXED, nullptr) != 0)
+            return std::unexpected(last_error());
+        return {};
+    }
+    // Unborn branch: everything staged is "new", so clear the index.
+    git_index *raw_idx = nullptr;
+    if (git_repository_index(&raw_idx, r.get()) != 0)
+        return std::unexpected(last_error());
+    detail::index_ptr idx(raw_idx);
+    if (git_index_clear(idx.get()) != 0 || git_index_write(idx.get()) != 0)
         return std::unexpected(last_error());
     return {};
 }

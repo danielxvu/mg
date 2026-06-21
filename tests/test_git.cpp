@@ -335,6 +335,55 @@ TEST_CASE("discard() deletes an untracked file")
     fs::remove_all(dir);
 }
 
+TEST_CASE("stage_all stages every change (modified + untracked)")
+{
+    auto dir = make_repo_with_commit("base"); // a.txt = "content"
+    std::ofstream(dir / "a.txt") << "modified";   // unstaged modification
+    std::ofstream(dir / "b.txt") << "new";        // untracked
+
+    REQUIRE(mg::git::stage_all(dir.string()).has_value());
+
+    auto st = mg::git::repo_status(dir.string());
+    REQUIRE(st.has_value());
+    int staged = 0, worktree_dirty = 0;
+    for (const auto &e : *st) {
+        if (e.index != status::unmodified)
+            staged++;
+        if (e.worktree != status::unmodified)
+            worktree_dirty++;
+    }
+    CHECK(staged == 2);          // a.txt + b.txt staged
+    CHECK(worktree_dirty == 0);  // nothing left unstaged
+    fs::remove_all(dir);
+}
+
+TEST_CASE("unstage_all resets the index to HEAD, keeping the worktree")
+{
+    auto dir = make_repo_with_commit("base");
+    std::ofstream(dir / "a.txt") << "modified";
+    REQUIRE(mg::git::stage(dir.string(), "a.txt").has_value());
+    std::ofstream(dir / "b.txt") << "new";
+    REQUIRE(mg::git::stage(dir.string(), "b.txt").has_value());
+
+    REQUIRE(mg::git::unstage_all(dir.string()).has_value());
+
+    auto st = mg::git::repo_status(dir.string());
+    REQUIRE(st.has_value());
+    for (const auto &e : *st)
+        CHECK(e.index == status::unmodified); // nothing staged
+    // the worktree changes are still present
+    bool a_modified = false, b_untracked = false;
+    for (const auto &e : *st) {
+        if (e.path == "a.txt" && e.worktree == status::modified)
+            a_modified = true;
+        if (e.path == "b.txt" && e.worktree == status::untracked)
+            b_untracked = true;
+    }
+    CHECK(a_modified);
+    CHECK(b_untracked);
+    fs::remove_all(dir);
+}
+
 TEST_CASE("commit_amend replaces HEAD with the staged tree and new message")
 {
     auto dir = make_repo_with_commit("first commit"); // a.txt = "content"

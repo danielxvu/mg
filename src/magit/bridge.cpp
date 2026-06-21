@@ -269,6 +269,20 @@ extern "C" int mg_magit_discard(const char *repo_path, const char *path)
     return mg::git::discard(repo_path, path).has_value() ? 1 : 0;
 }
 
+extern "C" int mg_magit_stage_all(const char *repo_path)
+{
+    if (repo_path == nullptr)
+        return 0;
+    return mg::git::stage_all(repo_path).has_value() ? 1 : 0;
+}
+
+extern "C" int mg_magit_unstage_all(const char *repo_path)
+{
+    if (repo_path == nullptr)
+        return 0;
+    return mg::git::unstage_all(repo_path).has_value() ? 1 : 0;
+}
+
 extern "C" int mg_magit_commit(const char *repo_path, const char *message)
 {
     if (repo_path == nullptr || message == nullptr)

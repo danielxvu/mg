@@ -43,6 +43,8 @@ static int	magit_next_section(int, int);
 static int	magit_prev_section(int, int);
 static int	magit_stash_apply(int, int);
 static int	magit_checkout(int, int);
+static int	magit_stage_all(int, int);
+static int	magit_unstage_all(int, int);
 
 /*
  * line -> {kind, hunk, path} map for the most recent render of *magit-status*.
@@ -64,6 +66,8 @@ static PF magit_tab[] = { magit_toggle_expand };
 static PF magit_ret[] = { magit_visit };
 static PF magit_esc[] = { NULL };		/* ESC -> meta prefix */
 static PF magit_qmark[] = { magit_help };
+static PF magit_S[] = { magit_stage_all };
+static PF magit_U[] = { magit_unstage_all };
 static PF magit_a[] = { magit_stash_apply };
 static PF magit_b[] = { magit_checkout };
 static PF magit_c[] = { NULL };			/* c -> commit menu prefix */
@@ -112,9 +116,9 @@ static struct KEYMAPE (4) magit_commitmenu = {
 };
 
 /* Entries MUST stay in ascending key order -- doscan() relies on it. */
-static struct KEYMAPE (12) magitmap = {
-	12,
-	12,
+static struct KEYMAPE (14) magitmap = {
+	14,
+	14,
 	rescan,
 	{
 		{ CCHR('I'), CCHR('I'), magit_tab, NULL },	/* TAB: expand/collapse */
@@ -122,6 +126,8 @@ static struct KEYMAPE (12) magitmap = {
 		{ CCHR('['), CCHR('['), magit_esc,		/* ESC: meta prefix */
 		    (KEYMAP *)&magit_metamap },
 		{ '?', '?', magit_qmark, NULL },		/* ?: key help */
+		{ 'S', 'S', magit_S, NULL },			/* S: stage all */
+		{ 'U', 'U', magit_U, NULL },			/* U: unstage all */
 		{ 'a', 'a', magit_a, NULL },			/* a: apply stash */
 		{ 'b', 'b', magit_b, NULL },			/* b: checkout branch */
 		{ 'c', 'c', magit_c, (KEYMAP *)&magit_commitmenu }, /* c: commit menu */
@@ -388,6 +394,7 @@ magit_help(int f, int n)
 		"  M-n/M-p  next / previous section",
 		"  s        stage the file or hunk at point",
 		"  u        unstage the file or hunk at point",
+		"  S / U    stage all / unstage all",
 		"  k        discard changes / drop the stash at point",
 		"  a        apply the stash at point",
 		"  b        check out the branch at point",
@@ -573,6 +580,36 @@ magit_unstage(int f, int n)
 	}
 	if (mg_magit_unstage(cwd, path) != 1) {
 		ewprintf("Unstage failed");
+		return (FALSE);
+	}
+	return (magit_refresh(f, n));
+}
+
+/* S: stage every change in the repo. */
+static int
+magit_stage_all(int f, int n)
+{
+	char	cwd[PATH_MAX];
+
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	if (mg_magit_stage_all(cwd) != 1) {
+		ewprintf("Stage all failed");
+		return (FALSE);
+	}
+	return (magit_refresh(f, n));
+}
+
+/* U: unstage everything (reset the index to HEAD). */
+static int
+magit_unstage_all(int f, int n)
+{
+	char	cwd[PATH_MAX];
+
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	if (mg_magit_unstage_all(cwd) != 1) {
+		ewprintf("Unstage all failed");
 		return (FALSE);
 	}
 	return (magit_refresh(f, n));
