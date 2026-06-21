@@ -43,6 +43,7 @@ int mg_magit_modeline(char *buf, size_t buflen);
 #define MG_LINE_TAG       10  /* a tag entry (path = tag name) */
 #define MG_LINE_WORKTREE  11  /* a worktree entry (path = worktree name) */
 #define MG_LINE_SUBMODULE 12  /* a submodule entry (path = submodule path) */
+#define MG_LINE_CONFLICT  13  /* an unmerged path (path = file path) */
 
 /* Compose the *magit-status* buffer for the repo at `repo_path`, calling
  * `emit(ctx, line, kind, path, hunk)` once per line. Files whose path is in
@@ -209,6 +210,12 @@ int mg_magit_tag_delete(const char *repo_path, const char *name);
 
 /* Append `pattern` to the repo's top-level .gitignore. 1 ok, 0 fail. */
 int mg_magit_ignore(const char *repo_path, const char *pattern);
+
+/* Resolve the conflict on `path` by keeping ours (take_theirs == 0) or theirs
+ * (take_theirs != 0): write that side to the working tree and stage it. Returns
+ * 1 on success, 0 on failure (e.g. `path` is not conflicted). */
+int mg_magit_resolve_conflict(const char *repo_path, const char *path,
+                              int take_theirs);
 
 /* Emit a blame of `path`: one "<oid> <author> <line>" per source line. Returns
  * the line count, 0 on error. (Seeds the *magit-blame* buffer.) */

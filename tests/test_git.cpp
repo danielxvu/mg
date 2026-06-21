@@ -1546,6 +1546,65 @@ TEST_CASE("set_note / read_note / remove_note round-trip")
     fs::remove_all(dir);
 }
 
+TEST_CASE("conflicts lists unmerged paths and resolve_conflict picks a side")
+{
+    auto dir = make_repo_rebase_conflict(); // HEAD feature, a.txt diverged
+    // Rebasing feature onto master replays "feature change" onto "master
+    // change" -> pauses on the a.txt conflict, state left on disk.
+    auto r = mg::git::rebase_onto(dir.string(), "master");
+    REQUIRE(r.has_value());
+    REQUIRE(*r == mg::git::rebase_result::conflicts);
+
+    auto cs = mg::git::conflicts(dir.string());
+    REQUIRE(cs.has_value());
+    REQUIRE(cs->size() == 1);
+    CHECK((*cs)[0].path == "a.txt");
+
+    // The path shows as unmerged in the status (previously invisible).
+    auto st = mg::git::repo_status(dir.string());
+    REQUIRE(st.has_value());
+    bool found = false;
+    for (const auto &e : *st)
+        if (e.path == "a.txt") {
+            found = true;
+            CHECK((e.index == mg::magit::status::unmerged ||
+                   e.worktree == mg::magit::status::unmerged));
+        }
+    CHECK(found);
+
+    // Stage 2 (ours) == master's "master change"; stage 3 (theirs) == the
+    // replayed feature commit's "feature change". Take theirs.
+    REQUIRE(mg::git::resolve_conflict(dir.string(), "a.txt",
+                                      mg::git::conflict_side::theirs)
+                .has_value());
+    auto cs2 = mg::git::conflicts(dir.string());
+    REQUIRE(cs2.has_value());
+    CHECK(cs2->empty()); // resolved
+
+    std::ifstream in(dir / "a.txt");
+    std::string body((std::istreambuf_iterator<char>(in)),
+                     std::istreambuf_iterator<char>());
+    CHECK(body == "feature change\n");
+    fs::remove_all(dir);
+}
+
+TEST_CASE("resolve_conflict with ours keeps the current side")
+{
+    auto dir = make_repo_rebase_conflict();
+    REQUIRE(mg::git::rebase_onto(dir.string(), "master").has_value());
+    REQUIRE(mg::git::resolve_conflict(dir.string(), "a.txt",
+                                      mg::git::conflict_side::ours)
+                .has_value());
+    std::ifstream in(dir / "a.txt");
+    std::string body((std::istreambuf_iterator<char>(in)),
+                     std::istreambuf_iterator<char>());
+    CHECK(body == "master change\n"); // ours = the onto (master)
+    auto cs = mg::git::conflicts(dir.string());
+    REQUIRE(cs.has_value());
+    CHECK(cs->empty());
+    fs::remove_all(dir);
+}
+
 TEST_CASE("log_file returns only the commits that touched a given file")
 {
     auto dir = make_repo_with_commit("base"); // commits a.txt

@@ -114,6 +114,13 @@ mg::magit::file_status map_entry(const git_status_entry *e)
     else if (s & GIT_STATUS_WT_TYPECHANGE)
         fs.worktree = status::modified;
 
+    // A conflicted (unmerged) path: mark both columns so it surfaces as a
+    // distinct Conflicts entry rather than vanishing.
+    if (s & GIT_STATUS_CONFLICTED) {
+        fs.index = status::unmerged;
+        fs.worktree = status::unmerged;
+    }
+
     const char *p = nullptr;
     if (e->index_to_workdir && e->index_to_workdir->new_file.path)
         p = e->index_to_workdir->new_file.path;
@@ -165,6 +172,17 @@ struct submodule_entry {
     std::string name;
     std::string path;
 };
+
+// One unmerged path in the index (`has_ancestor` false for add/add conflicts).
+struct conflict_entry {
+    std::string path;
+    bool has_ancestor;
+};
+
+// Which side to keep when resolving a conflict: `ours` is the current branch /
+// rebase-onto (index stage 2); `theirs` is the merged-in / replayed commit
+// (stage 3).
+enum class conflict_side { ours, theirs };
 
 // One source line annotated with the commit that last touched it.
 struct blame_line {
@@ -390,6 +408,15 @@ std::expected<void, error> remove_worktree(std::string repo, std::string name);
 // The repository's registered submodules (name + path), from .gitmodules.
 std::expected<std::vector<submodule_entry>, error>
 submodules(std::string repo);
+
+// Unmerged paths in the index (empty when there is no conflict in progress).
+std::expected<std::vector<conflict_entry>, error> conflicts(std::string repo);
+
+// Resolve conflict `path` by keeping `side`: write that stage's blob to the
+// working tree and stage it (clearing the conflict). Errors if `path` is not
+// conflicted or the chosen side is absent.
+std::expected<void, error>
+resolve_conflict(std::string repo, std::string path, conflict_side side);
 
 // Set / remove / read the (default refs/notes/commits) note on commit `rev`.
 // set overwrites any existing note; read returns "" when there is none.
@@ -1169,6 +1196,86 @@ submodules(std::string repo)
     if (git_submodule_foreach(r.get(), cb, &out) != 0)
         return std::unexpected(last_error());
     return out;
+}
+
+std::expected<std::vector<conflict_entry>, error> conflicts(std::string repo)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    git_index *raw_idx = nullptr;
+    if (git_repository_index(&raw_idx, r.get()) != 0)
+        return std::unexpected(last_error());
+    detail::index_ptr idx(raw_idx);
+
+    git_index_conflict_iterator *raw_it = nullptr;
+    if (git_index_conflict_iterator_new(&raw_it, idx.get()) != 0)
+        return std::unexpected(last_error());
+    std::unique_ptr<git_index_conflict_iterator,
+                    decltype(&git_index_conflict_iterator_free)>
+        it(raw_it, git_index_conflict_iterator_free);
+
+    std::vector<conflict_entry> out;
+    const git_index_entry *anc = nullptr, *our = nullptr, *their = nullptr;
+    int rc;
+    while ((rc = git_index_conflict_next(&anc, &our, &their, it.get())) == 0) {
+        const char *p = their ? their->path
+                        : our  ? our->path
+                        : anc  ? anc->path
+                               : nullptr;
+        out.push_back({p ? p : "", anc != nullptr});
+    }
+    if (rc != GIT_ITEROVER)
+        return std::unexpected(last_error());
+    return out;
+}
+
+std::expected<void, error>
+resolve_conflict(std::string repo, std::string path, conflict_side side)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    git_index *raw_idx = nullptr;
+    if (git_repository_index(&raw_idx, r.get()) != 0)
+        return std::unexpected(last_error());
+    detail::index_ptr idx(raw_idx);
+
+    const git_index_entry *anc = nullptr, *our = nullptr, *their = nullptr;
+    if (git_index_conflict_get(&anc, &our, &their, idx.get(), path.c_str()) != 0)
+        return std::unexpected(last_error()); // not a conflicted path
+    const git_index_entry *chosen = side == conflict_side::ours ? our : their;
+    if (chosen == nullptr)
+        return std::unexpected(error{0, "chosen side absent in conflict"});
+
+    git_blob *raw_blob = nullptr;
+    if (git_blob_lookup(&raw_blob, r.get(), &chosen->id) != 0)
+        return std::unexpected(last_error());
+    std::unique_ptr<git_blob, decltype(&git_blob_free)> blob(raw_blob,
+                                                             git_blob_free);
+
+    const char *wd = git_repository_workdir(r.get());
+    if (wd == nullptr)
+        return std::unexpected(error{0, "bare repository has no workdir"});
+    std::ofstream out(std::filesystem::path(wd) / path, std::ios::binary);
+    if (!out)
+        return std::unexpected(error{0, "cannot write " + path});
+    out.write(static_cast<const char *>(git_blob_rawcontent(blob.get())),
+              static_cast<std::streamsize>(git_blob_rawsize(blob.get())));
+    out.close();
+
+    // add_bypath stages the resolved file and clears the conflict stages.
+    if (git_index_add_bypath(idx.get(), path.c_str()) != 0)
+        return std::unexpected(last_error());
+    if (git_index_write(idx.get()) != 0)
+        return std::unexpected(last_error());
+    return {};
 }
 
 std::expected<void, error>

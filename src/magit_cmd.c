@@ -88,6 +88,9 @@ static int	magit_bisect_bad(int, int);
 static int	magit_bisect_reset_cmd(int, int);
 static int	magit_bisect_report(int, const char *, int, int);
 static int	magit_transient(struct magit_menu *, int, int);
+static int	magit_conflict_ours(int, int);
+static int	magit_conflict_theirs(int, int);
+static int	magit_menu_conflict(int, int);
 static int	magit_menu_pull(int, int);
 static int	magit_menu_push(int, int);
 static int	magit_menu_reset(int, int);
@@ -227,6 +230,7 @@ static struct KEYMAPE (1) magit_pushmenu = {
 static PF magit_S[] = { magit_stage_all };
 static PF magit_U[] = { magit_unstage_all };
 static PF magit_V[] = { magit_revert };
+static PF magit_e[] = { magit_menu_conflict };	/* e -> conflict menu */
 static PF magit_f[] = { magit_fetch };
 static PF magit_W[] = { magit_menu_worktree };			/* W -> worktree menu prefix */
 static PF magit_X[] = { magit_menu_reset };			/* X -> reset menu prefix */
@@ -278,6 +282,20 @@ static struct KEYMAPE (4) magit_bisectmenu = {
 		{ 'g', 'g', bisect_g, NULL },	/* Z g: mark good */
 		{ 'r', 'r', bisect_r, NULL },	/* Z r: reset */
 		{ 's', 's', bisect_s, NULL }	/* Z s: start */
+	}
+};
+
+/* Conflict menu (e, on an unmerged line): e o keep ours, e t keep theirs. */
+static PF conflict_o[] = { magit_conflict_ours };
+static PF conflict_t[] = { magit_conflict_theirs };
+
+static struct KEYMAPE (2) magit_conflictmenu = {
+	2,
+	2,
+	rescan,
+	{
+		{ 'o', 'o', conflict_o, NULL },	/* e o: keep ours */
+		{ 't', 't', conflict_t, NULL }	/* e t: keep theirs */
 	}
 };
 
@@ -573,6 +591,9 @@ static const struct magit_menu_item tag_items[] = {
 static const struct magit_menu_item stash_items[] = {
 	{ 'p', "pop" }, { 'z', "push/create" }
 };
+static const struct magit_menu_item conflict_items[] = {
+	{ 'o', "keep ours" }, { 't', "keep theirs" }
+};
 
 #define MENU_N(a) ((int)(sizeof(a) / sizeof((a)[0])))
 static struct magit_menu pull_menu = { "Pull", (KEYMAP *)&magit_pullmenu,
@@ -598,6 +619,9 @@ static struct magit_menu tag_menu = { "Tag", (KEYMAP *)&magit_tagmenu,
 	tag_items, MENU_N(tag_items), NULL, 0 };
 static struct magit_menu stash_menu = { "Stash", (KEYMAP *)&magit_stashmenu,
 	stash_items, MENU_N(stash_items), NULL, 0 };
+static struct magit_menu conflict_menu = { "Conflict (file at point)",
+	(KEYMAP *)&magit_conflictmenu, conflict_items, MENU_N(conflict_items),
+	NULL, 0 };
 
 /* Render menu `m` into `bp`: title, infixes (with state), then action keys. */
 static void
@@ -708,10 +732,59 @@ static int magit_menu_rebase(int f, int n) { return (magit_transient(&rebase_men
 static int magit_menu_tag(int f, int n)    { return (magit_transient(&tag_menu, f, n)); }
 static int magit_menu_stash(int f, int n)  { return (magit_transient(&stash_menu, f, n)); }
 
+/* e: resolve the conflict at point -- only meaningful on a Conflicts line. */
+static int
+magit_menu_conflict(int f, int n)
+{
+	char	*path = NULL;
+	int	 kind, hunk;
+
+	kind = magit_at_point(&path, &hunk);
+	if (kind != MG_LINE_CONFLICT) {
+		ewprintf("Point is not on a conflicted file");
+		return (FALSE);
+	}
+	return (magit_transient(&conflict_menu, f, n));
+}
+
+/* Shared: resolve the conflicted file at point by keeping `take_theirs`. */
+static int
+magit_resolve_at_point(int take_theirs, int f, int n)
+{
+	char	*path = NULL;
+	char	 cwd[PATH_MAX];
+	int	 kind, hunk;
+
+	kind = magit_at_point(&path, &hunk);
+	if (kind != MG_LINE_CONFLICT || path == NULL || path[0] == '\0') {
+		ewprintf("Point is not on a conflicted file");
+		return (FALSE);
+	}
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	if (mg_magit_resolve_conflict(cwd, path, take_theirs) != 1) {
+		ewprintf("Resolve failed");
+		return (FALSE);
+	}
+	return (magit_refresh(f, n));
+}
+
+static int
+magit_conflict_ours(int f, int n)
+{
+	return (magit_resolve_at_point(0, f, n));
+}
+
+static int
+magit_conflict_theirs(int f, int n)
+{
+	return (magit_resolve_at_point(1, f, n));
+}
+
 /* Entries MUST stay in ascending key order -- doscan() relies on it. */
-static struct KEYMAPE (29) magitmap = {
-	29,
-	29,
+static struct KEYMAPE (30) magitmap = {
+	30,
+	30,
 	rescan,
 	{
 		{ CCHR('I'), CCHR('I'), magit_tab, NULL },	/* TAB: expand/collapse */
@@ -732,6 +805,7 @@ static struct KEYMAPE (29) magitmap = {
 		{ 'a', 'a', magit_a, NULL },			/* a: apply stash */
 		{ 'b', 'b', magit_b, NULL }, /* b: branch menu */
 		{ 'c', 'c', magit_c, NULL }, /* c: commit menu */
+		{ 'e', 'e', magit_e, NULL },			/* e: resolve conflict */
 		{ 'f', 'f', magit_f, NULL },			/* f: fetch */
 		{ 'g', 'g', magit_g, NULL },
 		{ 'i', 'i', magit_i, NULL },			/* i: gitignore */
@@ -811,7 +885,7 @@ magit_assert_menus_consistent(void)
 	static struct magit_menu *const all[] = {
 		&pull_menu, &push_menu, &reset_menu, &worktree_menu, &bisect_menu,
 		&branch_menu, &commit_menu, &log_menu, &rebase_menu, &tag_menu,
-		&stash_menu
+		&stash_menu, &conflict_menu
 	};
 	size_t	m;
 	int	i;
@@ -1440,7 +1514,7 @@ magit_visit(int f, int n)
 	if (path == NULL || path[0] == '\0' ||
 	    (kind != MG_LINE_UNTRACKED && kind != MG_LINE_UNSTAGED &&
 	    kind != MG_LINE_STAGED && kind != MG_LINE_HUNK &&
-	    kind != MG_LINE_DIFF)) {
+	    kind != MG_LINE_DIFF && kind != MG_LINE_CONFLICT)) {
 		ewprintf("Nothing to visit on this line");
 		return (FALSE);
 	}

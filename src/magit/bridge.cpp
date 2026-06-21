@@ -216,6 +216,8 @@ extern "C" int mg_magit_status_buffer(const char *repo_path,
         using S = mg::magit::status;
         std::vector<const mg::magit::file_status *> untracked, unstaged, staged;
         for (const auto &e : *st) {
+            if (e.index == S::unmerged || e.worktree == S::unmerged)
+                continue; // shown in the dedicated Conflicts section below
             if (e.worktree == S::untracked) {
                 untracked.push_back(&e);
                 continue;
@@ -245,6 +247,14 @@ extern "C" int mg_magit_status_buffer(const char *repo_path,
                     emit_diff(e->path, use_index);
             }
         };
+        if (auto cf = mg::git::conflicts(repo_path); cf && !cf->empty()) {
+            out("");
+            out("Conflicts (" + std::to_string(cf->size()) +
+                    ") -- e o keep ours / e t keep theirs / RET edit",
+                MG_LINE_SECTION);
+            for (const auto &c : *cf)
+                out("  " + c.path, MG_LINE_CONFLICT, c.path.c_str());
+        }
         section("Untracked files", untracked, false, false, MG_LINE_UNTRACKED, false);
         section("Unstaged changes", unstaged, true, false, MG_LINE_UNSTAGED, true);
         section("Staged changes", staged, true, true, MG_LINE_STAGED, true);
@@ -688,6 +698,16 @@ extern "C" int mg_magit_ignore(const char *repo_path, const char *pattern)
     if (repo_path == nullptr || pattern == nullptr || pattern[0] == '\0')
         return 0;
     return mg::git::ignore_path(repo_path, pattern).has_value() ? 1 : 0;
+}
+
+extern "C" int mg_magit_resolve_conflict(const char *repo_path,
+                                         const char *path, int take_theirs)
+{
+    if (repo_path == nullptr || path == nullptr || path[0] == '\0')
+        return 0;
+    auto side = take_theirs ? mg::git::conflict_side::theirs
+                            : mg::git::conflict_side::ours;
+    return mg::git::resolve_conflict(repo_path, path, side).has_value() ? 1 : 0;
 }
 
 extern "C" int mg_magit_note_set(const char *repo_path, const char *rev,

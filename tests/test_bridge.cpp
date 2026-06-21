@@ -1127,6 +1127,88 @@ TEST_CASE("mg_magit_rebase pauses on conflict; abort clears the in-progress stat
     fs::remove_all(dir);
 }
 
+TEST_CASE("Conflicts section + resolve, then continue the rebase via the bridge")
+{
+    auto dir = make_temp_dir();
+    auto repo = dir.string();
+    git_libgit2_init();
+    git_repository *r0 = nullptr;
+    REQUIRE(git_repository_init(&r0, repo.c_str(), 0) == 0);
+    git_config *cfg = nullptr;
+    REQUIRE(git_repository_config(&cfg, r0) == 0);
+    git_config_set_string(cfg, "user.name", "T");
+    git_config_set_string(cfg, "user.email", "t@t");
+    git_config_free(cfg);
+    git_repository_free(r0);
+    git_libgit2_shutdown();
+
+    auto commit = [&](const char *body, const char *msg) {
+        git_libgit2_init();
+        git_repository *r2 = nullptr;
+        REQUIRE(git_repository_open(&r2, repo.c_str()) == 0);
+        std::ofstream(dir / "a.txt") << body;
+        git_index *idx = nullptr;
+        REQUIRE(git_repository_index(&idx, r2) == 0);
+        REQUIRE(git_index_add_bypath(idx, "a.txt") == 0);
+        REQUIRE(git_index_write(idx) == 0);
+        git_oid toid;
+        REQUIRE(git_index_write_tree(&toid, idx) == 0);
+        git_tree *tree = nullptr;
+        REQUIRE(git_tree_lookup(&tree, r2, &toid) == 0);
+        git_signature *sig = nullptr;
+        REQUIRE(git_signature_now(&sig, "T", "t@t") == 0);
+        git_oid head;
+        bool born = git_reference_name_to_id(&head, r2, "HEAD") == 0;
+        git_commit *parent = nullptr;
+        if (born)
+            git_commit_lookup(&parent, r2, &head);
+        const git_commit *parents[1] = {parent};
+        git_oid out;
+        REQUIRE(git_commit_create(&out, r2, "HEAD", sig, sig, nullptr, msg, tree,
+                                  born ? 1 : 0, born ? parents : nullptr) == 0);
+        if (parent)
+            git_commit_free(parent);
+        git_signature_free(sig);
+        git_tree_free(tree);
+        git_index_free(idx);
+        git_repository_free(r2);
+        git_libgit2_shutdown();
+    };
+    auto status_text = [&] {
+        std::string t;
+        mg_magit_status_buffer(
+            repo.c_str(), nullptr, 0,
+            [](void *ctx, const char *line, int, const char *, int) {
+                static_cast<std::string *>(ctx)->append(line).append("\n");
+            },
+            &t);
+        return t;
+    };
+
+    commit("base\n", "C1");
+    REQUIRE(mg_magit_branch_create(repo.c_str(), "feature") == 1);
+    commit("master change\n", "C2 master");
+    REQUIRE(mg_magit_checkout(repo.c_str(), "feature") == 1);
+    commit("feature change\n", "C3 feature");
+
+    CHECK(mg_magit_rebase(repo.c_str(), "master") == 2); // paused on conflict
+    std::string s = status_text();
+    CHECK(s.find("Conflicts (1)") != std::string::npos);
+    CHECK(s.find("a.txt") != std::string::npos);
+
+    // Keep theirs (the replayed feature commit) and continue.
+    CHECK(mg_magit_resolve_conflict(repo.c_str(), "a.txt", 1) == 1);
+    CHECK(status_text().find("Conflicts") == std::string::npos); // resolved
+    CHECK(mg_magit_rebase_continue(repo.c_str()) == 1);          // done
+    CHECK(mg_magit_rebase_in_progress(repo.c_str()) == 0);
+
+    std::ifstream in(dir / "a.txt");
+    std::string body((std::istreambuf_iterator<char>(in)),
+                     std::istreambuf_iterator<char>());
+    CHECK(body == "feature change\n");
+    fs::remove_all(dir);
+}
+
 TEST_CASE("mg_magit_revert and mg_magit_merge act through the bridge")
 {
     // make_repo_one_hunk: committed f.txt with a dirty working-tree change.
