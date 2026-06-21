@@ -244,6 +244,23 @@ std::expected<void, error> rebase_abort(std::string repo);
 // Is a rebase currently in progress (paused) in `repo`?
 bool rebase_in_progress(std::string repo);
 
+// One entry of an interactive-rebase plan: what to do with a commit.
+enum class rebase_action { pick, drop, squash, fixup };
+struct rebase_step {
+    rebase_action action;
+    std::string oid;   // full sha-1 hex of the commit
+};
+
+// Interactive rebase: replay `plan` (oldest first) on top of `onto`, then move
+// the current branch to the result. pick = apply as-is; drop = omit;
+// squash/fixup = fold into the previous kept commit (squash concatenates the
+// messages, fixup keeps the previous message); reordering is just the plan
+// order. Built on cherry-pick (in-memory), so a conflict leaves the repo
+// untouched and returns an error. reword/edit are a later slice.
+std::expected<void, error>
+rebase_interactive(std::string repo, std::string onto,
+                   std::vector<rebase_step> plan);
+
 // UI prompt for credentials: fill `out` (size outlen) with the user's answer
 // to `prompt`; `hidden` requests non-echoing input (passwords). Return 1 on
 // success, 0 on abort. `udata` is opaque (passed through from set_cred_prompt).
@@ -1143,6 +1160,127 @@ bool rebase_in_progress(std::string repo)
     return st == GIT_REPOSITORY_STATE_REBASE ||
            st == GIT_REPOSITORY_STATE_REBASE_INTERACTIVE ||
            st == GIT_REPOSITORY_STATE_REBASE_MERGE;
+}
+
+std::expected<void, error>
+rebase_interactive(std::string repo, std::string onto,
+                   std::vector<rebase_step> plan)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    detail::sig_ptr sig = default_signature(r.get());
+    if (!sig)
+        return std::unexpected(last_error());
+
+    // Resolve `onto` -> the base commit; `tip` is the running result.
+    git_object *raw_onto = nullptr;
+    if (git_revparse_single(&raw_onto, r.get(), onto.c_str()) != 0)
+        return std::unexpected(last_error());
+    detail::object_ptr onto_obj(raw_onto);
+    git_commit *raw_tip = nullptr;
+    if (git_commit_lookup(&raw_tip, r.get(), git_object_id(onto_obj.get())) != 0)
+        return std::unexpected(last_error());
+    detail::commit_ptr tip(raw_tip);
+    bool have_tip = false; // any kept commit yet (squash/fixup need one)
+
+    for (const auto &step : plan) {
+        if (step.action == rebase_action::drop)
+            continue;
+
+        git_oid aoid;
+        if (git_oid_fromstr(&aoid, step.oid.c_str()) != 0)
+            return std::unexpected(error{0, "bad commit id in rebase plan"});
+        git_commit *raw_apply = nullptr;
+        if (git_commit_lookup(&raw_apply, r.get(), &aoid) != 0)
+            return std::unexpected(last_error());
+        detail::commit_ptr apply(raw_apply);
+
+        rebase_action act = step.action;
+        if ((act == rebase_action::squash || act == rebase_action::fixup) &&
+            !have_tip)
+            act = rebase_action::pick; // nothing to fold into yet
+
+        // Cherry-pick `apply` onto `tip` in memory (workdir/refs untouched).
+        git_index *raw_idx = nullptr;
+        if (git_cherrypick_commit(&raw_idx, r.get(), apply.get(), tip.get(), 0,
+                                  nullptr) != 0)
+            return std::unexpected(last_error());
+        detail::index_ptr idx(raw_idx);
+        if (git_index_has_conflicts(idx.get()))
+            return std::unexpected(
+                error{0, "interactive rebase conflict (aborted)"});
+
+        git_oid tree_oid;
+        if (git_index_write_tree_to(&tree_oid, idx.get(), r.get()) != 0)
+            return std::unexpected(last_error());
+        git_tree *raw_tree = nullptr;
+        if (git_tree_lookup(&raw_tree, r.get(), &tree_oid) != 0)
+            return std::unexpected(last_error());
+        detail::tree_ptr tree(raw_tree);
+
+        git_oid new_oid;
+        if (act == rebase_action::pick) {
+            const git_commit *parents[1] = {tip.get()};
+            if (git_commit_create(&new_oid, r.get(), nullptr,
+                                  git_commit_author(apply.get()), sig.get(),
+                                  nullptr, git_commit_message(apply.get()),
+                                  tree.get(), 1, parents) != 0)
+                return std::unexpected(last_error());
+        } else { // squash / fixup: replace `tip` with the combined commit
+            detail::commit_ptr tparent(nullptr);
+            const git_commit *parents[1];
+            int nparents = 0;
+            if (git_commit_parentcount(tip.get()) > 0) {
+                git_commit *raw_tp = nullptr;
+                if (git_commit_parent(&raw_tp, tip.get(), 0) != 0)
+                    return std::unexpected(last_error());
+                tparent.reset(raw_tp);
+                parents[0] = tparent.get();
+                nparents = 1;
+            }
+            std::string msg = git_commit_message(tip.get());
+            if (act == rebase_action::squash) {
+                const char *am = git_commit_message(apply.get());
+                msg += "\n\n";
+                msg += (am != nullptr ? am : "");
+            }
+            if (git_commit_create(&new_oid, r.get(), nullptr,
+                                  git_commit_author(tip.get()), sig.get(),
+                                  nullptr, msg.c_str(), tree.get(), nparents,
+                                  nparents ? parents : nullptr) != 0)
+                return std::unexpected(last_error());
+        }
+
+        git_commit *raw_new = nullptr;
+        if (git_commit_lookup(&raw_new, r.get(), &new_oid) != 0)
+            return std::unexpected(last_error());
+        tip.reset(raw_new);
+        have_tip = true;
+    }
+
+    // Point the current branch at the rebuilt tip and refresh the work tree.
+    git_oid final_oid = *git_commit_id(tip.get());
+    git_reference *raw_head = nullptr;
+    if (git_repository_head(&raw_head, r.get()) != 0)
+        return std::unexpected(last_error());
+    detail::ref_ptr head(raw_head);
+    git_reference *raw_newref = nullptr;
+    if (git_reference_set_target(&raw_newref, head.get(), &final_oid,
+                                 "rebase -i (finish)") != 0)
+        return std::unexpected(last_error());
+    git_reference_free(raw_newref);
+
+    git_checkout_options chk;
+    git_checkout_options_init(&chk, GIT_CHECKOUT_OPTIONS_VERSION);
+    chk.checkout_strategy = GIT_CHECKOUT_FORCE;
+    if (git_checkout_tree(r.get(), reinterpret_cast<git_object *>(tip.get()),
+                          &chk) != 0)
+        return std::unexpected(last_error());
+    return {};
 }
 
 // Process-wide credential prompt (set by the UI via set_cred_prompt).

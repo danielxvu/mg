@@ -156,6 +156,19 @@ int mg_magit_rebase_skip(const char *repo_path);
 int mg_magit_rebase_abort(const char *repo_path);
 int mg_magit_rebase_in_progress(const char *repo_path);
 
+/* One interactive-rebase plan step: `action` 0=pick, 1=drop, 2=squash,
+ * 3=fixup; `oid` is the commit's full sha-1 hex. */
+struct mg_magit_rebase_step {
+	int action;
+	const char *oid;
+};
+
+/* Interactive rebase: replay `steps[0..n)` (oldest first) onto `onto`, then
+ * move the current branch to the result. Returns 1 on success, 0 on failure
+ * (incl. conflict, which leaves the repo untouched). reword/edit unsupported. */
+int mg_magit_rebase_interactive(const char *repo_path, const char *onto,
+                                const struct mg_magit_rebase_step *steps, int n);
+
 /* Create / delete / rename a local branch. create makes `name` at HEAD without
  * switching; rename moves `from` to `to`. Return 1 on success, 0 on failure. */
 int mg_magit_branch_create(const char *repo_path, const char *name);

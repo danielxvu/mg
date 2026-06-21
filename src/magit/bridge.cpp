@@ -610,6 +610,31 @@ extern "C" int mg_magit_rebase_in_progress(const char *repo_path)
     return mg::git::rebase_in_progress(repo_path) ? 1 : 0;
 }
 
+extern "C" int mg_magit_rebase_interactive(const char *repo_path,
+                                           const char *onto,
+                                           const struct mg_magit_rebase_step *steps,
+                                           int n)
+{
+    if (repo_path == nullptr || onto == nullptr || (n > 0 && steps == nullptr))
+        return 0;
+    std::vector<mg::git::rebase_step> plan;
+    plan.reserve(n > 0 ? n : 0);
+    for (int i = 0; i < n; ++i) {
+        mg::git::rebase_action a;
+        switch (steps[i].action) {
+        case 1: a = mg::git::rebase_action::drop; break;
+        case 2: a = mg::git::rebase_action::squash; break;
+        case 3: a = mg::git::rebase_action::fixup; break;
+        default: a = mg::git::rebase_action::pick; break;
+        }
+        plan.push_back({a, steps[i].oid ? steps[i].oid : ""});
+    }
+    return mg::git::rebase_interactive(repo_path, onto, std::move(plan))
+                   .has_value()
+               ? 1
+               : 0;
+}
+
 extern "C" int mg_magit_branch_create(const char *repo_path, const char *name)
 {
     if (repo_path == nullptr || name == nullptr || name[0] == '\0')

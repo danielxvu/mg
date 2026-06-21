@@ -366,6 +366,32 @@ fs::path make_repo_rebase_conflict()
     return dir;
 }
 
+// HEAD on "feature" = master(C1) -> C2(b.txt) -> C3(c.txt) -> C4(d.txt);
+// master stays at C1. For exercising interactive-rebase plans over C2/C3/C4.
+fs::path make_repo_for_interactive()
+{
+    auto dir = make_repo_with_commit("C1"); // master @ C1 (a.txt), HEAD master
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_open(&repo, dir.string().c_str()) == 0);
+    git_oid c1;
+    REQUIRE(git_reference_name_to_id(&c1, repo, "HEAD") == 0);
+    git_commit *base = nullptr;
+    REQUIRE(git_commit_lookup(&base, repo, &c1) == 0);
+    git_reference *feat = nullptr;
+    REQUIRE(git_branch_create(&feat, repo, "feature", base, 0) == 0);
+    git_reference_free(feat);
+    git_commit_free(base);
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+
+    REQUIRE(mg::git::checkout_branch(dir.string(), "feature").has_value());
+    commit_file(dir, "b.txt", "B\n", "C2");
+    commit_file(dir, "c.txt", "C\n", "C3");
+    commit_file(dir, "d.txt", "D\n", "C4");
+    return dir;
+}
+
 // Resolve the conflicted a.txt to `body` and stage it (clears the conflict).
 void resolve_and_stage(const fs::path &dir, const char *body)
 {
@@ -593,6 +619,75 @@ TEST_CASE("rebase_onto replays the branch's commits on top of upstream")
     CHECK(c3);
     CHECK(fs::exists(dir / "b.txt")); // from C2
     CHECK(fs::exists(dir / "c.txt")); // from C3
+    fs::remove_all(dir);
+}
+
+// Resolve a revspec (e.g. "feature~2") to its full oid -- topologically exact,
+// unlike recent_commits' time order (the fixture's commits share a timestamp).
+static std::string oid_of(const fs::path &dir, const char *rev)
+{
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_open(&repo, dir.string().c_str()) == 0);
+    git_object *o = nullptr;
+    REQUIRE(git_revparse_single(&o, repo, rev) == 0);
+    char buf[GIT_OID_HEXSZ + 1];
+    git_oid_tostr(buf, sizeof buf, git_object_id(o));
+    git_object_free(o);
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+    return std::string(buf);
+}
+
+TEST_CASE("rebase_interactive drops a commit from the middle of the plan")
+{
+    using mg::git::rebase_action;
+    using mg::git::rebase_step;
+    auto dir = make_repo_for_interactive(); // feature: C1->C2(b)->C3(c)->C4(d)
+
+    // plan oldest-first: pick C2, drop C3, pick C4.
+    std::vector<rebase_step> plan = {
+        {rebase_action::pick, oid_of(dir, "feature~2")}, // C2
+        {rebase_action::drop, oid_of(dir, "feature~1")}, // C3
+        {rebase_action::pick, oid_of(dir, "feature")},   // C4
+    };
+    REQUIRE(mg::git::rebase_interactive(dir.string(), "master", plan).has_value());
+
+    CHECK(fs::exists(dir / "b.txt"));        // C2 kept
+    CHECK_FALSE(fs::exists(dir / "c.txt"));  // C3 dropped
+    CHECK(fs::exists(dir / "d.txt"));        // C4 kept
+    auto after = mg::git::recent_commits(dir.string(), 10);
+    REQUIRE(after.has_value());
+    CHECK(after->size() == 3); // C1, C2', C4'
+    for (const auto &c : *after)
+        CHECK(c.summary != "C3");
+    fs::remove_all(dir);
+}
+
+TEST_CASE("rebase_interactive fixup folds a commit into the previous one")
+{
+    using mg::git::rebase_action;
+    using mg::git::rebase_step;
+    auto dir = make_repo_for_interactive();
+
+    // pick C2, fixup C3 into it, pick C4.
+    std::vector<rebase_step> plan = {
+        {rebase_action::pick, oid_of(dir, "feature~2")},  // C2
+        {rebase_action::fixup, oid_of(dir, "feature~1")}, // C3 -> folded into C2
+        {rebase_action::pick, oid_of(dir, "feature")},    // C4
+    };
+    REQUIRE(mg::git::rebase_interactive(dir.string(), "master", plan).has_value());
+
+    // Both b.txt (C2) and c.txt (C3's change) are present, but C3 is gone as a
+    // separate commit and its message did not survive (fixup keeps C2's).
+    CHECK(fs::exists(dir / "b.txt"));
+    CHECK(fs::exists(dir / "c.txt"));
+    CHECK(fs::exists(dir / "d.txt"));
+    auto after = mg::git::recent_commits(dir.string(), 10);
+    REQUIRE(after.has_value());
+    CHECK(after->size() == 3); // C1, (C2+C3), C4'
+    for (const auto &c : *after)
+        CHECK(c.summary != "C3");
     fs::remove_all(dir);
 }
 

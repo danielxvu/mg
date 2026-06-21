@@ -717,6 +717,88 @@ TEST_CASE("mg_magit_rebase replays the current branch onto upstream")
     fs::remove_all(dir);
 }
 
+TEST_CASE("mg_magit_rebase_interactive drops a commit via the plan")
+{
+    // feature: C1 -> C2(b) -> C3(c) -> C4(d) on the default branch (no extra
+    // branch needed -- onto = C1).
+    auto dir = make_temp_dir();
+    auto repo = dir.string();
+    git_libgit2_init();
+    git_repository *r0 = nullptr;
+    REQUIRE(git_repository_init(&r0, repo.c_str(), 0) == 0);
+    git_config *cfg = nullptr;
+    REQUIRE(git_repository_config(&cfg, r0) == 0);
+    git_config_set_string(cfg, "user.name", "T");
+    git_config_set_string(cfg, "user.email", "t@t");
+    git_config_free(cfg);
+    git_repository_free(r0);
+    git_libgit2_shutdown();
+
+    auto commit = [&](const char *file, const char *body, const char *msg) {
+        git_libgit2_init();
+        git_repository *repo2 = nullptr;
+        REQUIRE(git_repository_open(&repo2, repo.c_str()) == 0);
+        std::ofstream(dir / file) << body;
+        git_index *idx = nullptr;
+        REQUIRE(git_repository_index(&idx, repo2) == 0);
+        REQUIRE(git_index_add_bypath(idx, file) == 0);
+        REQUIRE(git_index_write(idx) == 0);
+        git_oid toid;
+        REQUIRE(git_index_write_tree(&toid, idx) == 0);
+        git_tree *tree = nullptr;
+        REQUIRE(git_tree_lookup(&tree, repo2, &toid) == 0);
+        git_signature *sig = nullptr;
+        REQUIRE(git_signature_now(&sig, "T", "t@t") == 0);
+        git_oid head;
+        bool born = git_reference_name_to_id(&head, repo2, "HEAD") == 0;
+        git_commit *parent = nullptr;
+        if (born)
+            git_commit_lookup(&parent, repo2, &head);
+        const git_commit *parents[1] = {parent};
+        git_oid out;
+        REQUIRE(git_commit_create(&out, repo2, "HEAD", sig, sig, nullptr, msg,
+                                  tree, born ? 1 : 0, born ? parents : nullptr) == 0);
+        if (parent)
+            git_commit_free(parent);
+        git_signature_free(sig);
+        git_tree_free(tree);
+        git_index_free(idx);
+        git_repository_free(repo2);
+        git_libgit2_shutdown();
+    };
+    auto oid_of = [&](const char *rev) {
+        git_libgit2_init();
+        git_repository *repo2 = nullptr;
+        REQUIRE(git_repository_open(&repo2, repo.c_str()) == 0);
+        git_object *o = nullptr;
+        REQUIRE(git_revparse_single(&o, repo2, rev) == 0);
+        char buf[GIT_OID_HEXSZ + 1];
+        git_oid_tostr(buf, sizeof buf, git_object_id(o));
+        git_object_free(o);
+        git_repository_free(repo2);
+        git_libgit2_shutdown();
+        return std::string(buf);
+    };
+
+    commit("a.txt", "a\n", "C1");
+    commit("b.txt", "b\n", "C2");
+    commit("c.txt", "c\n", "C3");
+    commit("d.txt", "d\n", "C4");
+    std::string c1 = oid_of("HEAD~3"), c2 = oid_of("HEAD~2");
+    std::string c3 = oid_of("HEAD~1"), c4 = oid_of("HEAD");
+
+    mg_magit_rebase_step steps[3] = {
+        {0, c2.c_str()}, // pick C2
+        {1, c3.c_str()}, // drop C3
+        {0, c4.c_str()}, // pick C4
+    };
+    CHECK(mg_magit_rebase_interactive(repo.c_str(), c1.c_str(), steps, 3) == 1);
+    CHECK(std::filesystem::exists(dir / "b.txt"));
+    CHECK_FALSE(std::filesystem::exists(dir / "c.txt")); // dropped
+    CHECK(std::filesystem::exists(dir / "d.txt"));
+    fs::remove_all(dir);
+}
+
 TEST_CASE("mg_magit_rebase pauses on conflict; abort clears the in-progress state")
 {
     // feature and master both change a.txt -> rebasing feature conflicts.
