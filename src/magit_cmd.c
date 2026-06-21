@@ -63,6 +63,9 @@ static int	magit_revert(int, int);
 static int	magit_reset_soft(int, int);
 static int	magit_reset_mixed(int, int);
 static int	magit_reset_hard(int, int);
+static int	magit_fetch(int, int);
+static int	magit_pull(int, int);
+static int	magit_push(int, int);
 
 /*
  * line -> {kind, hunk, path} map for the most recent render of *magit-status*.
@@ -96,9 +99,12 @@ static PF magit_tab[] = { magit_toggle_expand };
 static PF magit_ret[] = { magit_visit };
 static PF magit_esc[] = { NULL };		/* ESC -> meta prefix */
 static PF magit_qmark[] = { magit_help };
+static PF magit_F[] = { magit_pull };
+static PF magit_P[] = { magit_push };
 static PF magit_S[] = { magit_stage_all };
 static PF magit_U[] = { magit_unstage_all };
 static PF magit_V[] = { magit_revert };
+static PF magit_f[] = { magit_fetch };
 static PF magit_X[] = { NULL };			/* X -> reset menu prefix */
 static PF magit_m[] = { magit_merge };
 
@@ -238,9 +244,9 @@ static struct KEYMAPE (4) magit_commitmenu = {
 };
 
 /* Entries MUST stay in ascending key order -- doscan() relies on it. */
-static struct KEYMAPE (19) magitmap = {
-	19,
-	19,
+static struct KEYMAPE (22) magitmap = {
+	22,
+	22,
 	rescan,
 	{
 		{ CCHR('I'), CCHR('I'), magit_tab, NULL },	/* TAB: expand/collapse */
@@ -248,6 +254,8 @@ static struct KEYMAPE (19) magitmap = {
 		{ CCHR('['), CCHR('['), magit_esc,		/* ESC: meta prefix */
 		    (KEYMAP *)&magit_metamap },
 		{ '?', '?', magit_qmark, NULL },		/* ?: key help */
+		{ 'F', 'F', magit_F, NULL },			/* F: pull */
+		{ 'P', 'P', magit_P, NULL },			/* P: push */
 		{ 'S', 'S', magit_S, NULL },			/* S: stage all */
 		{ 'U', 'U', magit_U, NULL },			/* U: unstage all */
 		{ 'V', 'V', magit_V, NULL },			/* V: revert */
@@ -255,6 +263,7 @@ static struct KEYMAPE (19) magitmap = {
 		{ 'a', 'a', magit_a, NULL },			/* a: apply stash */
 		{ 'b', 'b', magit_b, (KEYMAP *)&magit_branchmenu }, /* b: branch menu */
 		{ 'c', 'c', magit_c, (KEYMAP *)&magit_commitmenu }, /* c: commit menu */
+		{ 'f', 'f', magit_f, NULL },			/* f: fetch */
 		{ 'g', 'g', magit_g, NULL },
 		{ 'k', 'k', magit_k, NULL },
 		{ 'l', 'l', magit_l, NULL },			/* l: log buffer */
@@ -825,6 +834,7 @@ magit_help(int f, int n)
 		"  m        merge a branch into HEAD",
 		"  V        revert a commit",
 		"  X h/m/s  reset HEAD: hard / mixed / soft",
+		"  f / F / P  fetch / pull / push (origin)",
 		"  g        refresh",
 		"  q        quit this window",
 		"  ?        this help",
@@ -1139,6 +1149,56 @@ static int
 magit_reset_hard(int f, int n)
 {
 	return (magit_do_reset(2, f, n));
+}
+
+/* f: fetch from origin (updates remote-tracking refs). */
+static int
+magit_fetch(int f, int n)
+{
+	char	cwd[PATH_MAX];
+
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	ewprintf("Fetching from origin...");
+	if (mg_magit_fetch(cwd, "origin") != 1) {
+		ewprintf("Fetch failed (no origin, or auth required)");
+		return (FALSE);
+	}
+	ewprintf("Fetched from origin");
+	return (magit_refresh(f, n));
+}
+
+/* F: pull from origin (fetch + merge the upstream into HEAD). */
+static int
+magit_pull(int f, int n)
+{
+	char	cwd[PATH_MAX];
+
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	ewprintf("Pulling from origin...");
+	if (mg_magit_pull(cwd, "origin") != 1) {
+		ewprintf("Pull failed (conflicts, no origin, or auth required)");
+		return (FALSE);
+	}
+	return (magit_refresh(f, n));
+}
+
+/* P: push the current branch to origin. */
+static int
+magit_push(int f, int n)
+{
+	char	cwd[PATH_MAX];
+
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	ewprintf("Pushing to origin...");
+	if (mg_magit_push(cwd, "origin") != 1) {
+		ewprintf("Push failed (no origin, non-fast-forward, or auth required)");
+		return (FALSE);
+	}
+	ewprintf("Pushed to origin");
+	return (magit_refresh(f, n));
 }
 
 static int
