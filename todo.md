@@ -317,7 +317,8 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `fm-rb-replay-conflict`→fm-rb-edit (#67),
   `fm-ediff-3-panes`→fm-rb-replay-conflict (#68),
   `fm-ediff-4-refine`→fm-ediff-3-panes (#69),
-  `fm-ediff-5-cell-color`→fm-ediff-4-refine (#70).
+  `fm-ediff-5-cell-color`→fm-ediff-4-refine (#70),
+  `fm-ediff-6-sync-scroll`→fm-ediff-5-cell-color (#71).
   Magit core (A+B, #31-#41) done; UTF-8 "Full" U5-U8 (#42-#45). **Phase C**
   (honest gap vs real magit; spec
   `docs/superpowers/specs/2026-06-21-fm-phase-c-roadmap.md`): ✅ FM-RB-1
@@ -360,7 +361,11 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   ✅ **per-cell color** (#70): the refined words now render in real reverse
   video (`MG_HL_BIT` spare cell bit + a no-op-when-absent `uline` hook, all
   `#ifdef ENABLE_NATIVE_MAGIT` so OFF stays byte-clean) — the "needs a display
-  rewrite" item, done without one. Next branch freezes on `fm-ediff-5-cell-color`.
+  rewrite" item, done without one. ✅ **full-version panes + synchronized
+  scrolling** (#71): the side panes show the full ours/theirs versions and
+  scroll in lockstep with merged (alignment derived from the marker structure,
+  no line-diff lib); `C-n`/`C-p`/`C-v`/`M-v` move all three together. 🎉 **ediff
+  feature-complete.** Next branch freezes on `fm-ediff-6-sync-scroll`.
 
   **Phase C status — implemented:** rebase (onto/sequencer/interactive +
   reword), cherry-pick, tags (lightweight+annotated+section), push/pull
@@ -381,11 +386,10 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
       conflicts resume fully, #67.)
     · submodule **add/update/sync** — clone + network (testable via a local bare
       remote, but not yet built); listing only for now.
-    · **ediff: synchronized free (line) scrolling** across full-file panes —
-      needs cross-file line alignment (a real line-diff); region-step nav (#68)
-      covers the conflict workflow. (Per-character color refinement, once thought
-      to need a display rewrite, is DONE — #70, via a spare cell bit + a
-      no-op-when-absent uline hook, OFF byte-clean.)
+    · (none — the ediff is feature-complete: full-version panes + synchronized
+      scrolling #71, per-character color refinement #70, region nav + highlight
+      #68. The "needs a real line-diff" worry was avoided: alignment derives from
+      the conflict-marker structure.)
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
