@@ -988,6 +988,21 @@ TEST_CASE("commit_diff of the root commit shows all its lines as additions")
     fs::remove_all(dir);
 }
 
+TEST_CASE("commit_diff resolves a stash rev to show the stashed change")
+{
+    auto dir = make_repo_with_stash("WIP"); // a.txt "content" -> "content changed"
+
+    auto d = mg::git::commit_diff(dir.string(), "stash@{0}");
+    REQUIRE(d.has_value());
+    bool shows_change = false;
+    for (const auto &h : *d)
+        for (const auto &l : h.lines)
+            if (l.content.find("content changed") != std::string::npos)
+                shows_change = true;
+    CHECK(shows_change);
+    fs::remove_all(dir);
+}
+
 TEST_CASE("stash_push stashes the working tree, stash_pop restores it")
 {
     auto dir = make_repo_with_commit("base"); // a.txt = "content"

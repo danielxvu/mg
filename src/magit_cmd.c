@@ -445,6 +445,10 @@ magit_status(int f, int n)
 	if (!initialized) {
 		magit_assert_keymap_sorted();
 		maps_add((KEYMAP *)&magitmap, "magit-status-mode");
+		/* Register the log/commit-view modes here too: RET on a stash opens
+		 * the commit-view buffer without ever going through `l`. */
+		maps_add((KEYMAP *)&maglogmap, "magit-log-mode");
+		maps_add((KEYMAP *)&magcommitmap, "magit-commit-view-mode");
 		initialized = 1;
 	}
 
@@ -532,15 +536,11 @@ magit_log_build(struct buffer *bp)
 static int
 magit_log(int f, int n)
 {
-	static int	 initialized = 0;
 	struct buffer	*bp;
 	struct mgwin	*wp;
 
-	if (!initialized) {
-		maps_add((KEYMAP *)&maglogmap, "magit-log-mode");
-		maps_add((KEYMAP *)&magcommitmap, "magit-commit-view-mode");
-		initialized = 1;
-	}
+	/* magit-log-mode / magit-commit-view-mode are registered by magit_status,
+	 * which always runs first (l is only bound in the status buffer). */
 	if ((bp = bfind("*magit-log*", TRUE)) == NULL)
 		return (FALSE);
 	if (magit_log_build(bp) != TRUE)
@@ -581,19 +581,15 @@ magit_log_oid_at_point(void)
 	return (magit_log_oid[idx]);
 }
 
-/* RET in *magit-log*: pop a read-only *magit-commit* buffer with the diff. */
+/* Pop a read-only *magit-commit* buffer showing `rev`'s diff (a commit oid or a
+ * stash rev like "stash@{0}"). */
 static int
-magit_log_visit(int f, int n)
+magit_show_rev(const char *rev)
 {
-	const char	*oid;
 	struct buffer	*bp;
 	struct mgwin	*wp;
 	char		 cwd[PATH_MAX];
 
-	if ((oid = magit_log_oid_at_point()) == NULL) {
-		ewprintf("Not on a commit");
-		return (FALSE);
-	}
 	if (getcwd(cwd, sizeof(cwd)) == NULL)
 		return (FALSE);
 	if ((bp = bfind("*magit-commit*", TRUE)) == NULL)
@@ -602,7 +598,10 @@ magit_log_visit(int f, int n)
 	if (bclear(bp) != TRUE)
 		return (FALSE);
 	bp->b_flag |= BFREADONLY;
-	(void)mg_magit_commit_diff(cwd, oid, magit_plain_emit, bp);
+	if (mg_magit_commit_diff(cwd, rev, magit_plain_emit, bp) == 0) {
+		ewprintf("No diff for %s", rev);
+		return (FALSE);
+	}
 	bp->b_dotp = bfirstlp(bp);
 	bp->b_doto = 0;
 	if ((wp = popbuf(bp, WNONE)) == NULL)
@@ -614,6 +613,19 @@ magit_log_visit(int f, int n)
 	bp->b_modes[1] = name_mode("magit-commit-view-mode");
 	bp->b_nmodes = 1;
 	return (TRUE);
+}
+
+/* RET in *magit-log*: pop a read-only *magit-commit* buffer with the diff. */
+static int
+magit_log_visit(int f, int n)
+{
+	const char	*oid;
+
+	if ((oid = magit_log_oid_at_point()) == NULL) {
+		ewprintf("Not on a commit");
+		return (FALSE);
+	}
+	return (magit_show_rev(oid));
 }
 
 /* V in *magit-log*: revert the commit at point (records the inverse on HEAD). */
@@ -783,6 +795,13 @@ magit_visit(int f, int n)
 	int		 kind, hunk, status;
 
 	kind = magit_at_point(&path, &hunk);
+	/* On a stash line, RET shows the stash's diff (like a commit). */
+	if (kind == MG_LINE_STASH) {
+		char	rev[32];
+
+		(void)snprintf(rev, sizeof(rev), "stash@{%d}", hunk);
+		return (magit_show_rev(rev));
+	}
 	if (path == NULL || path[0] == '\0' ||
 	    (kind != MG_LINE_UNTRACKED && kind != MG_LINE_UNSTAGED &&
 	    kind != MG_LINE_STAGED && kind != MG_LINE_HUNK &&
@@ -820,7 +839,7 @@ magit_help(int f, int n)
 		"magit-status key bindings",
 		"",
 		"  TAB      fold a section, or expand/collapse a file diff",
-		"  RET      visit the file at point (other window)",
+		"  RET      visit the file (or show the stash) at point",
 		"  M-n/M-p  next / previous section",
 		"  s        stage the file/hunk at point (or marked region)",
 		"  u        unstage the file/hunk at point (or marked region)",
