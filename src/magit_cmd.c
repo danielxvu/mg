@@ -192,6 +192,12 @@ static struct buffer	*magit_ediff_merged_bp;	/* the highlighted pane */
 #define MAGIT_EDIFF_HL_MAX 1024
 static struct line	*magit_ediff_hl[MAGIT_EDIFF_HL_MAX];
 static int		magit_ediff_hl_n;
+/* Word-level refinement spans for the side panes: char range [start,end) of
+ * `lp` to render in standout (the words unique to that side). */
+#define MAGIT_EDIFF_REF_MAX 2048
+struct magit_ediff_ref { struct line *lp; int start, end; };
+static struct magit_ediff_ref	magit_ediff_ref[MAGIT_EDIFF_REF_MAX];
+static int			magit_ediff_ref_n;
 
 /* Interactive-rebase plan backing the *git-rebase-todo* buffer. Each entry is
  * one commit; the buffer is a rendered view of this array (line i = entry i). */
@@ -1177,6 +1183,72 @@ magit_line_highlighted(struct buffer *bp, struct line *lp)
 	return (0);
 }
 
+/* True when char `col` of `lp` is a refined (word-level) difference in a side
+ * pane -> that one cell renders in standout. Called per cell from display.c. */
+int
+magit_cell_highlighted(struct buffer *bp, struct line *lp, int col)
+{
+	int	i;
+
+	(void)bp;
+	for (i = 0; i < magit_ediff_ref_n; i++)
+		if (magit_ediff_ref[i].lp == lp && col >= magit_ediff_ref[i].start &&
+		    col < magit_ediff_ref[i].end)
+			return (1);
+	return (0);
+}
+
+/*
+ * emit callback for an ediff side pane: the bridge line carries wdiff markers
+ * ([-..-] ours / {+..+} theirs); strip them, insert the plain text, and record
+ * the marked char ranges of the inserted line for per-cell standout.
+ */
+static void
+magit_ediff_side_emit(void *ctx, const char *line, int kind, const char *path,
+    int hunk)
+{
+	struct buffer	*bp = (struct buffer *)ctx;
+	struct line	*lp;
+	char		 plain[4096];
+	int		 op = 0, marked = 0, p = 0, ci = 0;
+	const char	*s = line;
+
+	(void)kind;
+	(void)path;
+	(void)hunk;
+	/* `ci` counts codepoints (UTF-8 lead bytes) so ranges match the per-cell
+	 * char index the renderer uses; `p` is the plain-byte cursor. */
+	while (*s != '\0' && p < (int)sizeof(plain) - 1) {
+		if ((s[0] == '[' && s[1] == '-') || (s[0] == '{' && s[1] == '+')) {
+			marked = 1;	/* enter a refined span */
+			op = ci;
+			s += 2;
+			continue;
+		}
+		if ((s[0] == '-' && s[1] == ']') || (s[0] == '+' && s[1] == '}')) {
+			if (marked && magit_ediff_ref_n < MAGIT_EDIFF_REF_MAX) {
+				magit_ediff_ref[magit_ediff_ref_n].start = op;
+				magit_ediff_ref[magit_ediff_ref_n].end = ci; /* [op, ci) */
+				magit_ediff_ref[magit_ediff_ref_n].lp = NULL; /* set below */
+				magit_ediff_ref_n++;
+			}
+			marked = 0;
+			s += 2;
+			continue;
+		}
+		if (((unsigned char)*s & 0xC0) != 0x80)
+			ci++;		/* a new codepoint (not a continuation byte) */
+		plain[p++] = *s++;
+	}
+	plain[p] = '\0';
+	(void)addlinef(bp, "%s", plain);
+	lp = lback(bp->b_headp);	/* the line just appended */
+	/* backfill lp for the ranges recorded for this line (those with NULL) */
+	for (int i = 0; i < magit_ediff_ref_n; i++)
+		if (magit_ediff_ref[i].lp == NULL)
+			magit_ediff_ref[i].lp = lp;
+}
+
 /* Point the window showing `bp` at `dot` and force a redraw. */
 static void
 magit_window_to(struct buffer *bp, struct line *dot)
@@ -1207,7 +1279,7 @@ magit_ediff_fill_side(struct buffer *bp, int side)
 	(void)addlinef(bp, "--- %s (region %d) ---",
 	    side == 0 ? "ours" : "theirs", magit_ediff_region + 1);
 	(void)mg_magit_conflict_hunk_side(cwd, magit_ediff_path,
-	    magit_ediff_region, side, magit_plain_emit, bp);
+	    magit_ediff_region, side, magit_ediff_side_emit, bp);
 	bp->b_dotp = bfirstlp(bp);
 	bp->b_doto = 0;
 	magit_window_to(bp, bp->b_dotp);
@@ -1277,6 +1349,7 @@ magit_ediff_sync(void)
 	    (theirs = bfind("*ediff-theirs*", FALSE)) == NULL)
 		return (0);
 	regions = magit_ediff_build_merged(merged);
+	magit_ediff_ref_n = 0;		/* rebuild the side panes' refine spans */
 	magit_ediff_fill_side(ours, 0);
 	magit_ediff_fill_side(theirs, 1);
 	return (regions);
@@ -1290,6 +1363,7 @@ magit_ediff_quit(int f, int n)
 
 	magit_ediff_merged_bp = NULL;
 	magit_ediff_hl_n = 0;
+	magit_ediff_ref_n = 0;
 	(void)onlywind(f, n);
 	if ((st = bfind("*magit-status*", FALSE)) != NULL) {
 		(void)showbuffer(st, curwp, WFFULL | WFFRAME);

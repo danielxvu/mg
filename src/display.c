@@ -25,8 +25,17 @@
 #ifdef ENABLE_NATIVE_MAGIT
 #include "magit/bridge.h"	/* mg_magit_modeline() */
 /* True when `lp` of `bp` is in the *magit-ediff* active conflict region, so the
- * redisplay loop renders it in standout (defined in magit_cmd.c). */
+ * redisplay loop renders the whole line in standout (defined in magit_cmd.c). */
 int	magit_line_highlighted(struct buffer *, struct line *);
+/* True when character `col` (0-based) of `lp` of `bp` is a refined (word-level)
+ * difference, so that one cell renders in standout (defined in magit_cmd.c). */
+int	magit_cell_highlighted(struct buffer *, struct line *, int);
+/*
+ * A virtual-screen cell is an int codepoint (ENABLE_CPP_UPGRADES, required by
+ * NATIVE_MAGIT); bit 30 is a spare flag (codepoints fit in 21 bits) used to mark
+ * a cell for standout. uline() emits the cell in CMODE; ttputcell() strips it.
+ */
+#define MG_HL_BIT 0x40000000
 #endif
 
 /*
@@ -412,15 +421,30 @@ vt_render_line(struct line *lp, struct mgwin *wp)
 	int		 j = 0, len = llength(lp);
 	unsigned int	 cp;
 	int		 w, n;
+#ifdef ENABLE_NATIVE_MAGIT
+	struct video	*vp = vscreen[vtrow];
+	int		 ci = 0, k, start;
+#endif
 
 	while (j < len) {
 		n = mg_utf8_decode(&ltext(lp)[j], len - j, &cp, &w);
 		if (n <= 0)
 			n = 1;
+#ifdef ENABLE_NATIVE_MAGIT
+		start = vtcol;
+#endif
 		if (cp < 0x80)
 			vtputc((int)cp, wp);
 		else
 			vtputuc(cp, w, wp);
+#ifdef ENABLE_NATIVE_MAGIT
+		/* Word-level refinement: mark this char's cell(s) for standout. */
+		if (magit_cell_highlighted(wp->w_bufp, lp, ci))
+			for (k = start; k < vtcol && k < ncol; k++)
+				if (vp->v_text[k] != VT_CONT)
+					vp->v_text[k] |= MG_HL_BIT;
+		ci++;
+#endif
 		j += n;
 	}
 }
@@ -896,6 +920,9 @@ ttputcell(vtcell c)
 
 	if (c == VT_CONT)
 		return;
+#ifdef ENABLE_NATIVE_MAGIT
+	c &= ~MG_HL_BIT;		/* drop the standout marker before encoding */
+#endif
 	if ((unsigned int)c < 0x80) {
 		ttputc((int)c);
 		return;
@@ -904,6 +931,17 @@ ttputcell(vtcell c)
 	for (i = 0; i < n; i++)
 		ttputc((unsigned char)buf[i]);
 }
+#ifdef ENABLE_NATIVE_MAGIT
+/* The color a cell should render in: CMODE (standout) when flagged, else the
+ * line's base color; -1 for a continuation cell (no change, emits nothing). */
+static int
+cellcolor(vtcell c, int base)
+{
+	if (c == VT_CONT)
+		return (-1);
+	return (c & MG_HL_BIT) ? CMODE : base;
+}
+#endif
 #else
 #define ttputcell(c)	ttputc(c)	/* a cell is a byte in the plain-C build */
 #endif
@@ -917,6 +955,9 @@ uline(int row, struct video *vvp, struct video *pvp)
 	vtcell  *cp4;
 	vtcell  *cp5;
 	int    nbflag;
+#ifdef ENABLE_NATIVE_MAGIT
+	int    cur, want;
+#endif
 
 	if (vvp->v_color != pvp->v_color) {	/* Wrong color, do a	 */
 		ttmove(row, 0);			/* full redraw.		 */
@@ -938,7 +979,17 @@ uline(int row, struct video *vvp, struct video *pvp)
 		cp1 = &vvp->v_text[0];
 		cp2 = &vvp->v_text[ncol];
 #endif
+#ifdef ENABLE_NATIVE_MAGIT
+		cur = vvp->v_color;
+#endif
 		while (cp1 != cp2) {
+#ifdef ENABLE_NATIVE_MAGIT
+			want = cellcolor(*cp1, vvp->v_color);
+			if (want >= 0 && want != cur) {
+				ttcolor(want);
+				cur = want;
+			}
+#endif
 			ttputcell(*cp1++);
 			++ttcol;
 		}
@@ -993,10 +1044,24 @@ uline(int row, struct video *vvp, struct video *pvp)
 	} else if (magic_cookie_glitch < 0)
 #endif
 		ttcolor(vvp->v_color);
+#ifdef ENABLE_NATIVE_MAGIT
+	cur = vvp->v_color;
+#endif
 	while (cp1 != cp5) {
+#ifdef ENABLE_NATIVE_MAGIT
+		want = cellcolor(*cp1, vvp->v_color);
+		if (want >= 0 && want != cur) {
+			ttcolor(want);
+			cur = want;
+		}
+#endif
 		ttputcell(*cp1++);
 		++ttcol;
 	}
+#ifdef ENABLE_NATIVE_MAGIT
+	if (cur != vvp->v_color)	/* restore base color for the erase */
+		ttcolor(vvp->v_color);
+#endif
 	if (cp5 != cp3)			/* Do erase.		 */
 		tteeol();
 }
