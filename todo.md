@@ -222,7 +222,11 @@ region → `discard_region` via a GIT_DIFF_REVERSE workdir patch); FM-Z
 *magit-commit* view; also fixed a latent crash — log/commit-view modes now
 registered in magit_status init, not lazily in `l`); FM-R **remote auth**
 (ssh-agent credentials callback on fetch/push; https/password prompt still a
-follow-up). Nothing magit-related outstanding.
+follow-up). ✅ **Interactive HTTPS auth done too** (PR #41, branch `fm-auth`):
+prompt callback threaded C-core→bridge→engine; `magit_cred_prompt` (no-echo
+password read) answers libgit2's USERPASS; pure `resolve_userpass` unit-tested;
+proven end-to-end via a local 401 server (tmux). **Nothing magit-related
+outstanding** — the full Magit clone is feature-complete.
 Per-slice TDD (test_git → test_bridge → magit_cmd.c → pty) + stacked PR.
 
 ---
@@ -284,10 +288,10 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `fm-t-sections`→fm-s2-region (#34), `fm-b-branches`→fm-t-sections (#35),
   `fm-z-stash`→fm-b-branches (#36), `fm-l-log`→fm-z-stash (#37),
   `fm-x-rrm`→fm-l-log (#38), `fm-r-remotes`→fm-x-rrm (#39),
-  `fm-followups`→fm-r-remotes (#40).
-  🎉 Full-magit roadmap COMPLETE (Phases A+B + follow-ups, PRs #31-#40). Only
-  open item: interactive https/password remote auth (a UI-prompt callback).
-  Next milestone branch freezes on `fm-followups`.
+  `fm-followups`→fm-r-remotes (#40), `fm-auth`→fm-followups (#41).
+  🎉 Full Magit clone FEATURE-COMPLETE (PRs #31-#41). No magit work outstanding;
+  the next milestone branch freezes on `fm-auth`. Natural next focus: the core
+  C++23 engine (todo.md "Core engine" / "Future goals").
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
