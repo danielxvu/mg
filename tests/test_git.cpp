@@ -383,6 +383,25 @@ void advance_ref(const fs::path &dir, const std::string &refname,
 }
 } // namespace
 
+TEST_CASE("fetch_remote fails gracefully on an unreachable remote")
+{
+    auto dir = make_repo_with_commit("C1");
+    git_libgit2_init();
+    git_repository *wraw = nullptr;
+    REQUIRE(git_repository_open(&wraw, dir.string().c_str()) == 0);
+    git_remote *remote = nullptr;
+    // A bogus local path: no repo there -> fetch must error, not crash, with
+    // the credentials callback wired in.
+    REQUIRE(git_remote_create(&remote, wraw, "origin",
+                              "/nonexistent/mg-no-such-repo.git") == 0);
+    git_remote_free(remote);
+    git_repository_free(wraw);
+    git_libgit2_shutdown();
+
+    CHECK_FALSE(mg::git::fetch_remote(dir.string(), "origin").has_value());
+    fs::remove_all(dir);
+}
+
 TEST_CASE("push_remote uploads the current branch to the remote")
 {
     auto fx = make_repo_with_remote();

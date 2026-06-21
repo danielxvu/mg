@@ -960,6 +960,24 @@ std::expected<void, error> merge_branch(std::string repo, std::string name)
     return merge_annotated(r.get(), their.get(), "Merge branch '" + name + "'");
 }
 
+// Credentials for fetch/push: try the ssh-agent (the common `git@host:...`
+// case), and answer username-only probes from the URL. HTTPS userpass and
+// passphrase-protected keys are not handled here (no interactive prompt) ->
+// PASSTHROUGH lets libgit2 fall through and the op fails cleanly.
+static int credentials_cb(git_credential **out, const char *url,
+                          const char *username_from_url,
+                          unsigned int allowed_types, void *payload)
+{
+    (void)url;
+    (void)payload;
+    const char *user = username_from_url ? username_from_url : "git";
+    if (allowed_types & GIT_CREDENTIAL_SSH_KEY)
+        return git_credential_ssh_key_from_agent(out, user);
+    if (allowed_types & GIT_CREDENTIAL_USERNAME)
+        return git_credential_username_new(out, user);
+    return GIT_PASSTHROUGH;
+}
+
 std::expected<void, error> fetch_remote(std::string repo, std::string remote)
 {
     detail::init_guard guard;
@@ -976,6 +994,7 @@ std::expected<void, error> fetch_remote(std::string repo, std::string remote)
 
     git_fetch_options opts;
     git_fetch_options_init(&opts, GIT_FETCH_OPTIONS_VERSION);
+    opts.callbacks.credentials = credentials_cb;
     // nullptr refspecs -> the remote's configured fetch refspecs.
     if (git_remote_fetch(rem.get(), nullptr, &opts, nullptr) != 0)
         return std::unexpected(last_error());
@@ -1010,6 +1029,7 @@ std::expected<void, error> push_remote(std::string repo, std::string remote)
     git_strarray refspecs = {specs, 1};
     git_push_options opts;
     git_push_options_init(&opts, GIT_PUSH_OPTIONS_VERSION);
+    opts.callbacks.credentials = credentials_cb;
     if (git_remote_push(rem.get(), &refspecs, &opts) != 0)
         return std::unexpected(last_error());
     return {};
