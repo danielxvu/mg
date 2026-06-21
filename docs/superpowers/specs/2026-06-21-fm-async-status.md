@@ -159,15 +159,39 @@ minibuffer prompt holding line pointers.
 
 The scan/revwalk/ref-enum moved entirely to the worker; the UI pays sub-ms.
 
-**TSan note:** the `cpp-tsan` preset is added and is the gate on Linux CI. On
-this macOS 26.5 + MacPorts clang-21 box the ThreadSanitizer *runtime* crashes at
-process startup (exit 139, **no race report**, reproduces on a trivial
-single-threaded `--version`) — a runtime/OS incompatibility, not a data race.
-Thread-safety here rests on the immutable-snapshot design (all shared state
-written/read under `mu_`; `dirty_` atomic; pipe fds set before the worker
-starts), the determinism anchor, and a new concurrency stress test that races
-every read-side accessor against the publishing worker (green under the normal
-build).
+**TSan gate (`cpp-tsan` preset) — green on macOS *and* Linux.** The whole suite
+runs clean under ThreadSanitizer (182/182, 0 race reports), including a
+concurrency stress test that races every read-side accessor
+(`modeline`/`take_dirty`/`status_snapshot`+fingerprint/`wake_fd`/`drain_wake`)
+against the publishing worker under repeated mutation. This confirms the
+immutable-snapshot design at runtime: all shared state written/read under `mu_`,
+`dirty_` atomic, wake-pipe fds set before the worker starts and never mutated.
+
+One macOS wrinkle, handled in the preset: the **MacPorts** clang-21 TSan runtime
+crashes at process startup on macOS 26.5 — exit 139, **no race report**, even on
+a trivial `--version`. From the lldb backtrace it is a runtime/OS bug, not our
+code:
+
+    EXC_BAD_ACCESS in __tsan::SlotLock  (null thread-state slot)
+      <- wrap_dispatch_once            (TSan intercepts dispatch_once)
+      <- dyldFrameworkIntrospectionVtable / dyld_shared_cache_iterate_text
+      <- __sanitizer::get_dyld_hdr <- __tsan::CheckAndProtect
+      <- __tsan::InitializePlatform <- __tsan::Initialize   (LAZY init)
+      <- ScopedInterceptor <- wrap_strlcpy   (TSan intercepts strlcpy)
+      <- __guard_setup <- _libc_initializer <- libSystem_initializer
+
+libSystem's initializer runs `__guard_setup` (stack-canary setup) → `strlcpy`,
+already interposed by TSan, *before* TSan's own constructor finished → lazy
+`Initialize` → `CheckAndProtect` walks the dyld shared cache via macOS 26.5's new
+dyld4 introspection vtable → re-enters `dispatch_once` → `SlotLock` before the
+thread slot exists → null deref. No `TSAN_OPTIONS` helps (pre-option-parse).
+
+The fix is to link the clang-21 instrumentation against **Apple's** OS-matched
+TSan runtime (Xcode's `libclang_rt.tsan_osx_dynamic.dylib`, built for
+`darwin25.5.0`). The `__tsan` ABI is shared across clang 21, so the preset just
+adds Apple's compiler-rt dir as the first rpath; dyld resolves the OS-matched
+runtime and startup is clean. On Linux the toolchain's own runtime works and the
+extra rpath is inert.
 
 ## Risk + honest call
 
