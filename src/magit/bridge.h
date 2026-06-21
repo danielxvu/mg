@@ -55,6 +55,13 @@ typedef void (*mg_magit_emit_fn)(void *ctx, const char *line, int kind,
 int mg_magit_status_buffer(const char *repo_path, const char *const *expanded,
                            int n_expanded, mg_magit_emit_fn emit, void *ctx);
 
+/* Like mg_magit_status_buffer, but renders by replaying a collapsed snapshot and
+ * splicing expanded files' diffs in -- byte-identical output. Lets the
+ * expensive scan move off the UI thread (a later phase serves the snapshot from
+ * the monitor). Returns the number of lines emitted. */
+int mg_magit_status_snapshot(const char *repo_path, const char *const *expanded,
+                             int n_expanded, mg_magit_emit_fn emit, void *ctx);
+
 /* Compose the *magit-log* buffer: up to `n` recent commits (newest first), each
  * emitted as one MG_LINE_COMMIT line whose `path` is the commit's full oid.
  * Returns the number of lines emitted. */

@@ -1583,3 +1583,36 @@ TEST_CASE("BENCH bridge buffer builds (set MG_BENCH_REPO[, MG_BENCH_FILE])")
 		});
 	}
 }
+
+TEST_CASE("status snapshot replay is byte-identical to the synchronous build")
+{
+	auto dir = make_repo_one_hunk(); // f.txt committed + two unstaged edits
+	auto repo = dir.string();
+	// Add a staged change (a 2nd file) + an untracked file for full coverage.
+	std::ofstream(dir / "g.txt") << "x\ny\n";
+	REQUIRE(mg_magit_stage(repo.c_str(), "g.txt") == 1);
+	std::ofstream(dir / "u.txt") << "untracked\n";
+
+	struct row { std::string s; };
+	auto collect = [&](bool snap, const char *const *ex, int nex) {
+		std::vector<std::string> v;
+		auto cb = [](void *ctx, const char *line, int kind, const char *path,
+		             int hunk) {
+			char buf[64];
+			snprintf(buf, sizeof buf, "%d|%s|%d|", kind, path ? path : "", hunk);
+			static_cast<std::vector<std::string> *>(ctx)->push_back(
+			    std::string(buf) + (line ? line : ""));
+		};
+		if (snap)
+			mg_magit_status_snapshot(repo.c_str(), ex, nex, cb, &v);
+		else
+			mg_magit_status_buffer(repo.c_str(), ex, nex, cb, &v);
+		return v;
+	};
+
+	CHECK(collect(true, nullptr, 0) == collect(false, nullptr, 0));   // collapsed
+	const char *ex[2] = {"f.txt", "g.txt"};
+	CHECK(collect(true, ex, 2) == collect(false, ex, 2));             // expanded
+	CHECK(!collect(true, ex, 2).empty());
+	fs::remove_all(dir);
+}

@@ -159,6 +159,34 @@ extern "C" int mg_magit_modeline(char *buf, size_t buflen)
     return g_monitor ? g_monitor->modeline(buf, buflen) : 0;
 }
 
+// Emit a file's diff hunks (MG_LINE_HUNK header + MG_LINE_DIFF lines) for an
+// expanded entry. Shared by the synchronous status build and the snapshot
+// replay so the two render byte-identical output. Returns lines emitted.
+static int emit_file_diff(const char *repo, const char *path, bool staged,
+                          mg_magit_emit_fn emit, void *ctx)
+{
+    auto chomp = [](std::string s) {
+        if (!s.empty() && s.back() == '\n')
+            s.pop_back();
+        return s;
+    };
+    auto hunks = mg::git::file_diff(repo, path, staged);
+    if (!hunks)
+        return 0;
+    int n = 0;
+    for (int hi = 0; hi < static_cast<int>(hunks->size()); ++hi) {
+        std::string h = chomp((*hunks)[hi].header);
+        emit(ctx, h.c_str(), MG_LINE_HUNK, path, hi);
+        ++n;
+        for (const auto &l : (*hunks)[hi].lines) {
+            std::string line = std::string(1, l.origin) + chomp(l.content);
+            emit(ctx, line.c_str(), MG_LINE_DIFF, path, hi);
+            ++n;
+        }
+    }
+    return n;
+}
+
 extern "C" int mg_magit_status_buffer(const char *repo_path,
                                       const char *const *expanded,
                                       int n_expanded, mg_magit_emit_fn emit,
@@ -180,21 +208,8 @@ extern "C" int mg_magit_status_buffer(const char *repo_path,
                 return true;
         return false;
     };
-    auto chomp = [](std::string s) {
-        if (!s.empty() && s.back() == '\n')
-            s.pop_back();
-        return s;
-    };
     auto emit_diff = [&](const std::string &path, bool staged) {
-        auto hunks = mg::git::file_diff(repo_path, path, staged);
-        if (!hunks)
-            return;
-        for (int hi = 0; hi < static_cast<int>(hunks->size()); ++hi) {
-            out(chomp((*hunks)[hi].header), MG_LINE_HUNK, path.c_str(), hi);
-            for (const auto &l : (*hunks)[hi].lines)
-                out(std::string(1, l.origin) + chomp(l.content), MG_LINE_DIFF,
-                    path.c_str(), hi);
-        }
+        n += emit_file_diff(repo_path, path.c_str(), staged, emit, ctx);
     };
 
     if (auto head = mg::git::read_head(repo_path)) {
@@ -339,6 +354,59 @@ extern "C" int mg_magit_status_buffer(const char *repo_path,
             out("  " + s.path, MG_LINE_SUBMODULE, s.path.c_str());
     }
 
+    return n;
+}
+
+namespace {
+// One captured status-buffer line (the collapsed snapshot stores these).
+struct snap_line {
+    std::string line;
+    int kind;
+    std::string path;
+    int hunk;
+};
+void snap_capture(void *ctx, const char *line, int kind, const char *path,
+                  int hunk)
+{
+    static_cast<std::vector<snap_line> *>(ctx)->push_back(
+        {line ? line : "", kind, path ? path : "", hunk});
+}
+} // namespace
+
+// Render the status buffer by replaying a *collapsed* snapshot (no inline
+// diffs) and splicing each expanded file's diff back in on the fly. Output is
+// byte-identical to mg_magit_status_buffer (shared emit_file_diff + the same
+// collapsed composition); a later phase will serve the snapshot from the
+// monitor thread so the expensive scan leaves the UI thread. Phase 1 builds it
+// synchronously, so this currently matches the sync path exactly.
+extern "C" int mg_magit_status_snapshot(const char *repo_path,
+                                        const char *const *expanded,
+                                        int n_expanded, mg_magit_emit_fn emit,
+                                        void *ctx)
+{
+    if (repo_path == nullptr || emit == nullptr)
+        return 0;
+
+    std::vector<snap_line> snap;
+    (void)mg_magit_status_buffer(repo_path, nullptr, 0, snap_capture, &snap);
+
+    auto is_expanded = [&](const std::string &p) {
+        for (int i = 0; i < n_expanded; ++i)
+            if (expanded != nullptr && expanded[i] != nullptr && p == expanded[i])
+                return true;
+        return false;
+    };
+
+    int n = 0;
+    for (const auto &e : snap) {
+        emit(ctx, e.line.c_str(), e.kind,
+             e.path.empty() ? nullptr : e.path.c_str(), e.hunk);
+        ++n;
+        if ((e.kind == MG_LINE_UNSTAGED || e.kind == MG_LINE_STAGED) &&
+            !e.path.empty() && is_expanded(e.path))
+            n += emit_file_diff(repo_path, e.path.c_str(),
+                                e.kind == MG_LINE_STAGED, emit, ctx);
+    }
     return n;
 }
 
