@@ -31,6 +31,18 @@ int mg_utf8_is_word(unsigned int cp);
 unsigned int mg_utf8_toupper(unsigned int cp);
 unsigned int mg_utf8_tolower(unsigned int cp);
 
+/* Is there a grapheme boundary between codepoints `a` and `b`? 1 = boundary
+ * (separate clusters), 0 = `b` extends `a` (e.g. a combining mark). */
+int mg_utf8_grapheme_break(unsigned int a, unsigned int b);
+
+/* Byte length of the first grapheme cluster in s[0..len) (a base codepoint plus
+ * any following combining marks). 0 if len <= 0. */
+int mg_utf8_grapheme_len(const char *s, int len);
+
+/* Start byte offset of the grapheme cluster ending at `pos` within s[0..pos)
+ * (where the cursor lands one grapheme left of `pos`). 0 if pos <= 0. */
+int mg_utf8_grapheme_back(const char *s, int pos);
+
 #ifdef __cplusplus
 }
 #endif

@@ -7,6 +7,7 @@
 // Gated by ENABLE_CPP_UPGRADES; the OFF build stays byte-oriented.
 
 module;
+#include <cstddef>
 #include <cstdint>
 #include <string_view>
 
@@ -41,6 +42,19 @@ bool is_word(char32_t cp);
 // (e.g. U+00DF) are left unchanged.
 char32_t to_upper(char32_t cp);
 char32_t to_lower(char32_t cp);
+
+// Is there a grapheme-cluster boundary between codepoints `a` and `b`? false
+// means `b` extends `a`'s cluster (e.g. a base letter followed by a combining
+// mark), so the cursor should treat them as one unit.
+bool grapheme_break(char32_t a, char32_t b);
+
+// Byte length of the first grapheme cluster in `s` (a base codepoint plus any
+// following combining marks). 0 for empty input.
+std::size_t grapheme_len(std::string_view s);
+
+// Start byte offset of the grapheme cluster ending at `pos` within `s` (i.e.
+// where the cursor lands stepping one grapheme left of `pos`). 0 if pos == 0.
+std::size_t grapheme_back(std::string_view s, std::size_t pos);
 
 // Whitespace: ASCII blanks/newlines/tabs and Unicode space/line/para separators.
 bool is_space(char32_t cp);
@@ -110,6 +124,54 @@ char32_t to_lower(char32_t cp)
 {
     return static_cast<char32_t>(
         utf8proc_tolower(static_cast<utf8proc_int32_t>(cp)));
+}
+
+bool grapheme_break(char32_t a, char32_t b)
+{
+    // NULL state -> stateless break check (covers combining marks; complex
+    // emoji ZWJ / regional-indicator pairs aren't fully tracked).
+    return utf8proc_grapheme_break_stateful(
+        static_cast<utf8proc_int32_t>(a), static_cast<utf8proc_int32_t>(b),
+        nullptr);
+}
+
+std::size_t grapheme_len(std::string_view s)
+{
+    if (s.empty())
+        return 0;
+    decoded d = decode_first(s);
+    std::size_t len = d.bytes ? d.bytes : 1;
+    char32_t prev = d.cp;
+    while (len < s.size()) {
+        decoded nx = decode_first(s.substr(len));
+        if (nx.bytes == 0 || grapheme_break(prev, nx.cp))
+            break;
+        len += nx.bytes;
+        prev = nx.cp;
+    }
+    return len;
+}
+
+std::size_t grapheme_back(std::string_view s, std::size_t pos)
+{
+    auto cp_start = [&](std::size_t p) { // start of the codepoint ending at p
+        std::size_t q = p - 1;
+        while (q > 0 && (static_cast<unsigned char>(s[q]) & 0xC0) == 0x80)
+            --q;
+        return q;
+    };
+    if (pos == 0)
+        return 0;
+    std::size_t p = cp_start(pos);
+    while (p > 0) {
+        std::size_t q = cp_start(p);
+        decoded a = decode_first(s.substr(q));
+        decoded b = decode_first(s.substr(p));
+        if (grapheme_break(a.cp, b.cp))
+            break;
+        p = q;
+    }
+    return p;
 }
 
 bool is_space(char32_t cp)

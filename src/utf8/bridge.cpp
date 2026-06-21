@@ -49,3 +49,28 @@ extern "C" unsigned int mg_utf8_tolower(unsigned int cp)
 {
     return static_cast<unsigned int>(mg::utf8::to_lower(static_cast<char32_t>(cp)));
 }
+
+extern "C" int mg_utf8_grapheme_break(unsigned int a, unsigned int b)
+{
+    return mg::utf8::grapheme_break(static_cast<char32_t>(a),
+                                    static_cast<char32_t>(b))
+               ? 1
+               : 0;
+}
+
+extern "C" int mg_utf8_grapheme_len(const char *s, int len)
+{
+    if (s == nullptr || len <= 0)
+        return 0;
+    return static_cast<int>(
+        mg::utf8::grapheme_len(std::string_view(s, static_cast<size_t>(len))));
+}
+
+extern "C" int mg_utf8_grapheme_back(const char *s, int pos)
+{
+    if (s == nullptr || pos <= 0)
+        return 0;
+    return static_cast<int>(mg::utf8::grapheme_back(
+        std::string_view(s, static_cast<size_t>(pos)),
+        static_cast<size_t>(pos)));
+}

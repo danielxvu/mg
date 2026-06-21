@@ -3,6 +3,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
+#include <string>
 #include <string_view>
 
 import mg.utf8;
@@ -130,4 +131,36 @@ TEST_CASE("to_upper / to_lower leave non-letters and same-case unchanged")
     CHECK(to_upper(U'日') == U'日'); // no case
     CHECK(to_upper(U'A') == U'A');  // already upper
     CHECK(to_lower(U'z') == U'z');  // already lower
+}
+
+TEST_CASE("grapheme_break: combining marks attach, distinct letters separate")
+{
+    // A combining mark does NOT break from its base (same grapheme cluster).
+    CHECK_FALSE(grapheme_break(U'e', U'́'));  // e + combining acute
+    CHECK_FALSE(grapheme_break(U'a', U'̈'));  // a + combining diaeresis
+    // Two combining marks stack on the same cluster.
+    CHECK_FALSE(grapheme_break(U'́', U'̧'));
+    // Distinct base letters DO break.
+    CHECK(grapheme_break(U'e', U'f'));
+    CHECK(grapheme_break(U'́', U'b')); // mark then a new base
+    CHECK(grapheme_break(U'A', U'1'));
+}
+
+TEST_CASE("grapheme_len spans a base codepoint plus its combining marks")
+{
+    std::string nfd = "e\u0301f"; // e + combining acute + f (decomposed)
+    CHECK(grapheme_len(nfd) == 3);            // "e" + 2-byte acute
+    CHECK(grapheme_len(std::string_view(nfd).substr(3)) == 1); // "f"
+    CHECK(grapheme_len("abc") == 1);          // plain ASCII
+    CHECK(grapheme_len("\u00e9") == 2);      // precomposed (NFC) e-acute, one cp
+    CHECK(grapheme_len("") == 0);
+}
+
+TEST_CASE("grapheme_back finds the start of the grapheme left of pos")
+{
+    std::string nfd = "e\u0301f"; // bytes: e(1) acute(2) f(1)
+    CHECK(grapheme_back(nfd, 4) == 3); // left of 'f' end -> start of 'f'
+    CHECK(grapheme_back(nfd, 3) == 0); // left of cluster end -> start of e+acute
+    CHECK(grapheme_back("abc", 2) == 1);
+    CHECK(grapheme_back(nfd, 0) == 0);
 }

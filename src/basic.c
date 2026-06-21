@@ -21,7 +21,7 @@
 #include "def.h"
 
 #ifdef ENABLE_CPP_UPGRADES
-#include "utf8/bridge.h"	/* forwchar/backchar step whole codepoints (U3) */
+#include "utf8/bridge.h"	/* forwchar/backchar step whole graphemes (U3, U7) */
 #endif
 
 #define percint(n1, n2)		((n1 * (int) n2) * 0.1)
@@ -66,13 +66,10 @@ backchar(int f, int n)
 			curwp->w_dotline--;
 		} else {
 #ifdef ENABLE_CPP_UPGRADES
-			/* step back over a whole codepoint (skip UTF-8
-			 * continuation bytes 0x80-0xBF). */
-			int p = curwp->w_doto - 1;
-			while (p > 0 && (((unsigned char)
-			    ltext(curwp->w_dotp)[p]) & 0xC0) == 0x80)
-				p--;
-			curwp->w_doto = p;
+			/* step back over a whole grapheme (base + combining
+			 * marks); ASCII -> 1 byte. */
+			curwp->w_doto = mg_utf8_grapheme_back(
+			    ltext(curwp->w_dotp), curwp->w_doto);
 #else
 			curwp->w_doto--;
 #endif
@@ -119,12 +116,13 @@ forwchar(int f, int n)
 			curwp->w_rflag |= WFMOVE;
 		} else {
 #ifdef ENABLE_CPP_UPGRADES
-			/* advance over a whole codepoint (ASCII -> 1 byte). */
-			unsigned int cp;
-			int w, nb;
+			/* advance over a whole grapheme (base + combining marks);
+			 * ASCII -> 1 byte. */
+			struct line	*lp = curwp->w_dotp;
+			int		 nb = mg_utf8_grapheme_len(
+			    &ltext(lp)[curwp->w_doto],
+			    llength(lp) - curwp->w_doto);
 
-			nb = mg_utf8_decode(&ltext(curwp->w_dotp)[curwp->w_doto],
-			    llength(curwp->w_dotp) - curwp->w_doto, &cp, &w);
 			curwp->w_doto += (nb > 0 ? nb : 1);
 #else
 			curwp->w_doto++;

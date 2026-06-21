@@ -468,11 +468,10 @@ char_bytes_forward(int n)
 			doto = 0;
 			bytes += 1;
 		} else {
-			unsigned int cp;
-			int w, nb;
+			/* a whole grapheme (base + combining marks) */
+			int nb = mg_utf8_grapheme_len(&ltext(lp)[doto],
+			    llength(lp) - doto);
 
-			nb = mg_utf8_decode(&ltext(lp)[doto],
-			    llength(lp) - doto, &cp, &w);
 			if (nb <= 0)
 				nb = 1;
 			doto += nb;
@@ -497,11 +496,9 @@ char_bytes_backward(int n)
 			doto = llength(lp);
 			bytes += 1;
 		} else {
-			int p = doto - 1;
+			/* back over a whole grapheme (base + combining marks) */
+			int p = mg_utf8_grapheme_back(ltext(lp), doto);
 
-			while (p > 0 &&
-			    (((unsigned char)ltext(lp)[p]) & 0xC0) == 0x80)
-				p--;
 			bytes += (doto - p);
 			doto = p;
 		}
