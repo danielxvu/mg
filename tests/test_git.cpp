@@ -1129,6 +1129,22 @@ TEST_CASE("upstream_status reports no upstream when none is configured")
     fs::remove_all(dir);
 }
 
+TEST_CASE("discard_region reverts only the selected lines in the working tree")
+{
+    auto dir = make_repo_with_one_hunk_two_changes(); // b->B and d->D, unstaged
+
+    // Discard just the b->B change (hunk 0, line indices 1..2).
+    REQUIRE(mg::git::discard_region(dir.string(), "f.txt", /*hunk_index=*/0,
+                                    /*sel_first=*/1, /*sel_last=*/2)
+                .has_value());
+
+    // The working tree keeps d->D but the B reverted back to b.
+    std::ifstream f(dir / "f.txt");
+    std::string body((std::istreambuf_iterator<char>(f)), {});
+    CHECK(body == "a\nb\nc\nD\ne\n");
+    fs::remove_all(dir);
+}
+
 TEST_CASE("unstage_region unstages only the selected lines of a staged hunk")
 {
     auto dir = make_repo_with_one_hunk_two_changes();

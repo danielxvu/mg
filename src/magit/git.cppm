@@ -311,6 +311,13 @@ std::expected<void, error>
 unstage_region(std::string repo, std::string path, std::size_t hunk_index,
                std::size_t sel_first, std::size_t sel_last);
 
+// Discard only the lines [sel_first, sel_last] (0-based indices within hunk
+// `hunk_index` of file_diff(.,.,false)) from the working tree, reverting them
+// to the index. Destructive (the change is lost).
+std::expected<void, error>
+discard_region(std::string repo, std::string path, std::size_t hunk_index,
+               std::size_t sel_first, std::size_t sel_last);
+
 } // namespace mg::git
 
 // ---- definition -----------------------------------------------------------
@@ -1623,6 +1630,39 @@ stage_region(std::string repo, std::string path, std::size_t hunk_index,
     std::string text =
         build_region_patch(patch.get(), hunk_index, sel_first, sel_last, path);
     return apply_patch_text(r.get(), text, GIT_APPLY_LOCATION_INDEX);
+}
+
+std::expected<void, error>
+discard_region(std::string repo, std::string path, std::size_t hunk_index,
+               std::size_t sel_first, std::size_t sel_last)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    char *paths[1] = {const_cast<char *>(path.c_str())};
+    git_diff_options opts;
+    path_scoped_diff_opts(opts, paths);
+    // REVERSE -> workdir->index: its hunks mirror the unstaged view's (so the
+    // selected indices carry over) and its context lines come from the workdir,
+    // matching the apply baseline. Applying to the workdir reverts the selected
+    // lines back toward the index.
+    opts.flags |= GIT_DIFF_REVERSE;
+
+    git_diff *raw_diff = nullptr;
+    if (git_diff_index_to_workdir(&raw_diff, r.get(), nullptr, &opts) != 0)
+        return std::unexpected(last_error());
+    detail::diff_ptr diff(raw_diff);
+
+    detail::patch_ptr patch = patch_for_path(diff.get(), path);
+    if (!patch)
+        return std::unexpected(error{0, "no diff for path"});
+
+    std::string text =
+        build_region_patch(patch.get(), hunk_index, sel_first, sel_last, path);
+    return apply_patch_text(r.get(), text, GIT_APPLY_LOCATION_WORKDIR);
 }
 
 std::expected<void, error>

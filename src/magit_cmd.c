@@ -825,7 +825,7 @@ magit_help(int f, int n)
 		"  s        stage the file/hunk at point (or marked region)",
 		"  u        unstage the file/hunk at point (or marked region)",
 		"  S / U    stage all / unstage all",
-		"  k        discard changes / drop the stash at point",
+		"  k        discard changes / region / drop the stash at point",
 		"  a        apply the stash at point",
 		"  b b/c/k/m  branch: checkout / create / delete / rename",
 		"  c c/a/e/w  commit / amend / extend / reword",
@@ -1308,14 +1308,24 @@ magit_unstage_all(int f, int n)
 static int
 magit_discard(int f, int n)
 {
-	char	*path = NULL;
+	char	*path = NULL, *rpath = NULL;
 	char	 cwd[PATH_MAX];
 	char	 prompt[PATH_MAX + 32];
-	int	 kind, hunk;
+	int	 kind, hunk, rhunk, first, last;
 
-	kind = magit_at_point(&path, &hunk);
 	if (getcwd(cwd, sizeof(cwd)) == NULL)
 		return (FALSE);
+	/* With a mark spanning one hunk's diff lines, discard just that region. */
+	if (magit_region(&rhunk, &rpath, &first, &last)) {
+		if (eyesno("Discard marked region") != TRUE)
+			return (FALSE);
+		if (mg_magit_discard_region(cwd, rpath, rhunk, first, last) != 1) {
+			ewprintf("Discard region failed");
+			return (FALSE);
+		}
+		return (magit_refresh(f, n));
+	}
+	kind = magit_at_point(&path, &hunk);
 	/* On a stash line, k drops the stash; on a file line, it discards edits. */
 	if (kind == MG_LINE_STASH) {
 		(void)snprintf(prompt, sizeof(prompt), "Drop stash@{%d}", hunk);

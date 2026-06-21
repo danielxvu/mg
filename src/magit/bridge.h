@@ -100,6 +100,11 @@ int mg_magit_stage_region(const char *repo_path, const char *path, int hunk,
 int mg_magit_unstage_region(const char *repo_path, const char *path, int hunk,
                             int first, int last);
 
+/* Discard only the lines [first, last] of `path`'s unstaged hunk `hunk` from
+ * the working tree (revert to the index). Destructive. 1 ok, 0 fail. */
+int mg_magit_discard_region(const char *repo_path, const char *path, int hunk,
+                            int first, int last);
+
 /* Apply (reapply, keep) / drop (delete) stash number `index`. Returns 1 on
  * success, 0 on failure. */
 int mg_magit_stash_apply(const char *repo_path, int index);
