@@ -271,6 +271,54 @@ extern "C" int mg_magit_status_buffer(const char *repo_path,
     return n;
 }
 
+extern "C" int mg_magit_log_buffer(const char *repo_path, int n_commits,
+                                   mg_magit_emit_fn emit, void *ctx)
+{
+    if (repo_path == nullptr || emit == nullptr || n_commits <= 0)
+        return 0;
+
+    int n = 0;
+    auto commits = mg::git::recent_commits(repo_path, n_commits);
+    if (!commits)
+        return 0;
+    for (const auto &c : *commits) {
+        emit(ctx, (c.short_oid + " " + c.summary).c_str(), MG_LINE_COMMIT,
+             c.oid.c_str(), -1);
+        ++n;
+    }
+    return n;
+}
+
+extern "C" int mg_magit_commit_diff(const char *repo_path, const char *rev,
+                                    mg_magit_emit_fn emit, void *ctx)
+{
+    if (repo_path == nullptr || rev == nullptr || emit == nullptr)
+        return 0;
+
+    auto hunks = mg::git::commit_diff(repo_path, rev);
+    if (!hunks)
+        return 0;
+
+    int n = 0;
+    auto out = [&](const std::string &line, int kind, int hunk) {
+        emit(ctx, line.c_str(), kind, nullptr, hunk);
+        ++n;
+    };
+    auto chomp = [](std::string s) {
+        if (!s.empty() && s.back() == '\n')
+            s.pop_back();
+        return s;
+    };
+
+    out(std::string("commit ") + rev, MG_LINE_SECTION, -1);
+    for (int hi = 0; hi < static_cast<int>(hunks->size()); ++hi) {
+        out(chomp((*hunks)[hi].header), MG_LINE_HUNK, hi);
+        for (const auto &l : (*hunks)[hi].lines)
+            out(std::string(1, l.origin) + chomp(l.content), MG_LINE_DIFF, hi);
+    }
+    return n;
+}
+
 extern "C" int mg_magit_stage(const char *repo_path, const char *path)
 {
     if (repo_path == nullptr || path == nullptr)

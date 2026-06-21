@@ -552,6 +552,42 @@ TEST_CASE("mg_magit_status_buffer emits Unpushed and Unpulled sections")
     fs::remove_all(dir);
 }
 
+TEST_CASE("mg_magit_log_buffer emits commit lines carrying the full oid")
+{
+    auto dir = make_repo_one_hunk(); // one commit "c1" on the default branch
+    struct row { std::string line; int kind; std::string path; };
+    std::vector<row> rows;
+    int n = mg_magit_log_buffer(
+        dir.string().c_str(), 10,
+        [](void *ctx, const char *line, int kind, const char *path, int) {
+            static_cast<std::vector<row> *>(ctx)->push_back(
+                {line, kind, path ? path : ""});
+        },
+        &rows);
+    REQUIRE(n >= 1);
+    bool found = false;
+    std::string oid;
+    for (const auto &r : rows)
+        if (r.kind == MG_LINE_COMMIT && r.line.find("c1") != std::string::npos) {
+            found = true;
+            oid = r.path;
+        }
+    CHECK(found);
+    CHECK(oid.size() == 40); // full oid in the path
+
+    // That oid feeds mg_magit_commit_diff, which emits the commit's diff.
+    std::string text;
+    int dn = mg_magit_commit_diff(
+        dir.string().c_str(), oid.c_str(),
+        [](void *ctx, const char *line, int, const char *, int) {
+            static_cast<std::string *>(ctx)->append(line).append("\n");
+        },
+        &text);
+    CHECK(dn >= 1);
+    CHECK(text.find("commit ") != std::string::npos);
+    fs::remove_all(dir);
+}
+
 TEST_CASE("mg_magit_stash_push then stash_pop round-trip through the bridge")
 {
     auto dir = make_repo_one_hunk(); // committed f.txt with a dirty change

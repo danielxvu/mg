@@ -39,6 +39,7 @@ int mg_magit_modeline(char *buf, size_t buflen);
 #define MG_LINE_STASH     6   /* a stash entry (stash@{N}) */
 #define MG_LINE_BRANCH    7   /* a local branch */
 #define MG_LINE_SECTION   8   /* a section header line (for M-n/M-p nav) */
+#define MG_LINE_COMMIT    9   /* a commit line in the log (path = full oid) */
 
 /* Compose the *magit-status* buffer for the repo at `repo_path`, calling
  * `emit(ctx, line, kind, path, hunk)` once per line. Files whose path is in
@@ -48,6 +49,18 @@ typedef void (*mg_magit_emit_fn)(void *ctx, const char *line, int kind,
                                  const char *path, int hunk);
 int mg_magit_status_buffer(const char *repo_path, const char *const *expanded,
                            int n_expanded, mg_magit_emit_fn emit, void *ctx);
+
+/* Compose the *magit-log* buffer: up to `n` recent commits (newest first), each
+ * emitted as one MG_LINE_COMMIT line whose `path` is the commit's full oid.
+ * Returns the number of lines emitted. */
+int mg_magit_log_buffer(const char *repo_path, int n, mg_magit_emit_fn emit,
+                        void *ctx);
+
+/* Compose a *magit-commit* buffer for commit `rev`: a header line then its diff
+ * (MG_LINE_HUNK / MG_LINE_DIFF). Returns the number of lines emitted, 0 on a
+ * bad rev. */
+int mg_magit_commit_diff(const char *repo_path, const char *rev,
+                         mg_magit_emit_fn emit, void *ctx);
 
 /* Stage / unstage / discard a single file (path relative to the repo root).
  * Returns 1 on success, 0 on failure. Discard deletes an untracked file or
