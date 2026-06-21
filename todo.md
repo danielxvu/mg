@@ -305,7 +305,8 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `u7-grapheme`→u6-updext (#44), `u8-nfc`→u7-grapheme (#45),
   `fm-rb1-rebase`→u8-nfc (#46), `fm-rb2-seq`→fm-rb1-rebase (#47),
   `fm-rb3a-iexec`→fm-rb2-seq (#48), `fm-rb3b-todo`→fm-rb3a-iexec (#49),
-  `fm-a-cherrypick`→fm-rb3b-todo (#50), `fm-tag`→fm-a-cherrypick (#51).
+  `fm-a-cherrypick`→fm-rb3b-todo (#50), `fm-tag`→fm-a-cherrypick (#51),
+  `fm-pv`→fm-tag (#52), `fm-tag-annotated`→fm-pv (#53).
   Magit core (A+B, #31-#41) done; UTF-8 "Full" U5-U8 (#42-#45). **Phase C**
   (honest gap vs real magit; spec
   `docs/superpowers/specs/2026-06-21-fm-phase-c-roadmap.md`): ✅ FM-RB-1
@@ -316,9 +317,21 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   p/d/s/f actions, M-n/M-p reorder, C-c C-c run, #49). 🎉 **FM-RB rebase COMPLETE**
   (non-interactive + sequencer + interactive). Next branch freezes on
   `fm-rb3b-todo`. ✅ FM-A cherry-pick (`A`, #50) · ✅ FM-TAG tags (`t t`/`t k` +
-  Tags section, #51). Next branch freezes on `fm-tag`. Up next: FM-LP log power,
-  FM-PV/CV push-pull/commit variants. (rebase reword/edit + interactive
-  conflict-resume, annotated tags = later.)
+  Tags section, #51) · ✅ FM-PV push/pull variants (`P p/f/u`, `F p/r`, #52) ·
+  ✅ annotated tags (`t a`, #53). Next branch freezes on `fm-tag-annotated`.
+
+  **Phase C status — implemented:** rebase (onto/sequencer/interactive),
+  cherry-pick, tags (lightweight+annotated+section), push/pull variants. **Not
+  done (honest residual):**
+    · FM-LP log power: `--graph`/file/range logs, `-S`/`-G` search (act-at-point
+      RET/A/V already done). Low value vs. effort.
+    · FM-CV commit variants: instant fixup/squash (do via `r i` for now),
+      signoff/no-verify, GPG sign.
+    · rebase reword/edit (mid-sequence prompts) + interactive conflict-resume.
+    · **Out of scope (large, per the roadmap):** bisect, submodule/subtree,
+      worktree, blame, notes, ediff, gitignore editing, bookmarks, and the
+      transient *popup UI* port (we use prefix submaps). These are each a major
+      feature; not attempted.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
