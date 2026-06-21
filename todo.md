@@ -208,9 +208,17 @@ RET→*magit-commit* diff view, g refresh, q close). tmux-verified. ✅ **FM-X d
 "Revert" commit), `merge_branch` (analysis → ff / merge-commit; conflicts
 abort cleanly); bridge `mg_magit_reset/revert/merge`; UI `X` reset submap
 (h/m/s), `V` revert (status: prompt; log: commit at point), `m` merge.
-doctest + pty-verified. **Next: FM-R push/pull/fetch** (⚠ network — but
-testable against a LOCAL bare-repo remote via file:// transport, no network
-needed; real ssh/https stays an integration caveat).
+doctest + pty-verified. ✅ **FM-R done** (fetch/pull/push, PR #39, branch `fm-r-remotes`) — mg.git
+`fetch_remote`/`push_remote` (current branch)/`pull_remote` (fetch + merge via
+the shared `merge_annotated` helper); bridge `mg_magit_fetch/push/pull`; UI
+`f` fetch / `F` pull / `P` push (origin). TDD + pty-verified against LOCAL
+bare remotes (no network). ⚠ no credentials callback yet → authenticated
+ssh/https remotes are a follow-up; local/unauthenticated transports work.
+
+**🎉 FULL-MAGIT ROADMAP COMPLETE** (Phase A + Phase B). Remaining optional
+work: the two deferred sub-slices — FM-S2 region-discard (`k` on a region),
+FM-Z stash-show (RET on a stash → its diff) — plus remote auth (credentials
+callback) for FM-R.
 Per-slice TDD (test_git → test_bridge → magit_cmd.c → pty) + stacked PR.
 
 ---
@@ -271,10 +279,11 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `fm-s1-stageall`→fm-c-commit (#32), `fm-s2-region`→fm-s1-stageall (#33),
   `fm-t-sections`→fm-s2-region (#34), `fm-b-branches`→fm-t-sections (#35),
   `fm-z-stash`→fm-b-branches (#36), `fm-l-log`→fm-z-stash (#37),
-  `fm-x-rrm`→fm-l-log (#38).
-  Phase A DONE; Phase B: FM-L + FM-X done. Next: FM-R remotes (test via a local
-  bare remote) freezes on `fm-x-rrm`. Plus deferred slices: FM-S2 region-discard
-  (`k`), FM-Z stash-show (RET).
+  `fm-x-rrm`→fm-l-log (#38), `fm-r-remotes`→fm-x-rrm (#39).
+  🎉 Full-magit roadmap COMPLETE (Phases A+B, PRs #31-#39). Optional remaining:
+  deferred slices FM-S2 region-discard (`k`), FM-Z stash-show (RET); FM-R
+  remote auth (credentials callback). Next milestone branch freezes on
+  `fm-r-remotes`.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
