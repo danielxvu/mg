@@ -96,6 +96,13 @@ int mg_magit_stash_drop(const char *repo_path, int index);
  * 1 on success, 0 on failure (e.g. conflicting local changes). */
 int mg_magit_checkout(const char *repo_path, const char *name);
 
+/* Create / delete / rename a local branch. create makes `name` at HEAD without
+ * switching; rename moves `from` to `to`. Return 1 on success, 0 on failure. */
+int mg_magit_branch_create(const char *repo_path, const char *name);
+int mg_magit_branch_delete(const char *repo_path, const char *name);
+int mg_magit_branch_rename(const char *repo_path, const char *from,
+                           const char *to);
+
 #ifdef __cplusplus
 }
 #endif

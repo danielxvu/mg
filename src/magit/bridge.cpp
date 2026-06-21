@@ -409,3 +409,26 @@ extern "C" int mg_magit_checkout(const char *repo_path, const char *name)
         return 0;
     return mg::git::checkout_branch(repo_path, name).has_value() ? 1 : 0;
 }
+
+extern "C" int mg_magit_branch_create(const char *repo_path, const char *name)
+{
+    if (repo_path == nullptr || name == nullptr || name[0] == '\0')
+        return 0;
+    return mg::git::create_branch(repo_path, name).has_value() ? 1 : 0;
+}
+
+extern "C" int mg_magit_branch_delete(const char *repo_path, const char *name)
+{
+    if (repo_path == nullptr || name == nullptr || name[0] == '\0')
+        return 0;
+    return mg::git::delete_branch(repo_path, name).has_value() ? 1 : 0;
+}
+
+extern "C" int mg_magit_branch_rename(const char *repo_path, const char *from,
+                                      const char *to)
+{
+    if (repo_path == nullptr || from == nullptr || to == nullptr ||
+        from[0] == '\0' || to[0] == '\0')
+        return 0;
+    return mg::git::rename_branch(repo_path, from, to).has_value() ? 1 : 0;
+}

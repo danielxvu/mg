@@ -552,6 +552,19 @@ TEST_CASE("mg_magit_status_buffer emits Unpushed and Unpulled sections")
     fs::remove_all(dir);
 }
 
+TEST_CASE("mg_magit_branch_create/rename/delete act through the bridge")
+{
+    auto dir = make_repo_one_hunk(); // a commit on the default branch
+    auto repo = dir.string();
+
+    CHECK(mg_magit_branch_create(repo.c_str(), "feature") == 1);
+    CHECK(mg_magit_branch_rename(repo.c_str(), "feature", "feature2") == 1);
+    CHECK(mg_magit_branch_delete(repo.c_str(), "feature2") == 1);
+    CHECK(mg_magit_branch_delete(repo.c_str(), "feature2") == 0); // already gone
+    CHECK(mg_magit_branch_create(repo.c_str(), "") == 0);         // empty name
+    fs::remove_all(dir);
+}
+
 TEST_CASE("mg_magit_discard removes an untracked file")
 {
     auto dir = make_repo_with_changes(); // untracked.txt is untracked
