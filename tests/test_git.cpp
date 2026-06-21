@@ -1133,18 +1133,39 @@ TEST_CASE("revert_commit leaves conflicts when the inverse does not apply")
     fs::remove_all(dir);
 }
 
-TEST_CASE("BENCH repo_status (set MG_BENCH_REPO)")
+TEST_CASE("BENCH magit ops (set MG_BENCH_REPO[, MG_BENCH_FILE])")
 {
 	const char *repo = std::getenv("MG_BENCH_REPO");
 	if (repo == nullptr)
 		return;
-	for (int i = 0; i < 5; ++i) {
-		auto t0 = std::chrono::steady_clock::now();
-		auto st = mg::git::repo_status(repo);
-		auto t1 = std::chrono::steady_clock::now();
-		auto ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
-		MESSAGE("repo_status: " << (st ? (int)st->size() : -1)
-		    << " entries in " << ms << " ms");
+	const char *file = std::getenv("MG_BENCH_FILE");
+	auto bench = [&](const char *name, auto fn) {
+		double best = 1e18;
+		int info = -1;
+		for (int i = 0; i < 3; ++i) {
+			auto t0 = std::chrono::steady_clock::now();
+			info = fn();
+			auto t1 = std::chrono::steady_clock::now();
+			double ms =
+			    std::chrono::duration<double, std::milli>(t1 - t0).count();
+			if (ms < best)
+				best = ms;
+		}
+		MESSAGE(name << ": " << best << " ms (n=" << info << ")");
+	};
+	bench("read_head           ", [&] { return mg::git::read_head(repo) ? 1 : 0; });
+	bench("repo_status         ", [&] { auto r = mg::git::repo_status(repo); return r ? (int)r->size() : -1; });
+	bench("recent_commits(100) ", [&] { auto r = mg::git::recent_commits(repo, 100); return r ? (int)r->size() : -1; });
+	bench("commit_diff(HEAD)   ", [&] { auto r = mg::git::commit_diff(repo, "HEAD"); return r ? (int)r->size() : -1; });
+	bench("upstream_commits(↑) ", [&] { auto r = mg::git::upstream_commits(repo, true); return r ? (int)r->size() : -1; });
+	bench("upstream_commits(↓) ", [&] { auto r = mg::git::upstream_commits(repo, false); return r ? (int)r->size() : -1; });
+	bench("tags                ", [&] { auto r = mg::git::tags(repo); return r ? (int)r->size() : -1; });
+	bench("worktrees           ", [&] { auto r = mg::git::worktrees(repo); return r ? (int)r->size() : -1; });
+	bench("submodules          ", [&] { auto r = mg::git::submodules(repo); return r ? (int)r->size() : -1; });
+	bench("conflicts           ", [&] { auto r = mg::git::conflicts(repo); return r ? (int)r->size() : -1; });
+	if (file != nullptr) {
+		bench("log_file(100)       ", [&] { auto r = mg::git::log_file(repo, file, 100); return r ? (int)r->size() : -1; });
+		bench("blame_file          ", [&] { auto r = mg::git::blame_file(repo, file); return r ? (int)r->size() : -1; });
 	}
 }
 
