@@ -119,9 +119,19 @@ int mg_magit_stash_pop(const char *repo_path, int index);
  * 1 on success, 0 on failure (e.g. conflicting local changes). */
 int mg_magit_checkout(const char *repo_path, const char *name);
 
+/* Prompt the user for a credential during fetch/push: fill `out` (size `outlen`)
+ * with the answer to `prompt`; `hidden` != 0 requests non-echoing input (a
+ * password). Return 1 on success, 0 to cancel. */
+typedef int (*mg_magit_cred_prompt_fn)(const char *prompt, int hidden,
+                                       char *out, int outlen);
+
+/* Register the credential prompt used for HTTPS user/password auth (NULL ->
+ * ssh-agent only). Call once at startup. */
+void mg_magit_set_cred_prompt(mg_magit_cred_prompt_fn fn);
+
 /* Fetch / push (current branch) / pull (fetch + merge) against `remote`
- * (NULL -> "origin"). Return 1 on success, 0 on failure. Authenticated remotes
- * are not yet supported (no credentials callback). */
+ * (NULL -> "origin"). Return 1 on success, 0 on failure. ssh uses the agent;
+ * HTTPS user/password prompts via mg_magit_set_cred_prompt's callback. */
 int mg_magit_fetch(const char *repo_path, const char *remote);
 int mg_magit_push(const char *repo_path, const char *remote);
 int mg_magit_pull(const char *repo_path, const char *remote);

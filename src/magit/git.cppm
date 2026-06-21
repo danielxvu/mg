@@ -224,6 +224,28 @@ std::expected<void, error> revert_commit(std::string repo, std::string rev);
 // merge commit. Errors (leaving the tree clean) on conflicts.
 std::expected<void, error> merge_branch(std::string repo, std::string name);
 
+// UI prompt for credentials: fill `out` (size outlen) with the user's answer
+// to `prompt`; `hidden` requests non-echoing input (passwords). Return 1 on
+// success, 0 on abort. `udata` is opaque (passed through from set_cred_prompt).
+using cred_prompt = int (*)(const char *prompt, int hidden, char *out,
+                            int outlen, void *udata);
+
+// Register the prompt used to answer HTTPS user/password auth during
+// fetch/push (nullptr disables interactive auth -> ssh-agent only).
+void set_cred_prompt(cred_prompt fn, void *udata);
+
+struct userpass {
+    std::string user;
+    std::string pass;
+};
+
+// Resolve an HTTPS user/password via `prompt`: the username defaults to
+// `username_from_url` when present (no prompt), else is prompted; the password
+// is always prompted (hidden). Unexpected if there is no prompt or the user
+// aborts. Pure (no libgit2/network) so it is directly unit-testable.
+std::expected<userpass, error>
+resolve_userpass(const char *username_from_url, cred_prompt prompt, void *udata);
+
 // Fetch from `remote` (default refspecs), updating remote-tracking refs.
 std::expected<void, error> fetch_remote(std::string repo, std::string remote);
 
@@ -960,10 +982,41 @@ std::expected<void, error> merge_branch(std::string repo, std::string name)
     return merge_annotated(r.get(), their.get(), "Merge branch '" + name + "'");
 }
 
+// Process-wide credential prompt (set by the UI via set_cred_prompt).
+static cred_prompt g_cred_prompt = nullptr;
+static void *g_cred_udata = nullptr;
+
+void set_cred_prompt(cred_prompt fn, void *udata)
+{
+    g_cred_prompt = fn;
+    g_cred_udata = udata;
+}
+
+std::expected<userpass, error>
+resolve_userpass(const char *username_from_url, cred_prompt prompt, void *udata)
+{
+    if (prompt == nullptr)
+        return std::unexpected(error{0, "no credential prompt available"});
+
+    userpass up;
+    char buf[256];
+    if (username_from_url != nullptr && username_from_url[0] != '\0') {
+        up.user = username_from_url;
+    } else {
+        if (prompt("Username: ", 0, buf, sizeof buf, udata) != 1)
+            return std::unexpected(error{0, "authentication cancelled"});
+        up.user = buf;
+    }
+    if (prompt("Password: ", 1, buf, sizeof buf, udata) != 1)
+        return std::unexpected(error{0, "authentication cancelled"});
+    up.pass = buf;
+    return up;
+}
+
 // Credentials for fetch/push: try the ssh-agent (the common `git@host:...`
-// case), and answer username-only probes from the URL. HTTPS userpass and
-// passphrase-protected keys are not handled here (no interactive prompt) ->
-// PASSTHROUGH lets libgit2 fall through and the op fails cleanly.
+// case); for HTTPS user/password, prompt via the registered UI callback;
+// answer username-only probes from the URL. PASSTHROUGH (op fails cleanly)
+// when nothing applies -- e.g. no prompt registered for a userpass request.
 static int credentials_cb(git_credential **out, const char *url,
                           const char *username_from_url,
                           unsigned int allowed_types, void *payload)
@@ -973,6 +1026,14 @@ static int credentials_cb(git_credential **out, const char *url,
     const char *user = username_from_url ? username_from_url : "git";
     if (allowed_types & GIT_CREDENTIAL_SSH_KEY)
         return git_credential_ssh_key_from_agent(out, user);
+    if ((allowed_types & GIT_CREDENTIAL_USERPASS_PLAINTEXT) &&
+        g_cred_prompt != nullptr) {
+        auto up = resolve_userpass(username_from_url, g_cred_prompt, g_cred_udata);
+        if (!up)
+            return GIT_EUSER; // user cancelled -> abort the transfer
+        return git_credential_userpass_plaintext_new(out, up->user.c_str(),
+                                                     up->pass.c_str());
+    }
     if (allowed_types & GIT_CREDENTIAL_USERNAME)
         return git_credential_username_new(out, user);
     return GIT_PASSTHROUGH;

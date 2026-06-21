@@ -4,7 +4,9 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -382,6 +384,42 @@ void advance_ref(const fs::path &dir, const std::string &refname,
     git_libgit2_shutdown();
 }
 } // namespace
+
+TEST_CASE("resolve_userpass uses the URL username and prompts for the rest")
+{
+    // Stub prompt: hidden -> "secret", visible -> "alice"; counts its calls.
+    static int calls;
+    calls = 0;
+    mg::git::cred_prompt p = [](const char *, int hidden, char *out, int n,
+                                void *) -> int {
+        ++calls;
+        std::snprintf(out, n, "%s", hidden ? "secret" : "alice");
+        return 1;
+    };
+
+    // Username present in the URL -> only the password is prompted.
+    auto r1 = mg::git::resolve_userpass("bob", p, nullptr);
+    REQUIRE(r1.has_value());
+    CHECK(r1->user == "bob");
+    CHECK(r1->pass == "secret");
+    CHECK(calls == 1);
+
+    // No URL username -> both prompted.
+    calls = 0;
+    auto r2 = mg::git::resolve_userpass(nullptr, p, nullptr);
+    REQUIRE(r2.has_value());
+    CHECK(r2->user == "alice");
+    CHECK(r2->pass == "secret");
+    CHECK(calls == 2);
+}
+
+TEST_CASE("resolve_userpass fails on cancel or with no prompt")
+{
+    mg::git::cred_prompt cancel = [](const char *, int, char *, int,
+                                     void *) -> int { return 0; };
+    CHECK_FALSE(mg::git::resolve_userpass("x", cancel, nullptr).has_value());
+    CHECK_FALSE(mg::git::resolve_userpass(nullptr, nullptr, nullptr).has_value());
+}
 
 TEST_CASE("fetch_remote fails gracefully on an unreachable remote")
 {

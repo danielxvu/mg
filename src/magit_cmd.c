@@ -66,6 +66,7 @@ static int	magit_reset_hard(int, int);
 static int	magit_fetch(int, int);
 static int	magit_pull(int, int);
 static int	magit_push(int, int);
+static int	magit_cred_prompt(const char *, int, char *, int);
 
 /*
  * line -> {kind, hunk, path} map for the most recent render of *magit-status*.
@@ -449,6 +450,7 @@ magit_status(int f, int n)
 		 * the commit-view buffer without ever going through `l`. */
 		maps_add((KEYMAP *)&maglogmap, "magit-log-mode");
 		maps_add((KEYMAP *)&magcommitmap, "magit-commit-view-mode");
+		mg_magit_set_cred_prompt(magit_cred_prompt); /* HTTPS user/pass auth */
 		initialized = 1;
 	}
 
@@ -1168,6 +1170,50 @@ static int
 magit_reset_hard(int f, int n)
 {
 	return (magit_do_reset(2, f, n));
+}
+
+/*
+ * Read a line into `buf` (size `n`) WITHOUT echoing -- for passwords (git's
+ * getpass style: nothing is shown). RET finishes, C-g aborts, DEL/^H erases.
+ * Returns 1 on success, 0 on abort.
+ */
+static int
+magit_read_secret(const char *prompt, char *buf, int n)
+{
+	int	c, i = 0;
+
+	ewprintf("%s", prompt);
+	for (;;) {
+		c = getkey(FALSE);
+		if (c == CCHR('G'))			/* C-g: abort */
+			return (0);
+		if (c == CCHR('M') || c == CCHR('J'))	/* RET: done */
+			break;
+		if (c == CCHR('H') || c == 0x7f) {	/* erase */
+			if (i > 0)
+				i--;
+			continue;
+		}
+		if (i < n - 1 && c >= ' ' && c < 0x7f)
+			buf[i++] = c;
+	}
+	buf[i] = '\0';
+	return (1);
+}
+
+/*
+ * Credential prompt handed to the native engine (mg_magit_set_cred_prompt):
+ * hidden -> a no-echo password read, else a normal minibuffer read. 1 ok, 0
+ * cancel.
+ */
+static int
+magit_cred_prompt(const char *prompt, int hidden, char *out, int outlen)
+{
+	if (hidden)
+		return (magit_read_secret(prompt, out, outlen));
+	if (eread("%s", out, (size_t)outlen, EFNEW | EFCR, prompt) == NULL)
+		return (0);
+	return (1);
 }
 
 /* f: fetch from origin (updates remote-tracking refs). */

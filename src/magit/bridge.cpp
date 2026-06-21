@@ -487,6 +487,22 @@ extern "C" int mg_magit_checkout(const char *repo_path, const char *name)
     return mg::git::checkout_branch(repo_path, name).has_value() ? 1 : 0;
 }
 
+// The UI's credential prompt, registered by the C core; adapted to the engine's
+// cred_prompt signature (which carries an unused udata) by this thunk.
+static mg_magit_cred_prompt_fn g_ui_cred_prompt = nullptr;
+
+static int cred_prompt_thunk(const char *prompt, int hidden, char *out,
+                             int outlen, void *)
+{
+    return g_ui_cred_prompt ? g_ui_cred_prompt(prompt, hidden, out, outlen) : 0;
+}
+
+extern "C" void mg_magit_set_cred_prompt(mg_magit_cred_prompt_fn fn)
+{
+    g_ui_cred_prompt = fn;
+    mg::git::set_cred_prompt(fn ? cred_prompt_thunk : nullptr, nullptr);
+}
+
 extern "C" int mg_magit_fetch(const char *repo_path, const char *remote)
 {
     if (repo_path == nullptr)
