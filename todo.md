@@ -191,7 +191,14 @@ https://github.com/magit/magit`). ✅ **FM-C done** (PR #31, branch `fm-c-commit
   UI: `b` is now a prefix submap — `b b` checkout, `b c` create, `b k` delete,
   `b m` rename (create prompts; delete/rename default to the branch at point,
   delete confirms). Engine+bridge doctest; pty-verified create + rename.
-- **FM-Z — stash push/pop/show (NEXT)**.
+- ✅ **FM-Z (push/pop) done** (PR #36, branch `fm-z-stash`). mg.git `stash_push`
+  (git_stash_save, signature via git_signature_default + "mg@localhost"
+  fallback) / `stash_pop` (git_stash_pop = apply+drop); bridge
+  `mg_magit_stash_push`/`stash_pop`. UI: `z` prefix submap — `z z` push (prompts
+  for a message), `z p` pop (stash at point else stash@{0}). Engine+bridge
+  doctest; pty-verified push→pop round-trip. ⚠ **stash-show deferred** (RET on a
+  stash → its diff): an M7-diff-sized slice (diff the stash commit vs its
+  parent into a read-only buffer) — documented follow-up.
 Phase B (new, highest value): **FM-L log buffer**, **FM-R push/pull/fetch**
 (⚠ network — verify libssh2/TLS transports first), **FM-X reset/revert/merge**.
 Per-slice TDD (test_git → test_bridge → magit_cmd.c → pty) + stacked PR.
@@ -252,8 +259,11 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `u2-display`→u1-utf8 (#28), `u3-cursor`→u2-display (#29),
   `u4-classify`→u3-cursor (#30), `fm-c-commit`→u4-classify (#31),
   `fm-s1-stageall`→fm-c-commit (#32), `fm-s2-region`→fm-s1-stageall (#33),
-  `fm-t-sections`→fm-s2-region (#34), `fm-b-branches`→fm-t-sections (#35).
-  Next Full-Magit slice (FM-Z stash) freezes on `fm-b-branches`.
+  `fm-t-sections`→fm-s2-region (#34), `fm-b-branches`→fm-t-sections (#35),
+  `fm-z-stash`→fm-b-branches (#36).
+  Phase A (complete-existing) DONE. Next: Phase B — FM-L log buffer (freeze on
+  `fm-z-stash`), then FM-R remotes (⚠ network), FM-X reset/revert/merge. Plus
+  the deferred slices: FM-S2 region-discard (`k`), FM-Z stash-show (RET).
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
