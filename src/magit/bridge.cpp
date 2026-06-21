@@ -179,6 +179,14 @@ extern "C" int mg_magit_status_buffer(const char *repo_path,
             out("Head:     " + head->short_oid + " " + head->summary);
     }
 
+    if (auto up = mg::git::upstream_status(repo_path); up && up->has_upstream) {
+        std::string line = "Upstream: " + up->name;
+        if (up->ahead != 0 || up->behind != 0)
+            line += " [ahead " + std::to_string(up->ahead) + ", behind " +
+                    std::to_string(up->behind) + "]";
+        out(line);
+    }
+
     if (auto st = mg::git::repo_status(repo_path)) {
         using S = mg::magit::status;
         std::vector<const mg::magit::file_status *> untracked, unstaged, staged;

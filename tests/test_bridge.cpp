@@ -152,6 +152,49 @@ fs::path make_repo_one_hunk()
     git_libgit2_shutdown();
     return dir;
 }
+// A repo whose checked-out branch "topic" tracks "master" and is 1 ahead /
+// 1 behind (empty commits on each side; upstream is the local master branch).
+fs::path make_repo_ahead_behind()
+{
+    auto dir = make_temp_dir();
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_init(&repo, dir.string().c_str(), 0) == 0);
+    std::ofstream(dir / "a.txt") << "base\n";
+    git_index *idx = nullptr;
+    REQUIRE(git_repository_index(&idx, repo) == 0);
+    REQUIRE(git_index_add_bypath(idx, "a.txt") == 0);
+    REQUIRE(git_index_write(idx) == 0);
+    git_oid toid;
+    REQUIRE(git_index_write_tree(&toid, idx) == 0);
+    git_tree *tree = nullptr;
+    REQUIRE(git_tree_lookup(&tree, repo, &toid) == 0);
+    git_signature *sig = nullptr;
+    REQUIRE(git_signature_now(&sig, "T", "t@t") == 0);
+    git_oid c1;
+    REQUIRE(git_commit_create(&c1, repo, "HEAD", sig, sig, nullptr, "C1", tree,
+                              0, nullptr) == 0);
+    git_commit *base = nullptr;
+    REQUIRE(git_commit_lookup(&base, repo, &c1) == 0);
+    git_reference *topic = nullptr;
+    REQUIRE(git_branch_create(&topic, repo, "topic", base, 0) == 0);
+    REQUIRE(git_branch_set_upstream(topic, "master") == 0);
+    git_reference_free(topic);
+    const git_commit *parents[1] = {base};
+    git_oid c2, c3;
+    REQUIRE(git_commit_create(&c2, repo, "refs/heads/master", sig, sig, nullptr,
+                              "C2", tree, 1, parents) == 0);
+    REQUIRE(git_commit_create(&c3, repo, "refs/heads/topic", sig, sig, nullptr,
+                              "C3", tree, 1, parents) == 0);
+    REQUIRE(git_repository_set_head(repo, "refs/heads/topic") == 0);
+    git_commit_free(base);
+    git_signature_free(sig);
+    git_tree_free(tree);
+    git_index_free(idx);
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+    return dir;
+}
 // A repo with one commit, an extra branch, and one stashed modification.
 fs::path make_repo_stash_branch()
 {
@@ -473,6 +516,22 @@ TEST_CASE("mg_magit_stage_region stages just the selected lines through the brid
     }
     CHECK(staged_B);
     CHECK_FALSE(staged_D);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("mg_magit_status_buffer shows the upstream and ahead/behind counts")
+{
+    auto dir = make_repo_ahead_behind(); // topic tracks master, 1 ahead/1 behind
+    std::string text;
+    mg_magit_status_buffer(
+        dir.string().c_str(), nullptr, 0,
+        [](void *ctx, const char *line, int, const char *, int) {
+            (static_cast<std::string *>(ctx))->append(line).append("\n");
+        },
+        &text);
+    CHECK(text.find("master") != std::string::npos);   // upstream name
+    CHECK(text.find("ahead 1") != std::string::npos);
+    CHECK(text.find("behind 1") != std::string::npos);
     fs::remove_all(dir);
 }
 
