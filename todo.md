@@ -185,7 +185,13 @@ https://github.com/magit/magit`). ✅ **FM-C done** (PR #31, branch `fm-c-commit
   FM-T-4 TAB folds ANY MG_LINE_SECTION header (folds keyed by title minus the
   " (N)" count; `magit_emit` suppresses a folded body). Engine+bridge via
   doctest (1-ahead/1-behind libgit2 fixture), folding via tmux capture-pane.
-- **FM-B — branch create/delete/rename (NEXT)**; **FM-Z — stash push/pop/show**.
+- ✅ **FM-B done** (branch create/delete/rename, PR #35, branch `fm-b-branches`).
+  mg.git `create_branch`/`delete_branch`/`rename_branch` (git_branch_create at
+  peeled HEAD / _delete / _move); bridge `mg_magit_branch_create/delete/rename`.
+  UI: `b` is now a prefix submap — `b b` checkout, `b c` create, `b k` delete,
+  `b m` rename (create prompts; delete/rename default to the branch at point,
+  delete confirms). Engine+bridge doctest; pty-verified create + rename.
+- **FM-Z — stash push/pop/show (NEXT)**.
 Phase B (new, highest value): **FM-L log buffer**, **FM-R push/pull/fetch**
 (⚠ network — verify libssh2/TLS transports first), **FM-X reset/revert/merge**.
 Per-slice TDD (test_git → test_bridge → magit_cmd.c → pty) + stacked PR.
@@ -246,8 +252,8 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `u2-display`→u1-utf8 (#28), `u3-cursor`→u2-display (#29),
   `u4-classify`→u3-cursor (#30), `fm-c-commit`→u4-classify (#31),
   `fm-s1-stageall`→fm-c-commit (#32), `fm-s2-region`→fm-s1-stageall (#33),
-  `fm-t-sections`→fm-s2-region (#34).
-  Next Full-Magit slice (FM-B branches) freezes on `fm-t-sections`.
+  `fm-t-sections`→fm-s2-region (#34), `fm-b-branches`→fm-t-sections (#35).
+  Next Full-Magit slice (FM-Z stash) freezes on `fm-b-branches`.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
