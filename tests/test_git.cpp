@@ -864,6 +864,65 @@ TEST_CASE("rebase_interactive edit can be aborted back to the original branch")
     fs::remove_all(dir);
 }
 
+TEST_CASE("rebase_interactive pauses on a replay conflict; resolve+continue")
+{
+    using mg::git::conflict_side;
+    using mg::git::rebase_action;
+    using mg::git::rebase_result;
+    using mg::git::rebase_step;
+    // HEAD=feature (a.txt "feature change"); master has a.txt "master change".
+    auto dir = make_repo_rebase_conflict();
+    commit_file(dir, "y.txt", "y\n", "Cf2 clean"); // a clean tail commit
+    std::string cf1 = oid_of(dir, "feature~1");    // "C3 feature" (conflicts)
+    std::string cf2 = oid_of(dir, "feature");      // "Cf2 clean"
+
+    std::vector<rebase_step> plan = {
+        {rebase_action::pick, cf1, ""}, // conflicts when replayed onto master
+        {rebase_action::pick, cf2, ""}, // clean tail
+    };
+    auto r = mg::git::rebase_interactive(dir.string(), "master", plan);
+    REQUIRE(r.has_value());
+    CHECK(*r == rebase_result::conflicts); // paused, not aborted
+    CHECK(mg::git::rebase_in_progress(dir.string()));
+    auto cs = mg::git::conflicts(dir.string());
+    REQUIRE(cs.has_value());
+    REQUIRE(cs->size() == 1);
+    CHECK((*cs)[0].path == "a.txt");
+    CHECK_FALSE(fs::exists(dir / "y.txt")); // tail not replayed yet
+
+    // Resolve to theirs (the replayed feature commit) and commit it.
+    REQUIRE(mg::git::resolve_conflict(dir.string(), "a.txt",
+                                      conflict_side::theirs)
+                .has_value());
+    REQUIRE(mg::git::commit(dir.string(), "Cf1 resolved").has_value());
+
+    auto cont = mg::git::rebase_continue(dir.string());
+    REQUIRE(cont.has_value());
+    CHECK(*cont == rebase_result::done);
+    CHECK(fs::exists(dir / "y.txt"));           // tail replayed
+    CHECK_FALSE(mg::git::rebase_in_progress(dir.string()));
+    fs::remove_all(dir);
+}
+
+TEST_CASE("rebase_continue refuses while replay conflicts are unresolved")
+{
+    using mg::git::rebase_action;
+    using mg::git::rebase_result;
+    using mg::git::rebase_step;
+    auto dir = make_repo_rebase_conflict();
+    std::string cf1 = oid_of(dir, "feature");
+
+    std::vector<rebase_step> plan = {{rebase_action::pick, cf1, ""}};
+    auto r = mg::git::rebase_interactive(dir.string(), "master", plan);
+    REQUIRE(r.has_value());
+    CHECK(*r == rebase_result::conflicts);
+
+    // Continue without resolving -> error (the guard), state preserved.
+    CHECK_FALSE(mg::git::rebase_continue(dir.string()).has_value());
+    CHECK(mg::git::rebase_in_progress(dir.string()));
+    fs::remove_all(dir);
+}
+
 TEST_CASE("rebase_interactive fixup folds a commit into the previous one")
 {
     using mg::git::rebase_action;

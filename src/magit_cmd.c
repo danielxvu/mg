@@ -3059,6 +3059,13 @@ magit_todo_execute(int f, int n)
 		    "continue");
 		return (TRUE);
 	}
+	if (rc == 2) {
+		/* A replayed commit conflicted: resolve in the Conflicts section,
+		 * commit, then r r (continue) / r a (abort). */
+		(void)magit_refresh(f, n);
+		ewprintf("Rebase conflict -- resolve (e o / e t), commit, then r r");
+		return (TRUE);
+	}
 	ewprintf("Interactive rebase complete");
 	return (TRUE);
 }

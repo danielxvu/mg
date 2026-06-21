@@ -2194,9 +2194,24 @@ run_plan(git_repository *repo, git_signature *sig, detail::commit_ptr tip,
                                   nullptr) != 0)
             return std::unexpected(last_error());
         detail::index_ptr idx(raw_idx);
-        if (git_index_has_conflicts(idx.get()))
-            return std::unexpected(
-                error{0, "interactive rebase conflict (aborted)"});
+        if (git_index_has_conflicts(idx.get())) {
+            // Pause for resolution: put the last good tip on HEAD, then apply
+            // the conflicting commit to the working tree (markers +
+            // CHERRY_PICK_HEAD) and persist the rest. The user resolves +
+            // commits (that commit = this step), then `r r` resumes.
+            if (auto m = set_head_to(repo, tip.get(), "rebase -i (conflict)");
+                !m)
+                return std::unexpected(m.error());
+            git_cherrypick_options cpopts;
+            git_cherrypick_options_init(&cpopts,
+                                        GIT_CHERRYPICK_OPTIONS_VERSION);
+            cpopts.checkout_opts.checkout_strategy = GIT_CHECKOUT_SAFE;
+            if (git_cherrypick(repo, apply.get(), &cpopts) != 0)
+                return std::unexpected(last_error());
+            write_rebase_todo(repo, orig_head,
+                              {plan.begin() + (std::ptrdiff_t)i + 1, plan.end()});
+            return rebase_result::conflicts;
+        }
 
         git_oid tree_oid;
         if (git_index_write_tree_to(&tree_oid, idx.get(), repo) != 0)
@@ -2295,8 +2310,18 @@ std::expected<rebase_result, error> rebase_continue(std::string repo)
         return std::unexpected(last_error());
     detail::repo_ptr r(raw);
 
-    // Interactive `edit` stop: resume the persisted plan from the user's HEAD.
+    // Interactive `edit` stop or paused replay conflict: resume the persisted
+    // plan from the user's HEAD.
     if (auto todo = read_rebase_todo(r.get())) {
+        // Refuse to continue while replay conflicts are unresolved.
+        git_index *raw_idx = nullptr;
+        if (git_repository_index(&raw_idx, r.get()) != 0)
+            return std::unexpected(last_error());
+        detail::index_ptr cidx(raw_idx);
+        if (git_index_has_conflicts(cidx.get()))
+            return std::unexpected(
+                error{0, "resolve conflicts and commit before continuing"});
+
         detail::sig_ptr sig = default_signature(r.get());
         if (!sig)
             return std::unexpected(last_error());
