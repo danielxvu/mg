@@ -336,6 +336,13 @@ std::expected<std::vector<std::string>, error> tags(std::string repo);
 // Append `pattern` as a line to the repository's top-level .gitignore.
 std::expected<void, error> ignore_path(std::string repo, std::string pattern);
 
+// Set / remove / read the (default refs/notes/commits) note on commit `rev`.
+// set overwrites any existing note; read returns "" when there is none.
+std::expected<void, error>
+set_note(std::string repo, std::string rev, std::string message);
+std::expected<void, error> remove_note(std::string repo, std::string rev);
+std::expected<std::string, error> read_note(std::string repo, std::string rev);
+
 // Stage `file` (relative to the repo root) into the index.
 std::expected<void, error> stage(std::string repo, std::string file);
 
@@ -920,6 +927,75 @@ std::expected<void, error> delete_tag(std::string repo, std::string name)
     if (git_tag_delete(r.get(), name.c_str()) != 0)
         return std::unexpected(last_error());
     return {};
+}
+
+// Resolve a revspec to a commit oid (helper for the note ops).
+static std::expected<git_oid, error>
+resolve_oid(git_repository *repo, const std::string &rev)
+{
+    git_object *raw = nullptr;
+    if (git_revparse_single(&raw, repo, rev.c_str()) != 0)
+        return std::unexpected(last_error());
+    detail::object_ptr obj(raw);
+    return *git_object_id(obj.get());
+}
+
+std::expected<void, error>
+set_note(std::string repo, std::string rev, std::string message)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+    auto oid = resolve_oid(r.get(), rev);
+    if (!oid)
+        return std::unexpected(oid.error());
+    detail::sig_ptr sig = default_signature(r.get());
+    if (!sig)
+        return std::unexpected(last_error());
+    git_oid note_oid;
+    if (git_note_create(&note_oid, r.get(), nullptr, sig.get(), sig.get(),
+                        &*oid, message.c_str(), /*force=*/1) != 0)
+        return std::unexpected(last_error());
+    return {};
+}
+
+std::expected<void, error> remove_note(std::string repo, std::string rev)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+    auto oid = resolve_oid(r.get(), rev);
+    if (!oid)
+        return std::unexpected(oid.error());
+    detail::sig_ptr sig = default_signature(r.get());
+    if (!sig)
+        return std::unexpected(last_error());
+    if (git_note_remove(r.get(), nullptr, sig.get(), sig.get(), &*oid) != 0)
+        return std::unexpected(last_error());
+    return {};
+}
+
+std::expected<std::string, error> read_note(std::string repo, std::string rev)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+    auto oid = resolve_oid(r.get(), rev);
+    if (!oid)
+        return std::unexpected(oid.error());
+    git_note *raw_note = nullptr;
+    if (git_note_read(&raw_note, r.get(), nullptr, &*oid) != 0)
+        return std::string(); // no note (or no notes ref) -> empty
+    std::unique_ptr<git_note, decltype(&git_note_free)> note(raw_note,
+                                                             git_note_free);
+    const char *m = git_note_message(note.get());
+    return std::string(m != nullptr ? m : "");
 }
 
 std::expected<void, error> ignore_path(std::string repo, std::string pattern)

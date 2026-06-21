@@ -336,6 +336,13 @@ extern "C" int mg_magit_commit_diff(const char *repo_path, const char *rev,
     };
 
     out(std::string("commit ") + rev, MG_LINE_SECTION, -1);
+    if (auto note = mg::git::read_note(repo_path, rev); note && !note->empty()) {
+        std::string nb = *note;
+        if (!nb.empty() && nb.back() == '\n')
+            nb.pop_back();
+        out("Note:", MG_LINE_OTHER, -1);
+        out("  " + nb, MG_LINE_OTHER, -1);
+    }
     for (int hi = 0; hi < static_cast<int>(hunks->size()); ++hi) {
         out(chomp((*hunks)[hi].header), MG_LINE_HUNK, hi);
         for (const auto &l : (*hunks)[hi].lines)
@@ -618,6 +625,21 @@ extern "C" int mg_magit_ignore(const char *repo_path, const char *pattern)
     if (repo_path == nullptr || pattern == nullptr || pattern[0] == '\0')
         return 0;
     return mg::git::ignore_path(repo_path, pattern).has_value() ? 1 : 0;
+}
+
+extern "C" int mg_magit_note_set(const char *repo_path, const char *rev,
+                                 const char *message)
+{
+    if (repo_path == nullptr || rev == nullptr || message == nullptr)
+        return 0;
+    return mg::git::set_note(repo_path, rev, message).has_value() ? 1 : 0;
+}
+
+extern "C" int mg_magit_note_remove(const char *repo_path, const char *rev)
+{
+    if (repo_path == nullptr || rev == nullptr)
+        return 0;
+    return mg::git::remove_note(repo_path, rev).has_value() ? 1 : 0;
 }
 
 extern "C" int mg_magit_cherrypick(const char *repo_path, const char *rev)

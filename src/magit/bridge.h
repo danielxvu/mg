@@ -201,6 +201,12 @@ int mg_magit_tag_delete(const char *repo_path, const char *name);
 /* Append `pattern` to the repo's top-level .gitignore. 1 ok, 0 fail. */
 int mg_magit_ignore(const char *repo_path, const char *pattern);
 
+/* Set / remove the git note on commit `rev`. 1 ok, 0 fail. (The note, if any,
+ * is shown in the *magit-commit* view.) */
+int mg_magit_note_set(const char *repo_path, const char *rev,
+                      const char *message);
+int mg_magit_note_remove(const char *repo_path, const char *rev);
+
 #ifdef __cplusplus
 }
 #endif

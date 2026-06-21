@@ -64,6 +64,7 @@ static int	magit_cherrypick(int, int);
 static int	magit_log_visit(int, int);
 static int	magit_log_refresh(int, int);
 static int	magit_log_revert(int, int);
+static int	magit_log_note(int, int);
 static int	magit_merge(int, int);
 static int	magit_revert(int, int);
 static int	magit_reset_soft(int, int);
@@ -230,17 +231,19 @@ static struct KEYMAPE (3) magit_tagmenu = {
  */
 static PF maglog_ret[] = { magit_log_visit };
 static PF maglog_A[] = { magit_cherrypick };
+static PF maglog_T[] = { magit_log_note };
 static PF maglog_V[] = { magit_log_revert };
 static PF maglog_g[] = { magit_log_refresh };
 static PF maglog_q[] = { delwind };
 
-static struct KEYMAPE (5) maglogmap = {
-	5,
-	5,
+static struct KEYMAPE (6) maglogmap = {
+	6,
+	6,
 	rescan,
 	{
 		{ CCHR('M'), CCHR('M'), maglog_ret, NULL },	/* RET: show commit */
 		{ 'A', 'A', maglog_A, NULL },			/* A: cherry-pick at point */
+		{ 'T', 'T', maglog_T, NULL },			/* T: set/remove note */
 		{ 'V', 'V', maglog_V, NULL },			/* V: revert commit */
 		{ 'g', 'g', maglog_g, NULL },			/* g: refresh */
 		{ 'q', 'q', maglog_q, NULL }			/* q: close */
@@ -833,6 +836,33 @@ magit_cherrypick(int f, int n)
 	return (magit_refresh(f, n));
 }
 
+/* T in *magit-log*: set the note on the commit at point (empty input removes). */
+static int
+magit_log_note(int f, int n)
+{
+	const char	*oid;
+	char		 msg[1024], cwd[PATH_MAX];
+	int		 ok;
+
+	if ((oid = magit_log_oid_at_point()) == NULL) {
+		ewprintf("Not on a commit");
+		return (FALSE);
+	}
+	if (eread("Note (empty to remove): ", msg, sizeof(msg),
+	    EFNEW | EFCR | EFNUL) == NULL)
+		return (ABORT);
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	ok = (msg[0] == '\0') ? mg_magit_note_remove(cwd, oid)
+	                      : mg_magit_note_set(cwd, oid, msg);
+	if (ok != 1) {
+		ewprintf("Note update failed");
+		return (FALSE);
+	}
+	ewprintf(msg[0] == '\0' ? "Note removed" : "Note set");
+	return (TRUE);
+}
+
 /* V in *magit-log*: revert the commit at point (records the inverse on HEAD). */
 static int
 magit_log_revert(int f, int n)
@@ -1057,7 +1087,7 @@ magit_help(int f, int n)
 		"  t t/a/k  tag: lightweight / annotated / delete",
 		"  c c/a/e/w  commit / amend / extend / reword",
 		"  z z/p    stash: push / pop",
-		"  l        log buffer (RET shows a commit's diff, V reverts it)",
+		"  l        log buffer (RET diff, A cherry-pick, V revert, T note)",
 		"  m        merge a branch into HEAD",
 		"  r e/u    rebase onto a branch / upstream",
 		"  r r/s/a  rebase continue / skip / abort",

@@ -1472,6 +1472,29 @@ TEST_CASE("create_tag / tags / delete_tag round-trip")
     fs::remove_all(dir);
 }
 
+TEST_CASE("set_note / read_note / remove_note round-trip")
+{
+    auto dir = make_repo_with_commit("base");
+    set_test_config(dir); // note author/committer signature
+
+    auto none = mg::git::read_note(dir.string(), "HEAD");
+    REQUIRE(none.has_value());
+    CHECK(none->empty());
+
+    REQUIRE(mg::git::set_note(dir.string(), "HEAD", "see issue #7").has_value());
+    auto got = mg::git::read_note(dir.string(), "HEAD");
+    REQUIRE(got.has_value());
+    CHECK(*got == "see issue #7");
+
+    // set overwrites.
+    REQUIRE(mg::git::set_note(dir.string(), "HEAD", "updated").has_value());
+    CHECK(*mg::git::read_note(dir.string(), "HEAD") == "updated");
+
+    REQUIRE(mg::git::remove_note(dir.string(), "HEAD").has_value());
+    CHECK(mg::git::read_note(dir.string(), "HEAD")->empty());
+    fs::remove_all(dir);
+}
+
 TEST_CASE("ignore_path appends a pattern to .gitignore")
 {
     auto dir = make_repo_with_commit("base");
