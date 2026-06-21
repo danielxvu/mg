@@ -5,8 +5,10 @@
  * Glue between mg's C core (buffers/windows/keymaps) and the native engine's
  * extern "C" bridge. Compiled into mg only when ENABLE_NATIVE_MAGIT is set.
  * The status buffer uses a buffer-local keymap (magit-status-mode):
- *   s  stage the file at point      u  unstage the file at point
+ *   s  stage the file/hunk/region    u  unstage the file/hunk/region
  *   g  refresh                       q  close the window
+ * A region (set the mark with C-SPC, then move point) stages/unstages just the
+ * marked lines of one hunk -- magit's signature line/region staging.
  *
  * This file is in the public domain.
  */
@@ -45,6 +47,8 @@ static int	magit_stash_apply(int, int);
 static int	magit_checkout(int, int);
 static int	magit_stage_all(int, int);
 static int	magit_unstage_all(int, int);
+static int	magit_region(int *, char **, int *, int *);
+static int	magit_line_index(void);
 
 /*
  * line -> {kind, hunk, path} map for the most recent render of *magit-status*.
@@ -312,6 +316,58 @@ magit_at_point(char **path_out, int *hunk_out)
 	return (magit_meta[idx].kind);
 }
 
+/*
+ * If a mark is set, resolve the marked range into a line region within a single
+ * hunk: the hunk index, its path, and the inclusive line indices [first, last]
+ * within that hunk (0-based, matching the engine's file_diff numbering). The
+ * region is valid only when every line between mark and point is a diff line of
+ * the same hunk and file. Returns TRUE on a valid region, FALSE otherwise (no
+ * mark, or the span crosses non-diff lines / hunk / file boundaries) -- in which
+ * case the caller falls back to whole-hunk/whole-file staging.
+ */
+static int
+magit_region(int *hunk_out, char **path_out, int *first_out, int *last_out)
+{
+	struct line	*lp;
+	int		 mark_idx = 0, point_idx, lo, hi, hdr, i;
+
+	if (curwp->w_markp == NULL)
+		return (FALSE);
+
+	for (lp = bfirstlp(curbp);
+	    lp != curwp->w_markp && lp != curbp->b_headp; lp = lforw(lp))
+		mark_idx++;
+	if (lp != curwp->w_markp)
+		return (FALSE);
+	if ((point_idx = magit_line_index()) < 0)
+		return (FALSE);
+
+	lo = (mark_idx < point_idx) ? mark_idx : point_idx;
+	hi = (mark_idx < point_idx) ? point_idx : mark_idx;
+	if (hi >= magit_meta_count)
+		return (FALSE);
+
+	/* Every selected line must be a diff line of the same hunk and file. */
+	for (i = lo; i <= hi; i++) {
+		if (magit_meta[i].kind != MG_LINE_DIFF ||
+		    magit_meta[i].hunk != magit_meta[lo].hunk ||
+		    strcmp(magit_meta[i].path, magit_meta[lo].path) != 0)
+			return (FALSE);
+	}
+
+	/* The hunk header precedes the first diff line; li = idx - header - 1. */
+	for (hdr = lo; hdr >= 0 && magit_meta[hdr].kind != MG_LINE_HUNK; hdr--)
+		;
+	if (hdr < 0)
+		return (FALSE);
+
+	*hunk_out = magit_meta[lo].hunk;
+	*path_out = magit_meta[lo].path;
+	*first_out = lo - hdr - 1;
+	*last_out = hi - hdr - 1;
+	return (TRUE);
+}
+
 /* TAB: expand/collapse the inline diff for the file at point. */
 static int
 magit_toggle_expand(int f, int n)
@@ -392,8 +448,8 @@ magit_help(int f, int n)
 		"  TAB      expand / collapse the inline diff",
 		"  RET      visit the file at point (other window)",
 		"  M-n/M-p  next / previous section",
-		"  s        stage the file or hunk at point",
-		"  u        unstage the file or hunk at point",
+		"  s        stage the file/hunk at point (or marked region)",
+		"  u        unstage the file/hunk at point (or marked region)",
 		"  S / U    stage all / unstage all",
 		"  k        discard changes / drop the stash at point",
 		"  a        apply the stash at point",
@@ -530,13 +586,21 @@ magit_checkout(int f, int n)
 static int
 magit_stage(int f, int n)
 {
-	char	*path = NULL;
+	char	*path = NULL, *rpath = NULL;
 	char	 cwd[PATH_MAX];
-	int	 kind, hunk;
+	int	 kind, hunk, rhunk, first, last;
 
-	kind = magit_at_point(&path, &hunk);
 	if (getcwd(cwd, sizeof(cwd)) == NULL)
 		return (FALSE);
+	/* With a mark spanning one hunk's diff lines, stage just that region. */
+	if (magit_region(&rhunk, &rpath, &first, &last)) {
+		if (mg_magit_stage_region(cwd, rpath, rhunk, first, last) != 1) {
+			ewprintf("Stage region failed");
+			return (FALSE);
+		}
+		return (magit_refresh(f, n));
+	}
+	kind = magit_at_point(&path, &hunk);
 	/* On a hunk/diff line, stage just that hunk; on a file line, the file. */
 	if (kind == MG_LINE_HUNK || kind == MG_LINE_DIFF) {
 		if (mg_magit_stage_hunk(cwd, path, hunk) != 1) {
@@ -559,13 +623,21 @@ magit_stage(int f, int n)
 static int
 magit_unstage(int f, int n)
 {
-	char	*path = NULL;
+	char	*path = NULL, *rpath = NULL;
 	char	 cwd[PATH_MAX];
-	int	 kind, hunk;
+	int	 kind, hunk, rhunk, first, last;
 
-	kind = magit_at_point(&path, &hunk);
 	if (getcwd(cwd, sizeof(cwd)) == NULL)
 		return (FALSE);
+	/* With a mark spanning one hunk's diff lines, unstage just that region. */
+	if (magit_region(&rhunk, &rpath, &first, &last)) {
+		if (mg_magit_unstage_region(cwd, rpath, rhunk, first, last) != 1) {
+			ewprintf("Unstage region failed");
+			return (FALSE);
+		}
+		return (magit_refresh(f, n));
+	}
+	kind = magit_at_point(&path, &hunk);
 	/* On a hunk/diff line, unstage just that hunk; on a file line, the file. */
 	if (kind == MG_LINE_HUNK || kind == MG_LINE_DIFF) {
 		if (mg_magit_unstage_hunk(cwd, path, hunk) != 1) {
