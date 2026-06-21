@@ -4,6 +4,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -1130,6 +1131,21 @@ TEST_CASE("revert_commit leaves conflicts when the inverse does not apply")
     REQUIRE(cs.has_value());
     CHECK(cs->size() == 1);
     fs::remove_all(dir);
+}
+
+TEST_CASE("BENCH repo_status (set MG_BENCH_REPO)")
+{
+	const char *repo = std::getenv("MG_BENCH_REPO");
+	if (repo == nullptr)
+		return;
+	for (int i = 0; i < 5; ++i) {
+		auto t0 = std::chrono::steady_clock::now();
+		auto st = mg::git::repo_status(repo);
+		auto t1 = std::chrono::steady_clock::now();
+		auto ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+		MESSAGE("repo_status: " << (st ? (int)st->size() : -1)
+		    << " entries in " << ms << " ms");
+	}
 }
 
 TEST_CASE("repo_status reports a staged and an untracked entry")

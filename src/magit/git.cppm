@@ -571,7 +571,12 @@ repo_status(std::string path)
     git_status_options opts;
     git_status_options_init(&opts, GIT_STATUS_OPTIONS_VERSION);
     opts.show = GIT_STATUS_SHOW_INDEX_AND_WORKDIR;
-    opts.flags = GIT_STATUS_OPT_INCLUDE_UNTRACKED;
+    // EXCLUDE_SUBMODULES: submodules have their own status section (a recursive
+    // per-submodule status scan dominates the cost on submodule-heavy repos).
+    // UPDATE_INDEX: persist the refreshed stat cache so repeat calls are faster.
+    opts.flags = GIT_STATUS_OPT_INCLUDE_UNTRACKED |
+                 GIT_STATUS_OPT_EXCLUDE_SUBMODULES |
+                 GIT_STATUS_OPT_UPDATE_INDEX;
 
     git_status_list *raw_list = nullptr;
     if (git_status_list_new(&raw_list, repo.get(), &opts) != 0)
