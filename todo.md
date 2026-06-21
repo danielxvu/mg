@@ -306,7 +306,11 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `fm-rb1-rebase`→u8-nfc (#46), `fm-rb2-seq`→fm-rb1-rebase (#47),
   `fm-rb3a-iexec`→fm-rb2-seq (#48), `fm-rb3b-todo`→fm-rb3a-iexec (#49),
   `fm-a-cherrypick`→fm-rb3b-todo (#50), `fm-tag`→fm-a-cherrypick (#51),
-  `fm-pv`→fm-tag (#52), `fm-tag-annotated`→fm-pv (#53).
+  `fm-pv`→fm-tag (#52), `fm-tag-annotated`→fm-pv (#53),
+  `fm-ignore`→fm-tag-annotated (#54), `fm-note`→fm-ignore (#55),
+  `fm-wt`→fm-note (#56), `fm-blame`→fm-wt (#57),
+  `fm-rb-reword`→fm-blame (#58), `fm-bisect`→fm-rb-reword (#59),
+  `fm-sub`→fm-bisect (#60), `fm-lp`→fm-sub (#61).
   Magit core (A+B, #31-#41) done; UTF-8 "Full" U5-U8 (#42-#45). **Phase C**
   (honest gap vs real magit; spec
   `docs/superpowers/specs/2026-06-21-fm-phase-c-roadmap.md`): ✅ FM-RB-1
@@ -318,20 +322,30 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   (non-interactive + sequencer + interactive). Next branch freezes on
   `fm-rb3b-todo`. ✅ FM-A cherry-pick (`A`, #50) · ✅ FM-TAG tags (`t t`/`t k` +
   Tags section, #51) · ✅ FM-PV push/pull variants (`P p/f/u`, `F p/r`, #52) ·
-  ✅ annotated tags (`t a`, #53). Next branch freezes on `fm-tag-annotated`.
+  ✅ annotated tags (`t a`, #53). ✅ gitignore (`i`, #54) · ✅ git notes
+  (`T`, #55) · ✅ worktrees (`W a`/`W k` + section, #56) · ✅ blame (`B`, #57) ·
+  ✅ rebase reword (`w` in todo, #58) · ✅ bisect (`Z` menu + section, #59) ·
+  ✅ submodules listing (`Submodules` section, #60) · ✅ log of a file (`l l`/
+  `l f`, #61). Next branch freezes on `fm-lp`.
 
-  **Phase C status — implemented:** rebase (onto/sequencer/interactive),
-  cherry-pick, tags (lightweight+annotated+section), push/pull variants. **Not
-  done (honest residual):**
-    · FM-LP log power: `--graph`/file/range logs, `-S`/`-G` search (act-at-point
-      RET/A/V already done). Low value vs. effort.
-    · FM-CV commit variants: instant fixup/squash (do via `r i` for now),
-      signoff/no-verify, GPG sign.
-    · rebase reword/edit (mid-sequence prompts) + interactive conflict-resume.
-    · **Out of scope (large, per the roadmap):** bisect, submodule/subtree,
-      worktree, blame, notes, ediff, gitignore editing, bookmarks, and the
-      transient *popup UI* port (we use prefix submaps). These are each a major
-      feature; not attempted.
+  **Phase C status — implemented:** rebase (onto/sequencer/interactive +
+  reword), cherry-pick, tags (lightweight+annotated+section), push/pull
+  variants, gitignore (`i`), git notes (`T`), worktrees (`W` + section), blame
+  (`B`), bisect (`Z` + section), submodules listing (section), log of a file
+  (`l f`). The earlier "out of scope" list was an overclaim — all the
+  libgit2-feasible items above are now done (#54–#61).
+
+  **Not done (honest residual — each needs work outside the current model):**
+    · FM-LP extras: `--graph` rendering, commit-range logs, `-S`/`-G` pickaxe
+      search. (File log + act-at-point RET/A/V done.)
+    · FM-CV commit variants: instant fixup/squash (use `r i` for now),
+      signoff/no-verify; **GPG sign** (needs an external signing key).
+    · rebase **edit** (mid-sequence stop) + interactive **conflict-resume** —
+      need to persist the custom plan across the pause (on-disk state).
+    · submodule **add/update/sync** — clone + network (testable via a local bare
+      remote, but not yet built); listing only for now.
+    · **ediff** and the transient **popup UI** port — genuinely large /
+      framework-level; we use prefix submaps instead of magit's transient.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
