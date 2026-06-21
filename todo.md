@@ -321,7 +321,10 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `fm-ediff-6-sync-scroll`→fm-ediff-5-cell-color (#71),
   `fm-ediff-perf`→fm-ediff-6-sync-scroll (#72),
   `fm-status-perf`→fm-ediff-perf (#73), `fm-log-perf`→fm-status-perf (#74),
-  `fm-status-perf2`→fm-log-perf (#75), `fm-async-status-p1`→fm-log-perf (#76).
+  `fm-status-perf2`→fm-log-perf (#75), `fm-async-status-p1`→fm-log-perf (#76),
+  `fm-async-status-p2`→fm-async-status-p1 (#77). 🎉 **FM-ASYNC-STATUS COMPLETE**
+  — status build off the UI thread (233ms→0.17ms warm on the 37.5k-file repo),
+  idle self-pipe wake redraws with no keypress, fingerprint-based staleness.
   Magit core (A+B, #31-#41) done; UTF-8 "Full" U5-U8 (#42-#45). **Phase C**
   (honest gap vs real magit; spec
   `docs/superpowers/specs/2026-06-21-fm-phase-c-roadmap.md`): ✅ FM-RB-1
