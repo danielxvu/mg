@@ -1159,11 +1159,18 @@ TEST_CASE("BENCH magit ops (set MG_BENCH_REPO[, MG_BENCH_FILE])")
 	bench("commit_diff(HEAD)   ", [&] { auto r = mg::git::commit_diff(repo, "HEAD"); return r ? (int)r->size() : -1; });
 	bench("upstream_commits(↑) ", [&] { auto r = mg::git::upstream_commits(repo, true); return r ? (int)r->size() : -1; });
 	bench("upstream_commits(↓) ", [&] { auto r = mg::git::upstream_commits(repo, false); return r ? (int)r->size() : -1; });
+	bench("upstream_status     ", [&] { return mg::git::upstream_status(repo) ? 1 : 0; });
+	bench("branches            ", [&] { auto r = mg::git::branches(repo); return r ? (int)r->size() : -1; });
+	bench("stashes             ", [&] { auto r = mg::git::stashes(repo); return r ? (int)r->size() : -1; });
 	bench("tags                ", [&] { auto r = mg::git::tags(repo); return r ? (int)r->size() : -1; });
 	bench("worktrees           ", [&] { auto r = mg::git::worktrees(repo); return r ? (int)r->size() : -1; });
 	bench("submodules          ", [&] { auto r = mg::git::submodules(repo); return r ? (int)r->size() : -1; });
 	bench("conflicts           ", [&] { auto r = mg::git::conflicts(repo); return r ? (int)r->size() : -1; });
+	bench("read_note(HEAD)     ", [&] { return mg::git::read_note(repo, "HEAD") ? 1 : 0; });
+	bench("rebase_in_progress  ", [&] { return mg::git::rebase_in_progress(repo) ? 1 : 0; });
+	bench("bisect_active       ", [&] { return mg::git::bisect_active(repo) ? 1 : 0; });
 	if (file != nullptr) {
+		bench("file_diff(unstaged) ", [&] { auto r = mg::git::file_diff(repo, file, false); return r ? (int)r->size() : -1; });
 		bench("log_file(100)       ", [&] { auto r = mg::git::log_file(repo, file, 100); return r ? (int)r->size() : -1; });
 		bench("blame_file          ", [&] { auto r = mg::git::blame_file(repo, file); return r ? (int)r->size() : -1; });
 	}

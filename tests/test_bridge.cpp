@@ -1535,3 +1535,51 @@ TEST_CASE("mg_magit_commit commits the staged tree")
     CHECK(!any_line_has(lines, "Staged changes")); // nothing staged now
     fs::remove_all(dir);
 }
+
+TEST_CASE("BENCH bridge buffer builds (set MG_BENCH_REPO[, MG_BENCH_FILE])")
+{
+	const char *repo = std::getenv("MG_BENCH_REPO");
+	if (repo == nullptr)
+		return;
+	const char *file = std::getenv("MG_BENCH_FILE");
+	static int sink;
+	auto count = [](void *ctx, const char *, int, const char *, int) {
+		(void)ctx;
+		sink++;
+	};
+	auto bench = [&](const char *name, auto fn) {
+		double best = 1e18;
+		int n = 0;
+		for (int i = 0; i < 3; ++i) {
+			auto t0 = std::chrono::steady_clock::now();
+			n = fn();
+			auto t1 = std::chrono::steady_clock::now();
+			double ms =
+			    std::chrono::duration<double, std::milli>(t1 - t0).count();
+			if (ms < best)
+				best = ms;
+		}
+		MESSAGE(name << ": " << best << " ms (lines=" << n << ")");
+	};
+	bench("status_buffer (collapsed)", [&] {
+		return mg_magit_status_buffer(repo, nullptr, 0, count, nullptr);
+	});
+	bench("log_buffer(100)          ", [&] {
+		return mg_magit_log_buffer(repo, 100, count, nullptr);
+	});
+	bench("commit_diff(HEAD)        ", [&] {
+		return mg_magit_commit_diff(repo, "HEAD", count, nullptr);
+	});
+	if (file != nullptr) {
+		const char *ex[1] = {file};
+		bench("status_buffer (1 expanded)", [&] {
+			return mg_magit_status_buffer(repo, ex, 1, count, nullptr);
+		});
+		bench("log_file_buffer(100)     ", [&] {
+			return mg_magit_log_file_buffer(repo, file, 100, count, nullptr);
+		});
+		bench("blame_file               ", [&] {
+			return mg_magit_blame_file(repo, file, count, nullptr);
+		});
+	}
+}

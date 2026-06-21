@@ -1251,6 +1251,14 @@ submodules(std::string repo)
         return std::unexpected(last_error());
     detail::repo_ptr r(raw);
 
+    // Fast path: no .gitmodules -> no configured submodules. Avoids
+    // git_submodule_foreach scanning the whole index (~30ms on a 37k-file
+    // repo) every status refresh on the common no-submodule case.
+    if (const char *wd = git_repository_workdir(r.get());
+        wd != nullptr &&
+        !std::filesystem::exists(std::filesystem::path(wd) / ".gitmodules"))
+        return std::vector<submodule_entry>{};
+
     std::vector<submodule_entry> out;
     auto cb = [](git_submodule *sm, const char *name, void *payload) -> int {
         auto *v = static_cast<std::vector<submodule_entry> *>(payload);
@@ -1270,6 +1278,12 @@ std::expected<std::vector<conflict_entry>, error> conflicts(std::string repo)
     if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
         return std::unexpected(last_error());
     detail::repo_ptr r(raw);
+
+    // Unmerged entries only exist while a merge/rebase/cherry-pick/revert is in
+    // progress (which sets repository state). When the state is clean -- the
+    // common case -- skip the index conflict scan (~16ms on a 37k-file index).
+    if (git_repository_state(r.get()) == GIT_REPOSITORY_STATE_NONE)
+        return std::vector<conflict_entry>{};
 
     git_index *raw_idx = nullptr;
     if (git_repository_index(&raw_idx, r.get()) != 0)
