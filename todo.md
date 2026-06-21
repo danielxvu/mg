@@ -203,9 +203,14 @@ Phase B (new, highest value): ✅ **FM-L done** (log buffer, PR #37, branch
 `fm-l-log`) — mg.git `commit_diff` (commit tree vs first parent / empty tree)
 + full `oid` on `commit_brief`; bridge `mg_magit_log_buffer` (MG_LINE_COMMIT,
 oid in path) + `mg_magit_commit_diff`; UI `l` opens *magit-log* (magit-log-mode:
-RET→*magit-commit* diff view, g refresh, q close). tmux-verified. **Next:
-FM-R push/pull/fetch** (⚠ network — verify libssh2/TLS transports first),
-**FM-X reset/revert/merge**.
+RET→*magit-commit* diff view, g refresh, q close). tmux-verified. ✅ **FM-X done** (reset/revert/merge, PR #38, branch `fm-x-rrm`) — mg.git
+`reset_to`(soft/mixed/hard), `revert_commit` (in-memory git_revert_commit →
+"Revert" commit), `merge_branch` (analysis → ff / merge-commit; conflicts
+abort cleanly); bridge `mg_magit_reset/revert/merge`; UI `X` reset submap
+(h/m/s), `V` revert (status: prompt; log: commit at point), `m` merge.
+doctest + pty-verified. **Next: FM-R push/pull/fetch** (⚠ network — but
+testable against a LOCAL bare-repo remote via file:// transport, no network
+needed; real ssh/https stays an integration caveat).
 Per-slice TDD (test_git → test_bridge → magit_cmd.c → pty) + stacked PR.
 
 ---
@@ -265,10 +270,11 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `u4-classify`→u3-cursor (#30), `fm-c-commit`→u4-classify (#31),
   `fm-s1-stageall`→fm-c-commit (#32), `fm-s2-region`→fm-s1-stageall (#33),
   `fm-t-sections`→fm-s2-region (#34), `fm-b-branches`→fm-t-sections (#35),
-  `fm-z-stash`→fm-b-branches (#36), `fm-l-log`→fm-z-stash (#37).
-  Phase A DONE; Phase B started (FM-L done). Next: FM-R remotes (⚠ network)
-  freezes on `fm-l-log`, then FM-X reset/revert/merge. Plus the deferred
-  slices: FM-S2 region-discard (`k`), FM-Z stash-show (RET).
+  `fm-z-stash`→fm-b-branches (#36), `fm-l-log`→fm-z-stash (#37),
+  `fm-x-rrm`→fm-l-log (#38).
+  Phase A DONE; Phase B: FM-L + FM-X done. Next: FM-R remotes (test via a local
+  bare remote) freezes on `fm-x-rrm`. Plus deferred slices: FM-S2 region-discard
+  (`k`), FM-Z stash-show (RET).
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
