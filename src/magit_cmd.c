@@ -28,6 +28,33 @@
 
 #define MAGIT_MAX_EXPANDED 64
 
+/*
+ * Transient menus: magit's signature popup. A prefix key pops a window listing
+ * the action keys (dispatched through `map`) and any sticky `infixes` -- toggle
+ * flags / values that persist in the popup and feed the action commands. The
+ * popup stays open while infix keys are pressed; an action key or ESC closes it.
+ */
+enum magit_infix_kind { MAGIT_INFIX_FLAG, MAGIT_INFIX_VALUE };
+struct magit_infix {
+	KCHAR			 key;
+	const char		*arg;	/* shown label, e.g. "-f --force" */
+	enum magit_infix_kind	 kind;
+	int			 on;	/* FLAG: 0/1 toggle state */
+	char			 value[64];	/* VALUE: current text */
+};
+struct magit_menu_item {
+	KCHAR		 key;
+	const char	*desc;
+};
+struct magit_menu {
+	const char			*title;
+	KEYMAP				*map;		/* action-key dispatch */
+	const struct magit_menu_item	*items;
+	int				 n_items;
+	struct magit_infix		*infixes;	/* mutable; NULL if none */
+	int				 n_infixes;
+};
+
 static int	magit_refresh(int, int);
 static int	magit_stage(int, int);
 static int	magit_unstage(int, int);
@@ -60,6 +87,18 @@ static int	magit_bisect_good(int, int);
 static int	magit_bisect_bad(int, int);
 static int	magit_bisect_reset_cmd(int, int);
 static int	magit_bisect_report(int, const char *, int, int);
+static int	magit_transient(struct magit_menu *, int, int);
+static int	magit_menu_pull(int, int);
+static int	magit_menu_push(int, int);
+static int	magit_menu_reset(int, int);
+static int	magit_menu_worktree(int, int);
+static int	magit_menu_bisect(int, int);
+static int	magit_menu_branch(int, int);
+static int	magit_menu_commit(int, int);
+static int	magit_menu_log(int, int);
+static int	magit_menu_rebase(int, int);
+static int	magit_menu_tag(int, int);
+static int	magit_menu_stash(int, int);
 static int	magit_stage_all(int, int);
 static int	magit_unstage_all(int, int);
 static int	magit_ignore(int, int);
@@ -84,8 +123,6 @@ static int	magit_reset_hard(int, int);
 static int	magit_fetch(int, int);
 static int	magit_pull(int, int);
 static int	magit_push(int, int);
-static int	magit_push_force(int, int);
-static int	magit_push_upstream(int, int);
 static int	magit_pull_rebase(int, int);
 static int	magit_rebase_report(int, const char *, int, int);
 static int	magit_cred_prompt(const char *, int, char *, int);
@@ -130,6 +167,9 @@ static int	magit_log_count;
  * empty means the whole-repo log (l l). */
 static char	magit_log_file_path[PATH_MAX];
 
+/* Max commits shown in *magit-log* -- the `-n` transient infix (see below). */
+static int	magit_log_limit = 100;
+
 /* Interactive-rebase plan backing the *git-rebase-todo* buffer. Each entry is
  * one commit; the buffer is a rendered view of this array (line i = entry i). */
 #define MAGIT_MAX_TODO 256
@@ -156,8 +196,8 @@ static PF magit_esc[] = { NULL };		/* ESC -> meta prefix */
 static PF magit_qmark[] = { magit_help };
 static PF magit_A[] = { magit_cherrypick };
 static PF magit_B[] = { magit_blame };
-static PF magit_F[] = { NULL };			/* F -> pull menu prefix */
-static PF magit_P[] = { NULL };			/* P -> push menu prefix */
+static PF magit_F[] = { magit_menu_pull };			/* F -> pull menu prefix */
+static PF magit_P[] = { magit_menu_push };			/* P -> push menu prefix */
 
 /* Pull menu: F p pull (merge), F r pull --rebase. */
 static PF pull_p[] = { magit_pull };
@@ -173,28 +213,24 @@ static struct KEYMAPE (2) magit_pullmenu = {
 	}
 };
 
-/* Push menu: P p push, P f force-push, P u push + set-upstream. */
-static PF push_f[] = { magit_push_force };
+/* Push menu: the single action P p push; -f/-u are transient infixes. */
 static PF push_p[] = { magit_push };
-static PF push_u[] = { magit_push_upstream };
 
-static struct KEYMAPE (3) magit_pushmenu = {
-	3,
-	3,
+static struct KEYMAPE (1) magit_pushmenu = {
+	1,
+	1,
 	rescan,
 	{
-		{ 'f', 'f', push_f, NULL },	/* P f: force-push */
-		{ 'p', 'p', push_p, NULL },	/* P p: push */
-		{ 'u', 'u', push_u, NULL }	/* P u: push + set upstream */
+		{ 'p', 'p', push_p, NULL }	/* P p: push (with -f/-u infixes) */
 	}
 };
 static PF magit_S[] = { magit_stage_all };
 static PF magit_U[] = { magit_unstage_all };
 static PF magit_V[] = { magit_revert };
 static PF magit_f[] = { magit_fetch };
-static PF magit_W[] = { NULL };			/* W -> worktree menu prefix */
-static PF magit_X[] = { NULL };			/* X -> reset menu prefix */
-static PF magit_Z[] = { NULL };			/* Z -> bisect menu prefix */
+static PF magit_W[] = { magit_menu_worktree };			/* W -> worktree menu prefix */
+static PF magit_X[] = { magit_menu_reset };			/* X -> reset menu prefix */
+static PF magit_Z[] = { magit_menu_bisect };			/* Z -> bisect menu prefix */
 
 /* Worktree menu: W a add, W k delete. Entries ascending. */
 static PF worktree_a[] = { magit_worktree_add_cmd };
@@ -259,18 +295,18 @@ static struct KEYMAPE (2) magit_logmenu = {
 	}
 };
 static PF magit_a[] = { magit_stash_apply };
-static PF magit_b[] = { NULL };			/* b -> branch menu prefix */
-static PF magit_c[] = { NULL };			/* c -> commit menu prefix */
+static PF magit_b[] = { magit_menu_branch };			/* b -> branch menu prefix */
+static PF magit_c[] = { magit_menu_commit };			/* c -> commit menu prefix */
 static PF magit_g[] = { magit_refresh };
 static PF magit_i[] = { magit_ignore };
 static PF magit_k[] = { magit_discard };
 static PF magit_q[] = { delwind };
-static PF magit_l[] = { NULL };			/* l -> log menu prefix */
-static PF magit_r[] = { NULL };			/* r -> rebase menu prefix */
+static PF magit_l[] = { magit_menu_log };			/* l -> log menu prefix */
+static PF magit_r[] = { magit_menu_rebase };			/* r -> rebase menu prefix */
 static PF magit_s[] = { magit_stage };
-static PF magit_t[] = { NULL };			/* t -> tag menu prefix */
+static PF magit_t[] = { magit_menu_tag };			/* t -> tag menu prefix */
 static PF magit_u[] = { magit_unstage };
-static PF magit_z[] = { NULL };			/* z -> stash menu prefix */
+static PF magit_z[] = { magit_menu_stash };			/* z -> stash menu prefix */
 
 /*
  * Tag menu: `t` prefixes into this. t=create (at HEAD), k=delete (the tag at
@@ -484,6 +520,194 @@ static struct KEYMAPE (4) magit_commitmenu = {
 	}
 };
 
+/*
+ * ---- Transient menus ----
+ * Descriptors pair each existing submap with key labels (function_name() can't
+ * see our static commands) and optional sticky infixes. magit_transient() pops
+ * the menu, loops while infix keys toggle state, and dispatches the chosen
+ * action key through the submap.
+ */
+
+/* Push infixes: read by magit_push (index 0 = force, 1 = set-upstream). */
+static struct magit_infix push_infixes[] = {
+	{ 'f', "-f --force-with-lease", MAGIT_INFIX_FLAG, 0, "" },
+	{ 'u', "-u --set-upstream",     MAGIT_INFIX_FLAG, 0, "" }
+};
+/* Log infix: -n max-count; mirrored into magit_log_limit on change. */
+static struct magit_infix log_infixes[] = {
+	{ 'n', "-n --max-count", MAGIT_INFIX_VALUE, 0, "100" }
+};
+
+static const struct magit_menu_item pull_items[] = {
+	{ 'p', "pull (merge)" }, { 'r', "pull --rebase" }
+};
+static const struct magit_menu_item push_items[] = {
+	{ 'p', "push to origin" }
+};
+static const struct magit_menu_item reset_items[] = {
+	{ 'h', "reset --hard" }, { 'm', "reset --mixed" }, { 's', "reset --soft" }
+};
+static const struct magit_menu_item worktree_items[] = {
+	{ 'a', "add worktree" }, { 'k', "delete worktree" }
+};
+static const struct magit_menu_item bisect_items[] = {
+	{ 'b', "mark bad" }, { 'g', "mark good" }, { 'r', "reset" }, { 's', "start" }
+};
+static const struct magit_menu_item branch_items[] = {
+	{ 'b', "checkout branch at point" }, { 'c', "create" },
+	{ 'k', "delete" }, { 'm', "rename" }
+};
+static const struct magit_menu_item commit_items[] = {
+	{ 'a', "amend" }, { 'c', "commit" }, { 'e', "extend" }, { 'w', "reword" }
+};
+static const struct magit_menu_item log_items[] = {
+	{ 'f', "log file" }, { 'l', "log all" }
+};
+static const struct magit_menu_item rebase_items[] = {
+	{ 'a', "abort" }, { 'e', "onto a branch" }, { 'i', "interactive" },
+	{ 'r', "continue" }, { 's', "skip" }, { 'u', "onto upstream" }
+};
+static const struct magit_menu_item tag_items[] = {
+	{ 'a', "annotated" }, { 'k', "delete" }, { 't', "create (lightweight)" }
+};
+static const struct magit_menu_item stash_items[] = {
+	{ 'p', "pop" }, { 'z', "push/create" }
+};
+
+#define MENU_N(a) ((int)(sizeof(a) / sizeof((a)[0])))
+static struct magit_menu pull_menu = { "Pull", (KEYMAP *)&magit_pullmenu,
+	pull_items, MENU_N(pull_items), NULL, 0 };
+static struct magit_menu push_menu = { "Push", (KEYMAP *)&magit_pushmenu,
+	push_items, MENU_N(push_items), push_infixes, MENU_N(push_infixes) };
+static struct magit_menu reset_menu = { "Reset", (KEYMAP *)&magit_resetmenu,
+	reset_items, MENU_N(reset_items), NULL, 0 };
+static struct magit_menu worktree_menu = { "Worktree",
+	(KEYMAP *)&magit_worktreemenu, worktree_items, MENU_N(worktree_items),
+	NULL, 0 };
+static struct magit_menu bisect_menu = { "Bisect", (KEYMAP *)&magit_bisectmenu,
+	bisect_items, MENU_N(bisect_items), NULL, 0 };
+static struct magit_menu branch_menu = { "Branch", (KEYMAP *)&magit_branchmenu,
+	branch_items, MENU_N(branch_items), NULL, 0 };
+static struct magit_menu commit_menu = { "Commit", (KEYMAP *)&magit_commitmenu,
+	commit_items, MENU_N(commit_items), NULL, 0 };
+static struct magit_menu log_menu = { "Log", (KEYMAP *)&magit_logmenu,
+	log_items, MENU_N(log_items), log_infixes, MENU_N(log_infixes) };
+static struct magit_menu rebase_menu = { "Rebase", (KEYMAP *)&magit_rebasemenu,
+	rebase_items, MENU_N(rebase_items), NULL, 0 };
+static struct magit_menu tag_menu = { "Tag", (KEYMAP *)&magit_tagmenu,
+	tag_items, MENU_N(tag_items), NULL, 0 };
+static struct magit_menu stash_menu = { "Stash", (KEYMAP *)&magit_stashmenu,
+	stash_items, MENU_N(stash_items), NULL, 0 };
+
+/* Render menu `m` into `bp`: title, infixes (with state), then action keys. */
+static void
+magit_transient_render(struct buffer *bp, struct magit_menu *m)
+{
+	struct magit_infix	*x;
+	int			 i;
+
+	bp->b_flag |= BFIGNDIRTY;
+	(void)bclear(bp);
+	bp->b_flag |= BFREADONLY;
+	(void)addlinef(bp, "%s", (char *)m->title);
+	for (i = 0; i < m->n_infixes; i++) {
+		x = &m->infixes[i];
+		if (x->kind == MAGIT_INFIX_FLAG)
+			(void)addlinef(bp, " %c  %-22s %s", x->key,
+			    (char *)x->arg, x->on ? "(on)" : "(off)");
+		else
+			(void)addlinef(bp, " %c  %-22s %s", x->key,
+			    (char *)x->arg, x->value);
+	}
+	if (m->n_infixes > 0)
+		(void)addlinef(bp, " ");
+	for (i = 0; i < m->n_items; i++)
+		(void)addlinef(bp, " %c  %s", m->items[i].key,
+		    (char *)m->items[i].desc);
+}
+
+/*
+ * Pop menu `m` in a window, loop while infix keys toggle/prompt, then dispatch
+ * the chosen action key through m->map (ESC / C-g cancels). Tears the popup
+ * down and restores focus to the status window before running the action.
+ */
+static int
+magit_transient(struct magit_menu *m, int f, int n)
+{
+	struct buffer	*bp, *stbp;
+	struct mgwin	*wp, *stwp;
+	PF		 fn = NULL;
+	char		 val[64];
+	int		 i, k, handled;
+
+	stwp = curwp;
+	stbp = curbp;
+	if ((bp = bfind("*magit-transient*", TRUE)) == NULL)
+		return (FALSE);
+	if ((wp = popbuf(bp, WNONE)) == NULL)
+		return (FALSE);
+
+	for (;;) {
+		magit_transient_render(bp, m);
+		wp->w_dotp = bfirstlp(bp);
+		wp->w_doto = 0;
+		wp->w_rflag |= WFFULL;
+		update(CMODE);
+		k = getkey(FALSE);
+		if (k == CCHR('G') || k == CCHR('['))	/* C-g / ESC: cancel */
+			break;
+		handled = 0;
+		for (i = 0; i < m->n_infixes; i++) {
+			if (m->infixes[i].key != k)
+				continue;
+			handled = 1;
+			if (m->infixes[i].kind == MAGIT_INFIX_FLAG) {
+				m->infixes[i].on = !m->infixes[i].on;
+			} else {
+				/* Empty input keeps the current value (shown in
+				 * the popup); a non-empty entry replaces it. */
+				val[0] = '\0';
+				if (eread("%s (%s): ", val, sizeof(val),
+				    EFNEW | EFCR, (char *)m->infixes[i].arg,
+				    m->infixes[i].value) != NULL &&
+				    val[0] != '\0')
+					(void)strlcpy(m->infixes[i].value, val,
+					    sizeof(m->infixes[i].value));
+				if (m == &log_menu)
+					magit_log_limit = (int)strtol(
+					    log_infixes[0].value, NULL, 10);
+			}
+			break;
+		}
+		if (handled)
+			continue;
+		fn = doscan(m->map, k, NULL);
+		break;
+	}
+
+	curwp = wp;			/* delete the popup window... */
+	curbp = wp->w_bufp;
+	(void)delwind(f, n);
+	curwp = stwp;			/* ...and restore the status window */
+	curbp = stbp;
+
+	if (fn == NULL)
+		return (ABORT);
+	return ((*fn)(f, n));
+}
+
+static int magit_menu_pull(int f, int n)   { return (magit_transient(&pull_menu, f, n)); }
+static int magit_menu_push(int f, int n)   { return (magit_transient(&push_menu, f, n)); }
+static int magit_menu_reset(int f, int n)  { return (magit_transient(&reset_menu, f, n)); }
+static int magit_menu_worktree(int f, int n){ return (magit_transient(&worktree_menu, f, n)); }
+static int magit_menu_bisect(int f, int n) { return (magit_transient(&bisect_menu, f, n)); }
+static int magit_menu_branch(int f, int n) { return (magit_transient(&branch_menu, f, n)); }
+static int magit_menu_commit(int f, int n) { return (magit_transient(&commit_menu, f, n)); }
+static int magit_menu_log(int f, int n)    { return (magit_transient(&log_menu, f, n)); }
+static int magit_menu_rebase(int f, int n) { return (magit_transient(&rebase_menu, f, n)); }
+static int magit_menu_tag(int f, int n)    { return (magit_transient(&tag_menu, f, n)); }
+static int magit_menu_stash(int f, int n)  { return (magit_transient(&stash_menu, f, n)); }
+
 /* Entries MUST stay in ascending key order -- doscan() relies on it. */
 static struct KEYMAPE (29) magitmap = {
 	29,
@@ -497,29 +721,29 @@ static struct KEYMAPE (29) magitmap = {
 		{ '?', '?', magit_qmark, NULL },		/* ?: key help */
 		{ 'A', 'A', magit_A, NULL },			/* A: cherry-pick */
 		{ 'B', 'B', magit_B, NULL },			/* B: blame file at point */
-		{ 'F', 'F', magit_F, (KEYMAP *)&magit_pullmenu }, /* F: pull menu */
-		{ 'P', 'P', magit_P, (KEYMAP *)&magit_pushmenu }, /* P: push menu */
+		{ 'F', 'F', magit_F, NULL }, /* F: pull menu */
+		{ 'P', 'P', magit_P, NULL }, /* P: push menu */
 		{ 'S', 'S', magit_S, NULL },			/* S: stage all */
 		{ 'U', 'U', magit_U, NULL },			/* U: unstage all */
 		{ 'V', 'V', magit_V, NULL },			/* V: revert */
-		{ 'W', 'W', magit_W, (KEYMAP *)&magit_worktreemenu }, /* W: worktree menu */
-		{ 'X', 'X', magit_X, (KEYMAP *)&magit_resetmenu }, /* X: reset menu */
-		{ 'Z', 'Z', magit_Z, (KEYMAP *)&magit_bisectmenu }, /* Z: bisect menu */
+		{ 'W', 'W', magit_W, NULL }, /* W: worktree menu */
+		{ 'X', 'X', magit_X, NULL }, /* X: reset menu */
+		{ 'Z', 'Z', magit_Z, NULL }, /* Z: bisect menu */
 		{ 'a', 'a', magit_a, NULL },			/* a: apply stash */
-		{ 'b', 'b', magit_b, (KEYMAP *)&magit_branchmenu }, /* b: branch menu */
-		{ 'c', 'c', magit_c, (KEYMAP *)&magit_commitmenu }, /* c: commit menu */
+		{ 'b', 'b', magit_b, NULL }, /* b: branch menu */
+		{ 'c', 'c', magit_c, NULL }, /* c: commit menu */
 		{ 'f', 'f', magit_f, NULL },			/* f: fetch */
 		{ 'g', 'g', magit_g, NULL },
 		{ 'i', 'i', magit_i, NULL },			/* i: gitignore */
 		{ 'k', 'k', magit_k, NULL },
-		{ 'l', 'l', magit_l, (KEYMAP *)&magit_logmenu }, /* l: log menu */
+		{ 'l', 'l', magit_l, NULL }, /* l: log menu */
 		{ 'm', 'm', magit_m, NULL },			/* m: merge */
 		{ 'q', 'q', magit_q, NULL },
-		{ 'r', 'r', magit_r, (KEYMAP *)&magit_rebasemenu }, /* r: rebase menu */
+		{ 'r', 'r', magit_r, NULL }, /* r: rebase menu */
 		{ 's', 's', magit_s, NULL },
-		{ 't', 't', magit_t, (KEYMAP *)&magit_tagmenu }, /* t: tag menu */
+		{ 't', 't', magit_t, NULL }, /* t: tag menu */
 		{ 'u', 'u', magit_u, NULL },
-		{ 'z', 'z', magit_z, (KEYMAP *)&magit_stashmenu } /* z: stash menu */
+		{ 'z', 'z', magit_z, NULL } /* z: stash menu */
 	}
 };
 
@@ -572,6 +796,35 @@ magit_assert_keymap_sorted(void)
 			panic("magit keymap: element has k_base > k_num");
 		if (i > 0 && magitmap.map_element[i - 1].k_num >= e->k_base)
 			panic("magit keymap: elements out of ascending order");
+	}
+}
+
+/*
+ * Each transient descriptor's action keys must (a) be ascending and (b) every
+ * one resolve in its submap -- otherwise a popup would advertise a key that
+ * dispatches to nothing. A drift between the label table and the keymap is a
+ * programming error; fail fast.
+ */
+static void
+magit_assert_menus_consistent(void)
+{
+	static struct magit_menu *const all[] = {
+		&pull_menu, &push_menu, &reset_menu, &worktree_menu, &bisect_menu,
+		&branch_menu, &commit_menu, &log_menu, &rebase_menu, &tag_menu,
+		&stash_menu
+	};
+	size_t	m;
+	int	i;
+
+	for (m = 0; m < sizeof(all) / sizeof(all[0]); m++) {
+		struct magit_menu *mn = all[m];
+
+		for (i = 0; i < mn->n_items; i++) {
+			if (i > 0 && mn->items[i - 1].key >= mn->items[i].key)
+				panic("magit transient: items out of order");
+			if (doscan(mn->map, mn->items[i].key, NULL) == NULL)
+				panic("magit transient: item key not in submap");
+		}
 	}
 }
 
@@ -692,6 +945,7 @@ magit_status(int f, int n)
 
 	if (!initialized) {
 		magit_assert_keymap_sorted();
+		magit_assert_menus_consistent();
 		maps_add((KEYMAP *)&magitmap, "magit-status-mode");
 		/* Register the log/commit-view modes here too: RET on a stash opens
 		 * the commit-view buffer without ever going through `l`. */
@@ -768,10 +1022,11 @@ magit_log_build(struct buffer *bp)
 
 	magit_log_count = 0;
 	if (magit_log_file_path[0] != '\0')
-		(void)mg_magit_log_file_buffer(cwd, magit_log_file_path, 100,
-		    magit_log_emit, bp);
+		(void)mg_magit_log_file_buffer(cwd, magit_log_file_path,
+		    magit_log_limit, magit_log_emit, bp);
 	else
-		(void)mg_magit_log_buffer(cwd, 100, magit_log_emit, bp);
+		(void)mg_magit_log_buffer(cwd, magit_log_limit, magit_log_emit,
+		    bp);
 
 	bp->b_dotp = bfirstlp(bp);
 	bp->b_doto = 0;
@@ -1836,25 +2091,12 @@ magit_do_push(int force, int set_upstream, int f, int n)
 	return (magit_refresh(f, n));
 }
 
-/* P p: push the current branch to origin. */
+/* P p: push the current branch to origin, honoring the -f/-u transient
+ * infixes (force-with-lease / set-upstream). */
 static int
 magit_push(int f, int n)
 {
-	return (magit_do_push(0, 0, f, n));
-}
-
-/* P f: force-push the current branch to origin. */
-static int
-magit_push_force(int f, int n)
-{
-	return (magit_do_push(1, 0, f, n));
-}
-
-/* P u: push the current branch and set it as upstream. */
-static int
-magit_push_upstream(int f, int n)
-{
-	return (magit_do_push(0, 1, f, n));
+	return (magit_do_push(push_infixes[0].on, push_infixes[1].on, f, n));
 }
 
 /* F r: pull --rebase (fetch then rebase onto the upstream). */
