@@ -66,6 +66,13 @@ static int	magit_meta_count;
 static char	magit_expanded[MAGIT_MAX_EXPANDED][PATH_MAX];
 static int	magit_expanded_count;
 
+/* Section titles (count suffix stripped) whose bodies are currently folded. */
+#define MAGIT_MAX_FOLDED 32
+static char	magit_folded[MAGIT_MAX_FOLDED][PATH_MAX];
+static int	magit_folded_count;
+/* While rebuilding: true to suppress the body lines of a folded section. */
+static int	magit_skip;
+
 static PF magit_tab[] = { magit_toggle_expand };
 static PF magit_ret[] = { magit_visit };
 static PF magit_esc[] = { NULL };		/* ESC -> meta prefix */
@@ -195,10 +202,54 @@ magit_assert_keymap_sorted(void)
 	}
 }
 
+/*
+ * A section header's stable key: its text with the trailing " (N)" count
+ * stripped, so folds survive across refreshes whose counts change. Copies into
+ * `out` (size `n`).
+ */
+static void
+magit_section_key(const char *line, char *out, size_t n)
+{
+	const char	*paren = strstr(line, " (");
+
+	if (paren != NULL) {
+		size_t len = (size_t)(paren - line);
+		if (len >= n)
+			len = n - 1;
+		memcpy(out, line, len);
+		out[len] = '\0';
+	} else {
+		(void)strlcpy(out, line, n);
+	}
+}
+
+/* True if the section header `line`'s key is in the folded set. */
+static int
+magit_section_folded(const char *line)
+{
+	char	key[PATH_MAX];
+	int	i;
+
+	magit_section_key(line, key, sizeof(key));
+	for (i = 0; i < magit_folded_count; i++)
+		if (strcmp(magit_folded[i], key) == 0)
+			return (TRUE);
+	return (FALSE);
+}
+
 /* emit callback: record the line's kind/path, then append it to the buffer. */
 static void
 magit_emit(void *ctx, const char *line, int kind, const char *path, int hunk)
 {
+	/*
+	 * A folded section keeps its header but drops its body: on a header,
+	 * (re)arm skipping for that section; otherwise honor the current skip.
+	 */
+	if (kind == MG_LINE_SECTION)
+		magit_skip = magit_section_folded(line);
+	else if (magit_skip)
+		return;
+
 	if (magit_meta_count < MAGIT_MAX_LINES) {
 		magit_meta[magit_meta_count].kind = kind;
 		magit_meta[magit_meta_count].hunk = hunk;
@@ -228,6 +279,7 @@ magit_build(struct buffer *bp)
 	bp->b_flag |= BFREADONLY;
 
 	magit_meta_count = 0;
+	magit_skip = 0;
 	{
 		const char	*exp[MAGIT_MAX_EXPANDED];
 		int		 i;
@@ -368,14 +420,46 @@ magit_region(int *hunk_out, char **path_out, int *first_out, int *last_out)
 	return (TRUE);
 }
 
-/* TAB: expand/collapse the inline diff for the file at point. */
+/* Toggle the fold of the section whose header `line` is (key-based). */
+static int
+magit_toggle_fold(const char *line)
+{
+	char	key[PATH_MAX];
+	int	i;
+
+	magit_section_key(line, key, sizeof(key));
+	for (i = 0; i < magit_folded_count; i++) {
+		if (strcmp(magit_folded[i], key) == 0) {	/* unfold */
+			(void)strlcpy(magit_folded[i],
+			    magit_folded[magit_folded_count - 1], PATH_MAX);
+			magit_folded_count--;
+			return (TRUE);
+		}
+	}
+	if (magit_folded_count < MAGIT_MAX_FOLDED)		/* fold */
+		(void)strlcpy(magit_folded[magit_folded_count++], key, PATH_MAX);
+	return (TRUE);
+}
+
+/* TAB: fold/unfold a section header, or expand/collapse a file's inline diff. */
 static int
 magit_toggle_expand(int f, int n)
 {
 	char	*path = NULL;
-	int	 hunk, kind, i;
+	int	 hunk, kind, i, len;
+	char	 hdr[PATH_MAX];
 
 	kind = magit_at_point(&path, &hunk);
+	/* On a section header, TAB folds/unfolds that whole section. */
+	if (kind == MG_LINE_SECTION) {
+		len = llength(curwp->w_dotp);
+		if (len >= (int)sizeof(hdr))
+			len = (int)sizeof(hdr) - 1;
+		memcpy(hdr, ltext(curwp->w_dotp), len);
+		hdr[len] = '\0';
+		(void)magit_toggle_fold(hdr);
+		return (magit_refresh(f, n));
+	}
 	if (kind != MG_LINE_UNSTAGED && kind != MG_LINE_STAGED &&
 	    kind != MG_LINE_HUNK && kind != MG_LINE_DIFF) {
 		ewprintf("Nothing to expand here");
@@ -445,7 +529,7 @@ magit_help(int f, int n)
 	static const char *const keys[] = {
 		"magit-status key bindings",
 		"",
-		"  TAB      expand / collapse the inline diff",
+		"  TAB      fold a section, or expand/collapse a file diff",
 		"  RET      visit the file at point (other window)",
 		"  M-n/M-p  next / previous section",
 		"  s        stage the file/hunk at point (or marked region)",
