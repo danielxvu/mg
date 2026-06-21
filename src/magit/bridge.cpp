@@ -205,6 +205,13 @@ extern "C" int mg_magit_status_buffer(const char *repo_path,
             MG_LINE_SECTION);
     }
 
+    if (mg::git::bisect_active(repo_path)) {
+        out("");
+        out("Bisecting -- test the checked-out commit, then Z b (bad) / Z g "
+            "(good); Z r resets",
+            MG_LINE_SECTION);
+    }
+
     if (auto st = mg::git::repo_status(repo_path)) {
         using S = mg::magit::status;
         std::vector<const mg::magit::file_status *> untracked, unstaged, staged;
@@ -691,6 +698,58 @@ extern "C" int mg_magit_cherrypick(const char *repo_path, const char *rev)
     if (repo_path == nullptr || rev == nullptr || rev[0] == '\0')
         return 0;
     return mg::git::cherry_pick(repo_path, rev).has_value() ? 1 : 0;
+}
+
+// Copy `msg` into the caller's NUL-terminated `out` (size `outlen`).
+static void fill_msg(const std::string &msg, char *out, int outlen)
+{
+    if (out == nullptr || outlen <= 0)
+        return;
+    int n = static_cast<int>(msg.size());
+    if (n > outlen - 1)
+        n = outlen - 1;
+    for (int i = 0; i < n; ++i)
+        out[i] = msg[i];
+    out[n] = '\0';
+}
+
+extern "C" int mg_magit_bisect_start(const char *repo_path, const char *bad,
+                                     const char *good, char *out, int outlen)
+{
+    if (repo_path == nullptr || bad == nullptr || bad[0] == '\0' ||
+        good == nullptr || good[0] == '\0')
+        return 0;
+    auto r = mg::git::bisect_start(repo_path, bad, good);
+    if (!r)
+        return 0;
+    fill_msg(*r, out, outlen);
+    return 1;
+}
+
+extern "C" int mg_magit_bisect_mark(const char *repo_path, int is_bad,
+                                    char *out, int outlen)
+{
+    if (repo_path == nullptr)
+        return 0;
+    auto r = mg::git::bisect_mark(repo_path, is_bad != 0);
+    if (!r)
+        return 0;
+    fill_msg(*r, out, outlen);
+    return 1;
+}
+
+extern "C" int mg_magit_bisect_reset(const char *repo_path)
+{
+    if (repo_path == nullptr)
+        return 0;
+    return mg::git::bisect_reset(repo_path).has_value() ? 1 : 0;
+}
+
+extern "C" int mg_magit_bisect_active(const char *repo_path)
+{
+    if (repo_path == nullptr)
+        return 0;
+    return mg::git::bisect_active(repo_path) ? 1 : 0;
 }
 
 extern "C" int mg_magit_rebase(const char *repo_path, const char *upstream)

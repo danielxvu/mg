@@ -221,6 +221,18 @@ int mg_magit_worktree_add(const char *repo_path, const char *name,
                           const char *path);
 int mg_magit_worktree_remove(const char *repo_path, const char *name);
 
+/* git bisect, the binary-search bug hunt. start: mark `bad`/`good` revspecs and
+ * check out the first midpoint. mark: record the current (tested) commit as bad
+ * (`is_bad`!=0) or good, then advance. Both fill `out` with the progress / "...
+ * is the first bad commit" line and return 1, else 0. reset: leave bisect and
+ * return to the starting branch. active: 1 while a bisect is in progress. */
+int mg_magit_bisect_start(const char *repo_path, const char *bad,
+                          const char *good, char *out, int outlen);
+int mg_magit_bisect_mark(const char *repo_path, int is_bad, char *out,
+                         int outlen);
+int mg_magit_bisect_reset(const char *repo_path);
+int mg_magit_bisect_active(const char *repo_path);
+
 #ifdef __cplusplus
 }
 #endif

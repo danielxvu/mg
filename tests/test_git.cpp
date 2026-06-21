@@ -1546,6 +1546,41 @@ TEST_CASE("set_note / read_note / remove_note round-trip")
     fs::remove_all(dir);
 }
 
+TEST_CASE("bisect narrows a linear history to the first bad commit")
+{
+    // C1(good) -> C2 -> C3(bad introduced here) -> C4(bad), HEAD on the branch.
+    auto dir = make_repo_for_interactive(); // C1..C4 on "feature"
+    std::string c1 = oid_of(dir, "feature~3");
+    std::string c3 = oid_of(dir, "feature~1");
+
+    auto s = mg::git::bisect_start(dir.string(), "feature", c1); // bad=C4 good=C1
+    REQUIRE(s.has_value());
+    CHECK(mg::git::bisect_active(dir.string()));
+
+    // Drive the search: the regression was introduced at C3, so a commit is
+    // "bad" iff its summary is C3 or C4. Each mark checks out the next midpoint.
+    std::string msg;
+    for (int guard = 0; guard < 10; ++guard) {
+        auto cur = mg::git::read_head(dir.string()); // the detached commit
+        REQUIRE(cur.has_value());
+        bool bad = (cur->summary == "C3" || cur->summary == "C4");
+        auto r = mg::git::bisect_mark(dir.string(), bad);
+        REQUIRE(r.has_value());
+        msg = *r;
+        if (msg.find("first bad commit") != std::string::npos)
+            break;
+    }
+    CHECK(msg.find(c3) != std::string::npos); // culprit is C3
+    CHECK(msg.find("first bad commit") != std::string::npos);
+
+    REQUIRE(mg::git::bisect_reset(dir.string()).has_value());
+    CHECK_FALSE(mg::git::bisect_active(dir.string()));
+    auto h = mg::git::read_head(dir.string());
+    REQUIRE(h.has_value());
+    CHECK(h->branch == "feature"); // back on the starting branch
+    fs::remove_all(dir);
+}
+
 TEST_CASE("blame_file annotates each line with its commit and author")
 {
     auto dir = make_repo_with_commit("C1");

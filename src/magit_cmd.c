@@ -55,6 +55,11 @@ static int	magit_tag_annotate_cmd(int, int);
 static int	magit_tag_delete_cmd(int, int);
 static int	magit_worktree_add_cmd(int, int);
 static int	magit_worktree_delete_cmd(int, int);
+static int	magit_bisect_start_cmd(int, int);
+static int	magit_bisect_good(int, int);
+static int	magit_bisect_bad(int, int);
+static int	magit_bisect_reset_cmd(int, int);
+static int	magit_bisect_report(int, const char *, int, int);
 static int	magit_stage_all(int, int);
 static int	magit_unstage_all(int, int);
 static int	magit_ignore(int, int);
@@ -183,6 +188,7 @@ static PF magit_V[] = { magit_revert };
 static PF magit_f[] = { magit_fetch };
 static PF magit_W[] = { NULL };			/* W -> worktree menu prefix */
 static PF magit_X[] = { NULL };			/* X -> reset menu prefix */
+static PF magit_Z[] = { NULL };			/* Z -> bisect menu prefix */
 
 /* Worktree menu: W a add, W k delete. Entries ascending. */
 static PF worktree_a[] = { magit_worktree_add_cmd };
@@ -212,6 +218,24 @@ static struct KEYMAPE (3) magit_resetmenu = {
 		{ 'h', 'h', reset_h, NULL },	/* X h: hard */
 		{ 'm', 'm', reset_m, NULL },	/* X m: mixed */
 		{ 's', 's', reset_s, NULL }	/* X s: soft */
+	}
+};
+
+/* Bisect menu: Z s start, Z b mark bad, Z g mark good, Z r reset. Ascending. */
+static PF bisect_b[] = { magit_bisect_bad };
+static PF bisect_g[] = { magit_bisect_good };
+static PF bisect_r[] = { magit_bisect_reset_cmd };
+static PF bisect_s[] = { magit_bisect_start_cmd };
+
+static struct KEYMAPE (4) magit_bisectmenu = {
+	4,
+	4,
+	rescan,
+	{
+		{ 'b', 'b', bisect_b, NULL },	/* Z b: mark bad */
+		{ 'g', 'g', bisect_g, NULL },	/* Z g: mark good */
+		{ 'r', 'r', bisect_r, NULL },	/* Z r: reset */
+		{ 's', 's', bisect_s, NULL }	/* Z s: start */
 	}
 };
 static PF magit_a[] = { magit_stash_apply };
@@ -441,9 +465,9 @@ static struct KEYMAPE (4) magit_commitmenu = {
 };
 
 /* Entries MUST stay in ascending key order -- doscan() relies on it. */
-static struct KEYMAPE (28) magitmap = {
-	28,
-	28,
+static struct KEYMAPE (29) magitmap = {
+	29,
+	29,
 	rescan,
 	{
 		{ CCHR('I'), CCHR('I'), magit_tab, NULL },	/* TAB: expand/collapse */
@@ -460,6 +484,7 @@ static struct KEYMAPE (28) magitmap = {
 		{ 'V', 'V', magit_V, NULL },			/* V: revert */
 		{ 'W', 'W', magit_W, (KEYMAP *)&magit_worktreemenu }, /* W: worktree menu */
 		{ 'X', 'X', magit_X, (KEYMAP *)&magit_resetmenu }, /* X: reset menu */
+		{ 'Z', 'Z', magit_Z, (KEYMAP *)&magit_bisectmenu }, /* Z: bisect menu */
 		{ 'a', 'a', magit_a, NULL },			/* a: apply stash */
 		{ 'b', 'b', magit_b, (KEYMAP *)&magit_branchmenu }, /* b: branch menu */
 		{ 'c', 'c', magit_c, (KEYMAP *)&magit_commitmenu }, /* c: commit menu */
@@ -1503,6 +1528,82 @@ magit_worktree_delete_cmd(int f, int n)
 		ewprintf("Worktree delete failed");
 		return (FALSE);
 	}
+	return (magit_refresh(f, n));
+}
+
+/*
+ * Echo a bisect step's progress line (or culprit) and refresh; `ok` is the
+ * bridge call's 1/0 return, `msg` its filled message buffer.
+ */
+static int
+magit_bisect_report(int ok, const char *msg, int f, int n)
+{
+	if (!ok) {
+		ewprintf("Bisect failed");
+		return (FALSE);
+	}
+	ewprintf("%s", msg);
+	return (magit_refresh(f, n));
+}
+
+/*
+ * Z s: start a bisect. Prompts for the bad revision (defaults to HEAD) and a
+ * known-good revision, then checks out the first midpoint to test.
+ */
+static int
+magit_bisect_start_cmd(int f, int n)
+{
+	char	bad[PATH_MAX], good[PATH_MAX], cwd[PATH_MAX], msg[256];
+
+	(void)strlcpy(bad, "HEAD", sizeof(bad));
+	if (eread("Bisect bad (revision): ", bad, sizeof(bad),
+	    EFNEW | EFCR | EFDEF) == NULL || bad[0] == '\0')
+		return (ABORT);
+	if (eread("Bisect good (revision): ", good, sizeof(good),
+	    EFNEW | EFCR) == NULL || good[0] == '\0')
+		return (ABORT);
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	return (magit_bisect_report(
+	    mg_magit_bisect_start(cwd, bad, good, msg, sizeof(msg)), msg, f, n));
+}
+
+/* Z b / Z g: mark the checked-out commit bad / good, then advance the search. */
+static int
+magit_bisect_bad(int f, int n)
+{
+	char	cwd[PATH_MAX], msg[256];
+
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	return (magit_bisect_report(
+	    mg_magit_bisect_mark(cwd, 1, msg, sizeof(msg)), msg, f, n));
+}
+
+static int
+magit_bisect_good(int f, int n)
+{
+	char	cwd[PATH_MAX], msg[256];
+
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	return (magit_bisect_report(
+	    mg_magit_bisect_mark(cwd, 0, msg, sizeof(msg)), msg, f, n));
+}
+
+/* Z r: end the bisect and return to the starting branch. */
+static int
+magit_bisect_reset_cmd(int f, int n)
+{
+	char	cwd[PATH_MAX];
+
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	if (mg_magit_bisect_reset(cwd) != 1) {
+		ewprintf("Bisect reset failed");
+		return (FALSE);
+	}
+	ewprintf("Bisect reset");
 	return (magit_refresh(f, n));
 }
 

@@ -898,6 +898,75 @@ TEST_CASE("mg_magit_rebase_interactive drops a commit via the plan")
     fs::remove_all(dir);
 }
 
+TEST_CASE("mg_magit_bisect finds the first bad commit through the bridge")
+{
+    // a.txt(good) -> b.txt -> c.txt(bug) -> d.txt, all on the default branch.
+    auto dir = make_temp_dir();
+    auto repo = dir.string();
+    auto commit = [&](const char *file, const char *body, const char *msg) {
+        git_libgit2_init();
+        git_repository *r2 = nullptr;
+        if (!std::filesystem::exists(dir / ".git"))
+            REQUIRE(git_repository_init(&r2, repo.c_str(), 0) == 0);
+        else
+            REQUIRE(git_repository_open(&r2, repo.c_str()) == 0);
+        git_config *cfg = nullptr;
+        REQUIRE(git_repository_config(&cfg, r2) == 0);
+        git_config_set_string(cfg, "user.name", "T");
+        git_config_set_string(cfg, "user.email", "t@t");
+        git_config_free(cfg);
+        std::ofstream(dir / file) << body;
+        git_index *idx = nullptr;
+        REQUIRE(git_repository_index(&idx, r2) == 0);
+        REQUIRE(git_index_add_bypath(idx, file) == 0);
+        REQUIRE(git_index_write(idx) == 0);
+        git_oid toid;
+        REQUIRE(git_index_write_tree(&toid, idx) == 0);
+        git_tree *tree = nullptr;
+        REQUIRE(git_tree_lookup(&tree, r2, &toid) == 0);
+        git_signature *sig = nullptr;
+        REQUIRE(git_signature_now(&sig, "T", "t@t") == 0);
+        git_oid head;
+        bool born = git_reference_name_to_id(&head, r2, "HEAD") == 0;
+        git_commit *parent = nullptr;
+        if (born)
+            git_commit_lookup(&parent, r2, &head);
+        const git_commit *parents[1] = {parent};
+        git_oid out;
+        REQUIRE(git_commit_create(&out, r2, "HEAD", sig, sig, nullptr, msg, tree,
+                                  born ? 1 : 0, born ? parents : nullptr) == 0);
+        if (parent)
+            git_commit_free(parent);
+        git_signature_free(sig);
+        git_tree_free(tree);
+        git_index_free(idx);
+        git_repository_free(r2);
+        git_libgit2_shutdown();
+    };
+    commit("a.txt", "a\n", "C1");
+    commit("b.txt", "b\n", "C2");
+    commit("c.txt", "c\n", "C3"); // the bug enters here
+    commit("d.txt", "d\n", "C4");
+
+    char msg[256] = {0};
+    CHECK(mg_magit_bisect_start(repo.c_str(), "HEAD", "HEAD~3", msg, sizeof msg) == 1);
+    CHECK(mg_magit_bisect_active(repo.c_str()) == 1);
+
+    // c.txt present in the working tree == the checked-out commit is bad.
+    for (int guard = 0; guard < 10; ++guard) {
+        int bad = std::filesystem::exists(dir / "c.txt") ? 1 : 0;
+        CHECK(mg_magit_bisect_mark(repo.c_str(), bad, msg, sizeof msg) == 1);
+        if (std::string(msg).find("first bad commit") != std::string::npos)
+            break;
+    }
+    CHECK(std::string(msg).find("first bad commit") != std::string::npos);
+
+    CHECK(mg_magit_bisect_reset(repo.c_str()) == 1);
+    CHECK(mg_magit_bisect_active(repo.c_str()) == 0);
+    CHECK(std::filesystem::exists(dir / "d.txt")); // back at the branch tip
+    fs::remove_all(dir);
+}
+
 TEST_CASE("mg_magit_rebase pauses on conflict; abort clears the in-progress state")
 {
     // feature and master both change a.txt -> rebasing feature conflicts.

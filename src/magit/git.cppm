@@ -354,6 +354,17 @@ std::expected<void, error> ignore_path(std::string repo, std::string pattern);
 std::expected<std::vector<blame_line>, error>
 blame_file(std::string repo, std::string path);
 
+// Bisect (binary search for the first bad commit). start records the bad/good
+// bounds and checks out the midpoint; mark records the current commit good or
+// bad and advances; reset returns to the starting branch. start/mark return a
+// human-readable status ("Bisecting: N left, testing <oid>" or
+// "<oid> is the first bad commit"). No libgit2 API -- implemented over refs.
+std::expected<std::string, error>
+bisect_start(std::string repo, std::string bad, std::string good);
+std::expected<std::string, error> bisect_mark(std::string repo, bool is_bad);
+std::expected<void, error> bisect_reset(std::string repo);
+bool bisect_active(std::string repo);
+
 // The repository's linked worktrees (name + absolute path).
 std::expected<std::vector<worktree_entry>, error> worktrees(std::string repo);
 
@@ -1096,6 +1107,160 @@ std::expected<void, error> remove_worktree(std::string repo, std::string name)
     if (git_worktree_prune(wt.get(), &popts) != 0)
         return std::unexpected(last_error());
     return {};
+}
+
+// ---- bisect (no libgit2 API; state in refs/bisect/* + a start-branch file) --
+namespace {
+const char *const BISECT_BAD = "refs/bisect/bad";
+const char *const BISECT_GOOD = "refs/bisect/good";
+
+std::filesystem::path bisect_start_file(git_repository *repo)
+{
+    return std::filesystem::path(git_repository_path(repo)) / "MG_BISECT_START";
+}
+
+// Detached-checkout `oid`; return its short oid.
+std::expected<std::string, error>
+bisect_checkout(git_repository *repo, const git_oid *oid)
+{
+    git_object *raw = nullptr;
+    if (git_object_lookup(&raw, repo, oid, GIT_OBJECT_COMMIT) != 0)
+        return std::unexpected(last_error());
+    detail::object_ptr obj(raw);
+    git_checkout_options chk;
+    git_checkout_options_init(&chk, GIT_CHECKOUT_OPTIONS_VERSION);
+    chk.checkout_strategy = GIT_CHECKOUT_SAFE;
+    if (git_checkout_tree(repo, obj.get(), &chk) != 0)
+        return std::unexpected(last_error());
+    if (git_repository_set_head_detached(repo, oid) != 0)
+        return std::unexpected(last_error());
+    return detail::short_oid(oid);
+}
+
+// From the current bad/good refs: checkout the midpoint of (good, bad], or
+// report the culprit when one suspect remains.
+std::expected<std::string, error> bisect_step(git_repository *repo)
+{
+    git_oid bad;
+    if (git_reference_name_to_id(&bad, repo, BISECT_BAD) != 0)
+        return std::unexpected(last_error());
+    git_oid good;
+    const bool have_good =
+        git_reference_name_to_id(&good, repo, BISECT_GOOD) == 0;
+
+    git_revwalk *raw_walk = nullptr;
+    if (git_revwalk_new(&raw_walk, repo) != 0)
+        return std::unexpected(last_error());
+    detail::revwalk_ptr walk(raw_walk);
+    git_revwalk_sorting(walk.get(), GIT_SORT_TOPOLOGICAL);
+    git_revwalk_push(walk.get(), &bad);
+    if (have_good)
+        git_revwalk_hide(walk.get(), &good);
+
+    std::vector<git_oid> suspects;
+    git_oid o;
+    while (git_revwalk_next(&o, walk.get()) == 0)
+        suspects.push_back(o);
+
+    if (suspects.size() <= 1) // only `bad` remains -> it is the culprit
+        return std::string(detail::full_oid(&bad)) + " is the first bad commit";
+
+    auto sh = bisect_checkout(repo, &suspects[suspects.size() / 2]);
+    if (!sh)
+        return std::unexpected(sh.error());
+    return "Bisecting: " + std::to_string(suspects.size() - 1) +
+           " revisions left, testing " + *sh;
+}
+} // namespace
+
+std::expected<std::string, error>
+bisect_start(std::string repo, std::string bad, std::string good)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    auto bad_oid = resolve_oid(r.get(), bad);
+    if (!bad_oid)
+        return std::unexpected(bad_oid.error());
+    auto good_oid = resolve_oid(r.get(), good);
+    if (!good_oid)
+        return std::unexpected(good_oid.error());
+
+    // Remember the starting branch so reset can return to it.
+    git_reference *raw_head = nullptr;
+    if (git_repository_head(&raw_head, r.get()) != 0)
+        return std::unexpected(last_error());
+    detail::ref_ptr head(raw_head);
+    const char *branch = git_reference_shorthand(head.get());
+    std::ofstream(bisect_start_file(r.get())) << (branch ? branch : "");
+
+    git_reference *tmp = nullptr;
+    if (git_reference_create(&tmp, r.get(), BISECT_BAD, &*bad_oid, 1,
+                             "bisect bad") != 0)
+        return std::unexpected(last_error());
+    git_reference_free(tmp);
+    if (git_reference_create(&tmp, r.get(), BISECT_GOOD, &*good_oid, 1,
+                             "bisect good") != 0)
+        return std::unexpected(last_error());
+    git_reference_free(tmp);
+
+    return bisect_step(r.get());
+}
+
+std::expected<std::string, error> bisect_mark(std::string repo, bool is_bad)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    git_oid head_oid;
+    if (git_reference_name_to_id(&head_oid, r.get(), "HEAD") != 0)
+        return std::unexpected(last_error());
+    git_reference *tmp = nullptr;
+    if (git_reference_create(&tmp, r.get(), is_bad ? BISECT_BAD : BISECT_GOOD,
+                             &head_oid, 1, "bisect mark") != 0)
+        return std::unexpected(last_error());
+    git_reference_free(tmp);
+    return bisect_step(r.get());
+}
+
+std::expected<void, error> bisect_reset(std::string repo)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    std::string branch;
+    {
+        std::ifstream in(bisect_start_file(r.get()));
+        std::getline(in, branch);
+    }
+    git_reference_remove(r.get(), BISECT_BAD);
+    git_reference_remove(r.get(), BISECT_GOOD);
+    std::error_code ec;
+    std::filesystem::remove(bisect_start_file(r.get()), ec);
+
+    if (!branch.empty())
+        return checkout_branch(repo, branch);
+    return {};
+}
+
+bool bisect_active(std::string repo)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return false;
+    detail::repo_ptr r(raw);
+    git_oid oid;
+    return git_reference_name_to_id(&oid, r.get(), BISECT_BAD) == 0;
 }
 
 std::expected<std::vector<blame_line>, error>
