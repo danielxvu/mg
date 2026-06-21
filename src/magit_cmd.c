@@ -53,6 +53,8 @@ static int	magit_branch_rename(int, int);
 static int	magit_tag_create_cmd(int, int);
 static int	magit_tag_annotate_cmd(int, int);
 static int	magit_tag_delete_cmd(int, int);
+static int	magit_worktree_add_cmd(int, int);
+static int	magit_worktree_delete_cmd(int, int);
 static int	magit_stage_all(int, int);
 static int	magit_unstage_all(int, int);
 static int	magit_ignore(int, int);
@@ -174,7 +176,22 @@ static PF magit_S[] = { magit_stage_all };
 static PF magit_U[] = { magit_unstage_all };
 static PF magit_V[] = { magit_revert };
 static PF magit_f[] = { magit_fetch };
+static PF magit_W[] = { NULL };			/* W -> worktree menu prefix */
 static PF magit_X[] = { NULL };			/* X -> reset menu prefix */
+
+/* Worktree menu: W a add, W k delete. Entries ascending. */
+static PF worktree_a[] = { magit_worktree_add_cmd };
+static PF worktree_k[] = { magit_worktree_delete_cmd };
+
+static struct KEYMAPE (2) magit_worktreemenu = {
+	2,
+	2,
+	rescan,
+	{
+		{ 'a', 'a', worktree_a, NULL },	/* W a: add */
+		{ 'k', 'k', worktree_k, NULL }	/* W k: delete */
+	}
+};
 static PF magit_m[] = { magit_merge };
 
 /* Reset menu: X h hard / X m mixed / X s soft (each prompts for a revision). */
@@ -417,9 +434,9 @@ static struct KEYMAPE (4) magit_commitmenu = {
 };
 
 /* Entries MUST stay in ascending key order -- doscan() relies on it. */
-static struct KEYMAPE (26) magitmap = {
-	26,
-	26,
+static struct KEYMAPE (27) magitmap = {
+	27,
+	27,
 	rescan,
 	{
 		{ CCHR('I'), CCHR('I'), magit_tab, NULL },	/* TAB: expand/collapse */
@@ -433,6 +450,7 @@ static struct KEYMAPE (26) magitmap = {
 		{ 'S', 'S', magit_S, NULL },			/* S: stage all */
 		{ 'U', 'U', magit_U, NULL },			/* U: unstage all */
 		{ 'V', 'V', magit_V, NULL },			/* V: revert */
+		{ 'W', 'W', magit_W, (KEYMAP *)&magit_worktreemenu }, /* W: worktree menu */
 		{ 'X', 'X', magit_X, (KEYMAP *)&magit_resetmenu }, /* X: reset menu */
 		{ 'a', 'a', magit_a, NULL },			/* a: apply stash */
 		{ 'b', 'b', magit_b, (KEYMAP *)&magit_branchmenu }, /* b: branch menu */
@@ -1085,6 +1103,7 @@ magit_help(int f, int n)
 		"  A        cherry-pick (commit at point in the log, else prompt)",
 		"  b b/c/k/m  branch: checkout / create / delete / rename",
 		"  t t/a/k  tag: lightweight / annotated / delete",
+		"  W a/k    worktree: add / delete",
 		"  c c/a/e/w  commit / amend / extend / reword",
 		"  z z/p    stash: push / pop",
 		"  l        log buffer (RET diff, A cherry-pick, V revert, T note)",
@@ -1386,6 +1405,53 @@ magit_tag_delete_cmd(int f, int n)
 		return (FALSE);
 	if (mg_magit_tag_delete(cwd, name) != 1) {
 		ewprintf("Tag delete failed");
+		return (FALSE);
+	}
+	return (magit_refresh(f, n));
+}
+
+/* W a: add a worktree (prompts for a name + path). */
+static int
+magit_worktree_add_cmd(int f, int n)
+{
+	char	name[PATH_MAX], path[PATH_MAX], cwd[PATH_MAX];
+
+	if (eread("Worktree name: ", name, sizeof(name), EFNEW | EFCR) == NULL ||
+	    name[0] == '\0')
+		return (ABORT);
+	if (eread("Worktree path: ", path, sizeof(path), EFNEW | EFCR) == NULL ||
+	    path[0] == '\0')
+		return (ABORT);
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	if (mg_magit_worktree_add(cwd, name, path) != 1) {
+		ewprintf("Worktree add failed");
+		return (FALSE);
+	}
+	return (magit_refresh(f, n));
+}
+
+/* W k: delete a worktree (the one at point, else prompt; confirms). */
+static int
+magit_worktree_delete_cmd(int f, int n)
+{
+	char	*path = NULL;
+	char	 name[PATH_MAX], prompt[PATH_MAX + 32], cwd[PATH_MAX];
+	int	 kind, hunk;
+
+	kind = magit_at_point(&path, &hunk);
+	if (kind == MG_LINE_WORKTREE)
+		(void)strlcpy(name, path, sizeof(name));
+	else if (eread("Delete worktree: ", name, sizeof(name), EFNEW | EFCR) ==
+	    NULL || name[0] == '\0')
+		return (ABORT);
+	(void)snprintf(prompt, sizeof(prompt), "Delete worktree %s", name);
+	if (eyesno(prompt) != TRUE)
+		return (FALSE);
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	if (mg_magit_worktree_remove(cwd, name) != 1) {
+		ewprintf("Worktree delete failed");
 		return (FALSE);
 	}
 	return (magit_refresh(f, n));

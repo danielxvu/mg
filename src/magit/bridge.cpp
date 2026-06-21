@@ -293,6 +293,13 @@ extern "C" int mg_magit_status_buffer(const char *repo_path,
             out("  " + t, MG_LINE_TAG, t.c_str());
     }
 
+    if (auto wts = mg::git::worktrees(repo_path); wts && !wts->empty()) {
+        out("");
+        out("Worktrees (" + std::to_string(wts->size()) + ")", MG_LINE_SECTION);
+        for (const auto &w : *wts)
+            out("  " + w.name + "  " + w.path, MG_LINE_WORKTREE, w.name.c_str());
+    }
+
     return n;
 }
 
@@ -640,6 +647,22 @@ extern "C" int mg_magit_note_remove(const char *repo_path, const char *rev)
     if (repo_path == nullptr || rev == nullptr)
         return 0;
     return mg::git::remove_note(repo_path, rev).has_value() ? 1 : 0;
+}
+
+extern "C" int mg_magit_worktree_add(const char *repo_path, const char *name,
+                                     const char *path)
+{
+    if (repo_path == nullptr || name == nullptr || name[0] == '\0' ||
+        path == nullptr || path[0] == '\0')
+        return 0;
+    return mg::git::add_worktree(repo_path, name, path).has_value() ? 1 : 0;
+}
+
+extern "C" int mg_magit_worktree_remove(const char *repo_path, const char *name)
+{
+    if (repo_path == nullptr || name == nullptr || name[0] == '\0')
+        return 0;
+    return mg::git::remove_worktree(repo_path, name).has_value() ? 1 : 0;
 }
 
 extern "C" int mg_magit_cherrypick(const char *repo_path, const char *rev)

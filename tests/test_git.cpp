@@ -1472,6 +1472,32 @@ TEST_CASE("create_tag / tags / delete_tag round-trip")
     fs::remove_all(dir);
 }
 
+TEST_CASE("add_worktree / worktrees / remove_worktree round-trip")
+{
+    auto dir = make_repo_with_commit("base");
+    auto wtpath = make_temp_dir();
+    fs::remove(wtpath); // git_worktree_add wants the path not to exist yet
+
+    auto none = mg::git::worktrees(dir.string());
+    REQUIRE(none.has_value());
+    CHECK(none->empty());
+
+    REQUIRE(mg::git::add_worktree(dir.string(), "wt1", wtpath.string())
+                .has_value());
+    CHECK(fs::exists(wtpath));
+    auto wts = mg::git::worktrees(dir.string());
+    REQUIRE(wts.has_value());
+    REQUIRE(wts->size() == 1);
+    CHECK((*wts)[0].name == "wt1");
+
+    REQUIRE(mg::git::remove_worktree(dir.string(), "wt1").has_value());
+    CHECK_FALSE(fs::exists(wtpath)); // working-tree dir removed
+    auto after = mg::git::worktrees(dir.string());
+    REQUIRE(after.has_value());
+    CHECK(after->empty());
+    fs::remove_all(dir);
+}
+
 TEST_CASE("set_note / read_note / remove_note round-trip")
 {
     auto dir = make_repo_with_commit("base");

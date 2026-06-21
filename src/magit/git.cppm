@@ -155,6 +155,11 @@ struct branch_entry {
     bool is_head;            // true for the currently checked-out branch
 };
 
+struct worktree_entry {
+    std::string name;
+    std::string path;
+};
+
 struct upstream_info {
     bool has_upstream;       // false when the current branch tracks nothing
     std::string name;        // upstream shorthand, e.g. "origin/master"
@@ -335,6 +340,16 @@ std::expected<std::vector<std::string>, error> tags(std::string repo);
 
 // Append `pattern` as a line to the repository's top-level .gitignore.
 std::expected<void, error> ignore_path(std::string repo, std::string pattern);
+
+// The repository's linked worktrees (name + absolute path).
+std::expected<std::vector<worktree_entry>, error> worktrees(std::string repo);
+
+// Add a worktree `name` checked out at `path` (creates a branch `name`).
+std::expected<void, error>
+add_worktree(std::string repo, std::string name, std::string path);
+
+// Remove worktree `name`: prune its admin files and its working-tree dir.
+std::expected<void, error> remove_worktree(std::string repo, std::string name);
 
 // Set / remove / read the (default refs/notes/commits) note on commit `rev`.
 // set overwrites any existing note; read returns "" when there is none.
@@ -996,6 +1011,78 @@ std::expected<std::string, error> read_note(std::string repo, std::string rev)
                                                              git_note_free);
     const char *m = git_note_message(note.get());
     return std::string(m != nullptr ? m : "");
+}
+
+std::expected<std::vector<worktree_entry>, error> worktrees(std::string repo)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    git_strarray names = {nullptr, 0};
+    if (git_worktree_list(&names, r.get()) != 0)
+        return std::unexpected(last_error());
+    std::vector<worktree_entry> out;
+    for (std::size_t i = 0; i < names.count; ++i) {
+        worktree_entry e{names.strings[i], ""};
+        git_worktree *raw_wt = nullptr;
+        if (git_worktree_lookup(&raw_wt, r.get(), names.strings[i]) == 0) {
+            std::unique_ptr<git_worktree, decltype(&git_worktree_free)> wt(
+                raw_wt, git_worktree_free);
+            if (const char *p = git_worktree_path(wt.get()))
+                e.path = p;
+        }
+        out.push_back(std::move(e));
+    }
+    git_strarray_dispose(&names);
+    return out;
+}
+
+std::expected<void, error>
+add_worktree(std::string repo, std::string name, std::string path)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    git_worktree_add_options opts;
+    git_worktree_add_options_init(&opts, GIT_WORKTREE_ADD_OPTIONS_VERSION);
+    git_worktree *raw_wt = nullptr;
+    if (git_worktree_add(&raw_wt, r.get(), name.c_str(), path.c_str(), &opts) != 0)
+        return std::unexpected(last_error());
+    git_worktree_free(raw_wt);
+    return {};
+}
+
+std::expected<void, error> remove_worktree(std::string repo, std::string name)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    git_worktree *raw_wt = nullptr;
+    if (git_worktree_lookup(&raw_wt, r.get(), name.c_str()) != 0)
+        return std::unexpected(last_error());
+    std::unique_ptr<git_worktree, decltype(&git_worktree_free)> wt(
+        raw_wt, git_worktree_free);
+
+    // Remove the working-tree directory first, then prune the admin files.
+    if (const char *p = git_worktree_path(wt.get())) {
+        std::error_code ec;
+        std::filesystem::remove_all(std::filesystem::path(p), ec);
+    }
+    git_worktree_prune_options popts;
+    git_worktree_prune_options_init(&popts, GIT_WORKTREE_PRUNE_OPTIONS_VERSION);
+    popts.flags = GIT_WORKTREE_PRUNE_VALID | GIT_WORKTREE_PRUNE_WORKING_TREE;
+    if (git_worktree_prune(wt.get(), &popts) != 0)
+        return std::unexpected(last_error());
+    return {};
 }
 
 std::expected<void, error> ignore_path(std::string repo, std::string pattern)

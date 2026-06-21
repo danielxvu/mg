@@ -41,6 +41,7 @@ int mg_magit_modeline(char *buf, size_t buflen);
 #define MG_LINE_SECTION   8   /* a section header line (for M-n/M-p nav) */
 #define MG_LINE_COMMIT    9   /* a commit line in the log (path = full oid) */
 #define MG_LINE_TAG       10  /* a tag entry (path = tag name) */
+#define MG_LINE_WORKTREE  11  /* a worktree entry (path = worktree name) */
 
 /* Compose the *magit-status* buffer for the repo at `repo_path`, calling
  * `emit(ctx, line, kind, path, hunk)` once per line. Files whose path is in
@@ -206,6 +207,12 @@ int mg_magit_ignore(const char *repo_path, const char *pattern);
 int mg_magit_note_set(const char *repo_path, const char *rev,
                       const char *message);
 int mg_magit_note_remove(const char *repo_path, const char *rev);
+
+/* Add a worktree `name` at `path` / remove worktree `name` (prunes admin files
+ * and deletes its working-tree directory). 1 ok, 0 fail. */
+int mg_magit_worktree_add(const char *repo_path, const char *name,
+                          const char *path);
+int mg_magit_worktree_remove(const char *repo_path, const char *name);
 
 #ifdef __cplusplus
 }
