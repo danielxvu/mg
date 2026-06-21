@@ -475,6 +475,36 @@ extern "C" int mg_magit_checkout(const char *repo_path, const char *name)
     return mg::git::checkout_branch(repo_path, name).has_value() ? 1 : 0;
 }
 
+extern "C" int mg_magit_fetch(const char *repo_path, const char *remote)
+{
+    if (repo_path == nullptr)
+        return 0;
+    return mg::git::fetch_remote(repo_path, remote ? remote : "origin")
+                   .has_value()
+               ? 1
+               : 0;
+}
+
+extern "C" int mg_magit_push(const char *repo_path, const char *remote)
+{
+    if (repo_path == nullptr)
+        return 0;
+    return mg::git::push_remote(repo_path, remote ? remote : "origin")
+                   .has_value()
+               ? 1
+               : 0;
+}
+
+extern "C" int mg_magit_pull(const char *repo_path, const char *remote)
+{
+    if (repo_path == nullptr)
+        return 0;
+    return mg::git::pull_remote(repo_path, remote ? remote : "origin")
+                   .has_value()
+               ? 1
+               : 0;
+}
+
 extern "C" int mg_magit_reset(const char *repo_path, const char *rev, int mode)
 {
     if (repo_path == nullptr || rev == nullptr || mode < 0 || mode > 2)

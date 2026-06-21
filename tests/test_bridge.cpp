@@ -611,6 +611,48 @@ TEST_CASE("mg_magit_stash_push then stash_pop round-trip through the bridge")
     fs::remove_all(dir);
 }
 
+TEST_CASE("mg_magit_push and mg_magit_pull act through the bridge")
+{
+    // Bare remote + working repo with origin configured + branch pushed.
+    auto bare = make_temp_dir();
+    git_libgit2_init();
+    git_repository *braw = nullptr;
+    REQUIRE(git_repository_init(&braw, bare.string().c_str(), 1) == 0);
+    git_repository_free(braw);
+    git_libgit2_shutdown();
+
+    auto work = make_repo_one_hunk(); // committed f.txt + a dirty change
+    auto wp = work.string();
+    git_libgit2_init();
+    git_repository *wraw = nullptr;
+    REQUIRE(git_repository_open(&wraw, wp.c_str()) == 0);
+    git_reference *head = nullptr;
+    REQUIRE(git_repository_head(&head, wraw) == 0);
+    std::string branch = git_reference_shorthand(head);
+    git_reference_free(head);
+    git_remote *remote = nullptr;
+    REQUIRE(git_remote_create(&remote, wraw, "origin", bare.string().c_str()) == 0);
+    git_remote_free(remote);
+    git_repository_free(wraw);
+    git_libgit2_shutdown();
+
+    // Push the current branch to the bare remote, then a no-op pull (no new
+    // upstream commits) should still succeed (already up to date).
+    CHECK(mg_magit_push(wp.c_str(), "origin") == 1);
+    CHECK(mg_magit_pull(wp.c_str(), "origin") == 1);
+
+    // The bare repo now has the branch.
+    git_libgit2_init();
+    git_repository *b2 = nullptr;
+    REQUIRE(git_repository_open(&b2, bare.string().c_str()) == 0);
+    git_oid tip;
+    CHECK(git_reference_name_to_id(&tip, b2, ("refs/heads/" + branch).c_str()) == 0);
+    git_repository_free(b2);
+    git_libgit2_shutdown();
+    fs::remove_all(work);
+    fs::remove_all(bare);
+}
+
 TEST_CASE("mg_magit_revert and mg_magit_merge act through the bridge")
 {
     // make_repo_one_hunk: committed f.txt with a dirty working-tree change.

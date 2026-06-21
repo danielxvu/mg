@@ -114,6 +114,13 @@ int mg_magit_stash_pop(const char *repo_path, int index);
  * 1 on success, 0 on failure (e.g. conflicting local changes). */
 int mg_magit_checkout(const char *repo_path, const char *name);
 
+/* Fetch / push (current branch) / pull (fetch + merge) against `remote`
+ * (NULL -> "origin"). Return 1 on success, 0 on failure. Authenticated remotes
+ * are not yet supported (no credentials callback). */
+int mg_magit_fetch(const char *repo_path, const char *remote);
+int mg_magit_push(const char *repo_path, const char *remote);
+int mg_magit_pull(const char *repo_path, const char *remote);
+
 /* Reset HEAD to `rev` (mode 0=soft, 1=mixed, 2=hard) / revert commit `rev`
  * (records the inverse on HEAD) / merge local branch `name` into HEAD (ff or a
  * merge commit; conflicts abort). Return 1 on success, 0 on failure. */
