@@ -233,6 +233,10 @@ std::expected<void, error> merge_branch(std::string repo, std::string name);
 // rebase state is left in place for continue/skip/abort).
 enum class rebase_result { done, conflicts };
 
+// Cherry-pick commit `rev` onto HEAD as a new commit (keeping its author +
+// message). In-memory, so a conflict leaves the repo untouched and errors.
+std::expected<void, error> cherry_pick(std::string repo, std::string rev);
+
 // Rebase the current branch onto `upstream` (a branch name / revspec): replay
 // HEAD's commits since the merge-base on top of upstream. Pauses (leaving the
 // conflict in the tree + the rebase in progress) on the first conflict.
@@ -1106,6 +1110,69 @@ rebase_drive(git_repository *repo, git_rebase *rebase, git_signature *sig,
     if (git_rebase_finish(rebase, sig) != 0)
         return std::unexpected(last_error());
     return rebase_result::done;
+}
+
+std::expected<void, error> cherry_pick(std::string repo, std::string rev)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    detail::sig_ptr sig = default_signature(r.get());
+    if (!sig)
+        return std::unexpected(last_error());
+
+    // The commit to pick.
+    git_object *raw_obj = nullptr;
+    if (git_revparse_single(&raw_obj, r.get(), rev.c_str()) != 0)
+        return std::unexpected(last_error());
+    detail::object_ptr obj(raw_obj);
+    git_commit *raw_pick = nullptr;
+    if (git_commit_lookup(&raw_pick, r.get(), git_object_id(obj.get())) != 0)
+        return std::unexpected(last_error());
+    detail::commit_ptr pick(raw_pick);
+
+    // Our side = HEAD.
+    git_oid head_oid;
+    if (git_reference_name_to_id(&head_oid, r.get(), "HEAD") != 0)
+        return std::unexpected(last_error());
+    git_commit *raw_head = nullptr;
+    if (git_commit_lookup(&raw_head, r.get(), &head_oid) != 0)
+        return std::unexpected(last_error());
+    detail::commit_ptr head(raw_head);
+
+    git_index *raw_idx = nullptr;
+    if (git_cherrypick_commit(&raw_idx, r.get(), pick.get(), head.get(), 0,
+                              nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::index_ptr idx(raw_idx);
+    if (git_index_has_conflicts(idx.get()))
+        return std::unexpected(error{0, "cherry-pick conflict"});
+
+    git_oid tree_oid;
+    if (git_index_write_tree_to(&tree_oid, idx.get(), r.get()) != 0)
+        return std::unexpected(last_error());
+    git_tree *raw_tree = nullptr;
+    if (git_tree_lookup(&raw_tree, r.get(), &tree_oid) != 0)
+        return std::unexpected(last_error());
+    detail::tree_ptr tree(raw_tree);
+
+    const git_commit *parents[1] = {head.get()};
+    git_oid new_oid;
+    if (git_commit_create(&new_oid, r.get(), "HEAD", git_commit_author(pick.get()),
+                          sig.get(), nullptr, git_commit_message(pick.get()),
+                          tree.get(), 1, parents) != 0)
+        return std::unexpected(last_error());
+
+    git_checkout_options chk;
+    git_checkout_options_init(&chk, GIT_CHECKOUT_OPTIONS_VERSION);
+    chk.checkout_strategy = GIT_CHECKOUT_FORCE;
+    if (git_checkout_tree(r.get(), reinterpret_cast<git_object *>(tree.get()),
+                          &chk) != 0)
+        return std::unexpected(last_error());
+    return {};
 }
 
 std::expected<rebase_result, error>

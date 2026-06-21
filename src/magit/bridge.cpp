@@ -575,6 +575,13 @@ static int rebase_code(
     return *r == mg::git::rebase_result::conflicts ? 2 : 1;
 }
 
+extern "C" int mg_magit_cherrypick(const char *repo_path, const char *rev)
+{
+    if (repo_path == nullptr || rev == nullptr || rev[0] == '\0')
+        return 0;
+    return mg::git::cherry_pick(repo_path, rev).has_value() ? 1 : 0;
+}
+
 extern "C" int mg_magit_rebase(const char *repo_path, const char *upstream)
 {
     if (repo_path == nullptr || upstream == nullptr || upstream[0] == '\0')

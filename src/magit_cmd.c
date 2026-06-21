@@ -54,7 +54,9 @@ static int	magit_stage_all(int, int);
 static int	magit_unstage_all(int, int);
 static int	magit_region(int *, char **, int *, int *);
 static int	magit_line_index(void);
+static const char *magit_log_oid_at_point(void);
 static int	magit_log(int, int);
+static int	magit_cherrypick(int, int);
 static int	magit_log_visit(int, int);
 static int	magit_log_refresh(int, int);
 static int	magit_log_revert(int, int);
@@ -126,6 +128,7 @@ static PF magit_tab[] = { magit_toggle_expand };
 static PF magit_ret[] = { magit_visit };
 static PF magit_esc[] = { NULL };		/* ESC -> meta prefix */
 static PF magit_qmark[] = { magit_help };
+static PF magit_A[] = { magit_cherrypick };
 static PF magit_F[] = { magit_pull };
 static PF magit_P[] = { magit_push };
 static PF magit_S[] = { magit_stage_all };
@@ -167,16 +170,18 @@ static PF magit_z[] = { NULL };			/* z -> stash menu prefix */
  * g refreshes, q closes.
  */
 static PF maglog_ret[] = { magit_log_visit };
+static PF maglog_A[] = { magit_cherrypick };
 static PF maglog_V[] = { magit_log_revert };
 static PF maglog_g[] = { magit_log_refresh };
 static PF maglog_q[] = { delwind };
 
-static struct KEYMAPE (4) maglogmap = {
-	4,
-	4,
+static struct KEYMAPE (5) maglogmap = {
+	5,
+	5,
 	rescan,
 	{
 		{ CCHR('M'), CCHR('M'), maglog_ret, NULL },	/* RET: show commit */
+		{ 'A', 'A', maglog_A, NULL },			/* A: cherry-pick at point */
 		{ 'V', 'V', maglog_V, NULL },			/* V: revert commit */
 		{ 'g', 'g', maglog_g, NULL },			/* g: refresh */
 		{ 'q', 'q', maglog_q, NULL }			/* q: close */
@@ -350,9 +355,9 @@ static struct KEYMAPE (4) magit_commitmenu = {
 };
 
 /* Entries MUST stay in ascending key order -- doscan() relies on it. */
-static struct KEYMAPE (23) magitmap = {
-	23,
-	23,
+static struct KEYMAPE (24) magitmap = {
+	24,
+	24,
 	rescan,
 	{
 		{ CCHR('I'), CCHR('I'), magit_tab, NULL },	/* TAB: expand/collapse */
@@ -360,6 +365,7 @@ static struct KEYMAPE (23) magitmap = {
 		{ CCHR('['), CCHR('['), magit_esc,		/* ESC: meta prefix */
 		    (KEYMAP *)&magit_metamap },
 		{ '?', '?', magit_qmark, NULL },		/* ?: key help */
+		{ 'A', 'A', magit_A, NULL },			/* A: cherry-pick */
 		{ 'F', 'F', magit_F, NULL },			/* F: pull */
 		{ 'P', 'P', magit_P, NULL },			/* P: push */
 		{ 'S', 'S', magit_S, NULL },			/* S: stage all */
@@ -737,6 +743,35 @@ magit_log_visit(int f, int n)
 	return (magit_show_rev(oid));
 }
 
+/*
+ * A: cherry-pick a commit onto HEAD. In *magit-log* it picks the commit at
+ * point; elsewhere it prompts for a revision.
+ */
+static int
+magit_cherrypick(int f, int n)
+{
+	struct buffer	*logbp;
+	const char	*oid = NULL;
+	char		 rev[PATH_MAX], cwd[PATH_MAX];
+
+	logbp = bfind("*magit-log*", FALSE);
+	if (logbp != NULL && curbp == logbp)
+		oid = magit_log_oid_at_point();
+	if (oid != NULL)
+		(void)strlcpy(rev, oid, sizeof(rev));
+	else if (eread("Cherry-pick: ", rev, sizeof(rev), EFNEW | EFCR) == NULL ||
+	    rev[0] == '\0')
+		return (ABORT);
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	if (mg_magit_cherrypick(cwd, rev) != 1) {
+		ewprintf("Cherry-pick failed (conflict or bad revision)");
+		return (FALSE);
+	}
+	ewprintf("Cherry-picked %.8s", rev);
+	return (magit_refresh(f, n));
+}
+
 /* V in *magit-log*: revert the commit at point (records the inverse on HEAD). */
 static int
 magit_log_revert(int f, int n)
@@ -955,6 +990,7 @@ magit_help(int f, int n)
 		"  S / U    stage all / unstage all",
 		"  k        discard changes / region / drop the stash at point",
 		"  a        apply the stash at point",
+		"  A        cherry-pick (commit at point in the log, else prompt)",
 		"  b b/c/k/m  branch: checkout / create / delete / rename",
 		"  c c/a/e/w  commit / amend / extend / reword",
 		"  z z/p    stash: push / pop",

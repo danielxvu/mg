@@ -622,6 +622,35 @@ TEST_CASE("rebase_onto replays the branch's commits on top of upstream")
     fs::remove_all(dir);
 }
 
+// HEAD on the default branch (C1); branch "other" = C1 -> adds e.txt. For
+// cherry-picking "other"'s commit onto the default branch.
+fs::path make_repo_cherrypick(std::string &base_branch_out)
+{
+    auto dir = make_repo_with_commit("C1"); // a.txt, HEAD on the default branch
+    auto h = mg::git::read_head(dir.string());
+    REQUIRE(h.has_value());
+    base_branch_out = h->branch;
+
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_open(&repo, dir.string().c_str()) == 0);
+    git_oid c1;
+    REQUIRE(git_reference_name_to_id(&c1, repo, "HEAD") == 0);
+    git_commit *base = nullptr;
+    REQUIRE(git_commit_lookup(&base, repo, &c1) == 0);
+    git_reference *other = nullptr;
+    REQUIRE(git_branch_create(&other, repo, "other", base, 0) == 0);
+    git_reference_free(other);
+    git_commit_free(base);
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+
+    REQUIRE(mg::git::checkout_branch(dir.string(), "other").has_value());
+    commit_file(dir, "e.txt", "E\n", "add e on other");
+    REQUIRE(mg::git::checkout_branch(dir.string(), base_branch_out).has_value());
+    return dir;
+}
+
 // Resolve a revspec (e.g. "feature~2") to its full oid -- topologically exact,
 // unlike recent_commits' time order (the fixture's commits share a timestamp).
 static std::string oid_of(const fs::path &dir, const char *rev)
@@ -637,6 +666,30 @@ static std::string oid_of(const fs::path &dir, const char *rev)
     git_repository_free(repo);
     git_libgit2_shutdown();
     return std::string(buf);
+}
+
+TEST_CASE("cherry_pick applies another branch's commit onto HEAD")
+{
+    std::string base;
+    auto dir = make_repo_cherrypick(base); // HEAD=base(C1); other adds e.txt
+
+    REQUIRE_FALSE(fs::exists(dir / "e.txt")); // not on base yet
+    REQUIRE(mg::git::cherry_pick(dir.string(), "other").has_value());
+
+    CHECK(fs::exists(dir / "e.txt")); // picked onto base
+    auto h = mg::git::read_head(dir.string());
+    REQUIRE(h.has_value());
+    CHECK(h->branch == base);
+    CHECK(h->summary == "add e on other");
+    fs::remove_all(dir);
+}
+
+TEST_CASE("cherry_pick fails on a bad revision")
+{
+    std::string base;
+    auto dir = make_repo_cherrypick(base);
+    CHECK_FALSE(mg::git::cherry_pick(dir.string(), "no-such-rev").has_value());
+    fs::remove_all(dir);
 }
 
 TEST_CASE("commits_range lists commits after onto, oldest first")

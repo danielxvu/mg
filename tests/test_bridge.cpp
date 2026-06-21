@@ -717,6 +717,78 @@ TEST_CASE("mg_magit_rebase replays the current branch onto upstream")
     fs::remove_all(dir);
 }
 
+TEST_CASE("mg_magit_cherrypick applies another branch's commit onto HEAD")
+{
+    auto dir = make_temp_dir();
+    auto repo = dir.string();
+    git_libgit2_init();
+    git_repository *r0 = nullptr;
+    REQUIRE(git_repository_init(&r0, repo.c_str(), 0) == 0);
+    git_config *cfg = nullptr;
+    REQUIRE(git_repository_config(&cfg, r0) == 0);
+    git_config_set_string(cfg, "user.name", "T");
+    git_config_set_string(cfg, "user.email", "t@t");
+    git_config_free(cfg);
+    git_repository_free(r0);
+    git_libgit2_shutdown();
+
+    auto commit = [&](const char *file, const char *body, const char *msg) {
+        git_libgit2_init();
+        git_repository *repo2 = nullptr;
+        REQUIRE(git_repository_open(&repo2, repo.c_str()) == 0);
+        std::ofstream(dir / file) << body;
+        git_index *idx = nullptr;
+        REQUIRE(git_repository_index(&idx, repo2) == 0);
+        REQUIRE(git_index_add_bypath(idx, file) == 0);
+        REQUIRE(git_index_write(idx) == 0);
+        git_oid toid;
+        REQUIRE(git_index_write_tree(&toid, idx) == 0);
+        git_tree *tree = nullptr;
+        REQUIRE(git_tree_lookup(&tree, repo2, &toid) == 0);
+        git_signature *sig = nullptr;
+        REQUIRE(git_signature_now(&sig, "T", "t@t") == 0);
+        git_oid head;
+        bool born = git_reference_name_to_id(&head, repo2, "HEAD") == 0;
+        git_commit *parent = nullptr;
+        if (born)
+            git_commit_lookup(&parent, repo2, &head);
+        const git_commit *parents[1] = {parent};
+        git_oid out;
+        REQUIRE(git_commit_create(&out, repo2, "HEAD", sig, sig, nullptr, msg,
+                                  tree, born ? 1 : 0, born ? parents : nullptr) == 0);
+        if (parent)
+            git_commit_free(parent);
+        git_signature_free(sig);
+        git_tree_free(tree);
+        git_index_free(idx);
+        git_repository_free(repo2);
+        git_libgit2_shutdown();
+    };
+
+    commit("a.txt", "a\n", "C1");
+    // The default branch name (libgit2 may use master or main).
+    git_libgit2_init();
+    git_repository *rb = nullptr;
+    REQUIRE(git_repository_open(&rb, repo.c_str()) == 0);
+    git_reference *hr = nullptr;
+    REQUIRE(git_repository_head(&hr, rb) == 0);
+    std::string base = git_reference_shorthand(hr);
+    git_reference_free(hr);
+    git_repository_free(rb);
+    git_libgit2_shutdown();
+
+    REQUIRE(mg_magit_branch_create(repo.c_str(), "other") == 1);
+    REQUIRE(mg_magit_checkout(repo.c_str(), "other") == 1);
+    commit("e.txt", "E\n", "add e on other");
+    REQUIRE(mg_magit_checkout(repo.c_str(), base.c_str()) == 1);
+    REQUIRE_FALSE(std::filesystem::exists(dir / "e.txt"));
+
+    CHECK(mg_magit_cherrypick(repo.c_str(), "other") == 1);
+    CHECK(std::filesystem::exists(dir / "e.txt")); // picked onto base
+    CHECK(mg_magit_cherrypick(repo.c_str(), "no-such-rev") == 0);
+    fs::remove_all(dir);
+}
+
 TEST_CASE("mg_magit_rebase_interactive drops a commit via the plan")
 {
     // feature: C1 -> C2(b) -> C3(c) -> C4(d) on the default branch (no extra

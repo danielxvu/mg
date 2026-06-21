@@ -143,6 +143,10 @@ int mg_magit_reset(const char *repo_path, const char *rev, int mode);
 int mg_magit_revert(const char *repo_path, const char *rev);
 int mg_magit_merge(const char *repo_path, const char *name);
 
+/* Cherry-pick commit `rev` onto HEAD (new commit, keeps author + message).
+ * 1 ok, 0 fail (incl. conflict, which leaves the repo untouched). */
+int mg_magit_cherrypick(const char *repo_path, const char *rev);
+
 /* Rebase the current branch onto `upstream` (a branch name / revspec, e.g.
  * "@{u}"). Returns 1 = done, 2 = paused on conflicts (resolve + continue),
  * 0 = failure. */
