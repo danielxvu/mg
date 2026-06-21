@@ -311,7 +311,7 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `fm-wt`→fm-note (#56), `fm-blame`→fm-wt (#57),
   `fm-rb-reword`→fm-blame (#58), `fm-bisect`→fm-rb-reword (#59),
   `fm-sub`→fm-bisect (#60), `fm-lp`→fm-sub (#61),
-  `fm-tr-popup`→fm-lp (#62).
+  `fm-tr-popup`→fm-lp (#62), `fm-ediff-conflict`→fm-tr-popup (#63).
   Magit core (A+B, #31-#41) done; UTF-8 "Full" U5-U8 (#42-#45). **Phase C**
   (honest gap vs real magit; spec
   `docs/superpowers/specs/2026-06-21-fm-phase-c-roadmap.md`): ✅ FM-RB-1
@@ -330,7 +330,10 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `l f`, #61). ✅ **transient popup UI + argument infixes** (#62): magit's
   signature menus — every prefix pops a window of action keys + sticky infixes
   (Push `-f`/`-u`, Log `-n`), built on the `help_help`/`popbuf` pattern, no new
-  dep. Next branch freezes on `fm-tr-popup`.
+  dep. ✅ **conflict resolution** (#63): `GIT_STATUS_CONFLICTED`→unmerged,
+  `conflicts()` + `resolve_conflict(ours|theirs)`, a "Conflicts" status section,
+  and `e` conflict transient (`e o`/`e t`, RET to edit) — closes the rebase
+  conflict-resume gap. Next branch freezes on `fm-ediff-conflict`.
 
   **Phase C status — implemented:** rebase (onto/sequencer/interactive +
   reword), cherry-pick, tags (lightweight+annotated+section), push/pull
@@ -344,15 +347,18 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
       search. (File log + act-at-point RET/A/V done.)
     · FM-CV commit variants: instant fixup/squash (use `r i` for now),
       signoff/no-verify; **GPG sign** (needs an external signing key).
-    · rebase **edit** (mid-sequence stop) + interactive **conflict-resume** —
-      need to persist the custom plan across the pause (on-disk state).
+    · rebase **edit** (mid-sequence stop) — needs the custom plan persisted
+      across the pause. (Conflict-resume itself is now done, #63: resolve via
+      `e o`/`e t` then `r r`.)
     · submodule **add/update/sync** — clone + network (testable via a local bare
       remote, but not yet built); listing only for now.
-    · **ediff** — multi-pane interactive diff/merge. Engine is already in-house
-      (libgit2 diff + git_merge_file + conflict index); the gap is the A/B/
-      ancestor pane UI on mg's own windows. Optional word-level refinement could
-      use a small header-only diff lib (dtl). Not yet built.
-      Spec for the transient: `docs/superpowers/specs/2026-06-21-fm-tr-transient-popup.md`.
+    · **FM-EDIFF-2 — visual 3-pane ediff:** synchronized ours|merged|theirs
+      windows, per-hunk a/b selection, intra-line refinement (optional
+      header-only `dtl`). The large *display* piece; file-level conflict
+      resolution (#63) already covers the daily workflow. Spec:
+      `docs/superpowers/specs/2026-06-21-fm-ediff-conflict-resolution.md`.
+    · adjacent: make merge/revert/cherry-pick **leave** conflicts (like rebase)
+      instead of aborting, so they feed the same `e o`/`e t` flow.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
