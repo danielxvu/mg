@@ -312,7 +312,7 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `fm-rb-reword`→fm-blame (#58), `fm-bisect`→fm-rb-reword (#59),
   `fm-sub`→fm-bisect (#60), `fm-lp`→fm-sub (#61),
   `fm-tr-popup`→fm-lp (#62), `fm-ediff-conflict`→fm-tr-popup (#63),
-  `fm-ediff-apply`→fm-ediff-conflict (#64).
+  `fm-ediff-apply`→fm-ediff-conflict (#64), `fm-ediff-2-hunks`→fm-ediff-apply (#65).
   Magit core (A+B, #31-#41) done; UTF-8 "Full" U5-U8 (#42-#45). **Phase C**
   (honest gap vs real magit; spec
   `docs/superpowers/specs/2026-06-21-fm-phase-c-roadmap.md`): ✅ FM-RB-1
@@ -337,7 +337,11 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   conflict-resume gap. ✅ **merge/revert/cherry-pick leave conflicts** (#64):
   `apply_result`, repo-level `git_merge`/`git_revert`/`git_cherrypick` leave the
   conflicted state, `commit()` honors MERGE_HEAD (2-parent) + clears state — all
-  four ops now feed the `e o`/`e t` flow. Next branch freezes on `fm-ediff-apply`.
+  four ops now feed the `e o`/`e t` flow. ✅ **ediff — per-region conflict
+  resolution** (#65): `conflict_hunks`/`resolve_conflict_hunk` (2-way + diff3),
+  `E` opens a `*magit-ediff*` buffer (a ours / b theirs / RET both per region);
+  resolving the last region stages the file. Next branch freezes on
+  `fm-ediff-2-hunks`.
 
   **Phase C status — implemented:** rebase (onto/sequencer/interactive +
   reword), cherry-pick, tags (lightweight+annotated+section), push/pull
@@ -356,11 +360,12 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
       `e o`/`e t` then `r r`.)
     · submodule **add/update/sync** — clone + network (testable via a local bare
       remote, but not yet built); listing only for now.
-    · **FM-EDIFF-2 — visual 3-pane ediff:** synchronized ours|merged|theirs
-      windows, per-hunk a/b selection, intra-line refinement (optional
-      header-only `dtl`). The large *display* piece; file-level conflict
-      resolution (#63) already covers the daily workflow. Spec:
-      `docs/superpowers/specs/2026-06-21-fm-ediff-conflict-resolution.md`.
+    · **ediff visual polish (only):** synchronized ours|merged|theirs *live
+      panes* with intra-line refinement. NOT buildable on mg's display (whole-
+      line color only, no faces/overlays, no linked-window scroll) without a
+      display-subsystem rewrite. The *functional* core — per-region a/b/both
+      selection — is done (#65, `*magit-ediff*`). Spec:
+      `docs/superpowers/specs/2026-06-21-fm-ediff-2-hunk-resolution.md`.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
