@@ -302,11 +302,14 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `fm-x-rrm`→fm-l-log (#38), `fm-r-remotes`→fm-x-rrm (#39),
   `fm-followups`→fm-r-remotes (#40), `fm-auth`→fm-followups (#41),
   `u5-case`→fm-auth (#42), `u6-updext`→u5-case (#43),
-  `u7-grapheme`→u6-updext (#44), `u8-nfc`→u7-grapheme (#45).
-  🎉 Full Magit clone FEATURE-COMPLETE (PRs #31-#41). UTF-8 "Full": U5 case #42,
-  U6 extended-line #43, U7 grapheme clusters #44, U8 NFC command #45. Next UTF-8
-  branch freezes on `u8-nfc`. Remaining UTF-8 (niche): length-changing case
-  mappings, combining-mark display composition.
+  `u7-grapheme`→u6-updext (#44), `u8-nfc`→u7-grapheme (#45),
+  `fm-rb1-rebase`→u8-nfc (#46).
+  Magit core (A+B, #31-#41) done; UTF-8 "Full" U5-U8 (#42-#45). **Phase C
+  STARTED** (honest gap vs real magit; spec
+  `docs/superpowers/specs/2026-06-21-fm-phase-c-roadmap.md`): ✅ FM-RB-1
+  non-interactive rebase (`r e`/`r u`, #46). Next Phase C branch freezes on
+  `fm-rb1-rebase`. Up next: FM-RB-2 sequencer (continue/skip/abort), FM-RB-3
+  interactive todo buffer, then FM-A cherry-pick, FM-TAG tags, FM-LP log power.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
