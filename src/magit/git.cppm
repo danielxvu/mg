@@ -224,6 +224,16 @@ std::expected<void, error> revert_commit(std::string repo, std::string rev);
 // merge commit. Errors (leaving the tree clean) on conflicts.
 std::expected<void, error> merge_branch(std::string repo, std::string name);
 
+// Fetch from `remote` (default refspecs), updating remote-tracking refs.
+std::expected<void, error> fetch_remote(std::string repo, std::string remote);
+
+// Push the current branch to `remote` (same-named ref).
+std::expected<void, error> push_remote(std::string repo, std::string remote);
+
+// Fetch `remote`, then merge the current branch's remote-tracking ref into HEAD
+// (fast-forward or merge commit; conflicts abort). Magit's pull.
+std::expected<void, error> pull_remote(std::string repo, std::string remote);
+
 // Create local branch `name` at HEAD (does not switch to it).
 std::expected<void, error> create_branch(std::string repo, std::string name);
 
@@ -822,6 +832,105 @@ std::expected<void, error> revert_commit(std::string repo, std::string rev)
     return {};
 }
 
+// Merge an already-resolved annotated commit into HEAD: up-to-date (noop) /
+// fast-forward (checkout + move ref) / true merge (write a 2-parent `msg`
+// commit). Conflicts abort cleanly (state_cleanup + reset --hard) with an error.
+static std::expected<void, error>
+merge_annotated(git_repository *repo, git_annotated_commit *their,
+                const std::string &msg)
+{
+    const git_annotated_commit *heads[1] = {their};
+    git_merge_analysis_t analysis;
+    git_merge_preference_t pref;
+    if (git_merge_analysis(&analysis, &pref, repo, heads, 1) != 0)
+        return std::unexpected(last_error());
+
+    if (analysis & GIT_MERGE_ANALYSIS_UP_TO_DATE)
+        return {}; // already contains their commit
+
+    const git_oid *their_oid = git_annotated_commit_id(their);
+
+    if (analysis & GIT_MERGE_ANALYSIS_FASTFORWARD) {
+        git_object *raw_target = nullptr;
+        if (git_object_lookup(&raw_target, repo, their_oid,
+                              GIT_OBJECT_COMMIT) != 0)
+            return std::unexpected(last_error());
+        detail::object_ptr target(raw_target);
+
+        git_checkout_options copts;
+        git_checkout_options_init(&copts, GIT_CHECKOUT_OPTIONS_VERSION);
+        copts.checkout_strategy = GIT_CHECKOUT_SAFE;
+        if (git_checkout_tree(repo, target.get(), &copts) != 0)
+            return std::unexpected(last_error());
+
+        git_reference *raw_head = nullptr;
+        if (git_repository_head(&raw_head, repo) != 0)
+            return std::unexpected(last_error());
+        detail::ref_ptr head(raw_head);
+        git_reference *raw_new = nullptr;
+        if (git_reference_set_target(&raw_new, head.get(), their_oid,
+                                     "merge: fast-forward") != 0)
+            return std::unexpected(last_error());
+        git_reference_free(raw_new);
+        return {};
+    }
+
+    git_merge_options mopts;
+    git_merge_options_init(&mopts, GIT_MERGE_OPTIONS_VERSION);
+    git_checkout_options copts;
+    git_checkout_options_init(&copts, GIT_CHECKOUT_OPTIONS_VERSION);
+    copts.checkout_strategy = GIT_CHECKOUT_SAFE;
+    if (git_merge(repo, heads, 1, &mopts, &copts) != 0)
+        return std::unexpected(last_error());
+
+    git_index *raw_idx = nullptr;
+    if (git_repository_index(&raw_idx, repo) != 0)
+        return std::unexpected(last_error());
+    detail::index_ptr idx(raw_idx);
+    if (git_index_has_conflicts(idx.get())) {
+        git_repository_state_cleanup(repo);
+        git_object *raw_head_obj = nullptr;
+        if (git_revparse_single(&raw_head_obj, repo, "HEAD") == 0) {
+            detail::object_ptr ho(raw_head_obj);
+            git_reset(repo, ho.get(), GIT_RESET_HARD, nullptr);
+        }
+        return std::unexpected(error{0, "merge conflicts"});
+    }
+
+    git_oid tree_oid;
+    if (git_index_write_tree(&tree_oid, idx.get()) != 0)
+        return std::unexpected(last_error());
+    git_tree *raw_tree = nullptr;
+    if (git_tree_lookup(&raw_tree, repo, &tree_oid) != 0)
+        return std::unexpected(last_error());
+    detail::tree_ptr tree(raw_tree);
+
+    git_oid head_oid;
+    if (git_reference_name_to_id(&head_oid, repo, "HEAD") != 0)
+        return std::unexpected(last_error());
+    git_commit *raw_head_commit = nullptr;
+    if (git_commit_lookup(&raw_head_commit, repo, &head_oid) != 0)
+        return std::unexpected(last_error());
+    detail::commit_ptr head_commit(raw_head_commit);
+    git_commit *raw_their_commit = nullptr;
+    if (git_commit_lookup(&raw_their_commit, repo, their_oid) != 0)
+        return std::unexpected(last_error());
+    detail::commit_ptr their_commit(raw_their_commit);
+
+    detail::sig_ptr sig = default_signature(repo);
+    if (!sig)
+        return std::unexpected(last_error());
+
+    const git_commit *parents[2] = {head_commit.get(), their_commit.get()};
+    git_oid merge_oid;
+    if (git_commit_create(&merge_oid, repo, "HEAD", sig.get(), sig.get(),
+                          nullptr, msg.c_str(), tree.get(), 2, parents) != 0)
+        return std::unexpected(last_error());
+
+    git_repository_state_cleanup(repo);
+    return {};
+}
+
 std::expected<void, error> merge_branch(std::string repo, std::string name)
 {
     detail::init_guard guard;
@@ -841,99 +950,97 @@ std::expected<void, error> merge_branch(std::string repo, std::string name)
     std::unique_ptr<git_annotated_commit, decltype(&git_annotated_commit_free)>
         their(raw_their, git_annotated_commit_free);
 
-    const git_annotated_commit *heads[1] = {their.get()};
-    git_merge_analysis_t analysis;
-    git_merge_preference_t pref;
-    if (git_merge_analysis(&analysis, &pref, r.get(), heads, 1) != 0)
+    return merge_annotated(r.get(), their.get(), "Merge branch '" + name + "'");
+}
+
+std::expected<void, error> fetch_remote(std::string repo, std::string remote)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
         return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
 
-    if (analysis & GIT_MERGE_ANALYSIS_UP_TO_DATE)
-        return {}; // already contains their commit
-
-    const git_oid *their_oid = git_annotated_commit_id(their.get());
-
-    if (analysis & GIT_MERGE_ANALYSIS_FASTFORWARD) {
-        git_object *raw_target = nullptr;
-        if (git_object_lookup(&raw_target, r.get(), their_oid,
-                              GIT_OBJECT_COMMIT) != 0)
-            return std::unexpected(last_error());
-        detail::object_ptr target(raw_target);
-
-        git_checkout_options copts;
-        git_checkout_options_init(&copts, GIT_CHECKOUT_OPTIONS_VERSION);
-        copts.checkout_strategy = GIT_CHECKOUT_SAFE;
-        if (git_checkout_tree(r.get(), target.get(), &copts) != 0)
-            return std::unexpected(last_error());
-
-        git_reference *raw_head = nullptr;
-        if (git_repository_head(&raw_head, r.get()) != 0)
-            return std::unexpected(last_error());
-        detail::ref_ptr head(raw_head);
-        git_reference *raw_new = nullptr;
-        if (git_reference_set_target(&raw_new, head.get(), their_oid,
-                                     "merge: fast-forward") != 0)
-            return std::unexpected(last_error());
-        git_reference_free(raw_new);
-        return {};
-    }
-
-    // True merge: write the merge into index + working tree.
-    git_merge_options mopts;
-    git_merge_options_init(&mopts, GIT_MERGE_OPTIONS_VERSION);
-    git_checkout_options copts;
-    git_checkout_options_init(&copts, GIT_CHECKOUT_OPTIONS_VERSION);
-    copts.checkout_strategy = GIT_CHECKOUT_SAFE;
-    if (git_merge(r.get(), heads, 1, &mopts, &copts) != 0)
+    git_remote *raw_remote = nullptr;
+    if (git_remote_lookup(&raw_remote, r.get(), remote.c_str()) != 0)
         return std::unexpected(last_error());
+    std::unique_ptr<git_remote, decltype(&git_remote_free)> rem(
+        raw_remote, git_remote_free);
 
-    git_index *raw_idx = nullptr;
-    if (git_repository_index(&raw_idx, r.get()) != 0)
+    git_fetch_options opts;
+    git_fetch_options_init(&opts, GIT_FETCH_OPTIONS_VERSION);
+    // nullptr refspecs -> the remote's configured fetch refspecs.
+    if (git_remote_fetch(rem.get(), nullptr, &opts, nullptr) != 0)
         return std::unexpected(last_error());
-    detail::index_ptr idx(raw_idx);
-    if (git_index_has_conflicts(idx.get())) {
-        // Abort: drop the conflicted state and roll the tree back to HEAD.
-        git_repository_state_cleanup(r.get());
-        git_object *raw_head_obj = nullptr;
-        if (git_revparse_single(&raw_head_obj, r.get(), "HEAD") == 0) {
-            detail::object_ptr ho(raw_head_obj);
-            git_reset(r.get(), ho.get(), GIT_RESET_HARD, nullptr);
-        }
-        return std::unexpected(error{0, "merge conflicts"});
-    }
-
-    git_oid tree_oid;
-    if (git_index_write_tree(&tree_oid, idx.get()) != 0)
-        return std::unexpected(last_error());
-    git_tree *raw_tree = nullptr;
-    if (git_tree_lookup(&raw_tree, r.get(), &tree_oid) != 0)
-        return std::unexpected(last_error());
-    detail::tree_ptr tree(raw_tree);
-
-    git_oid head_oid;
-    if (git_reference_name_to_id(&head_oid, r.get(), "HEAD") != 0)
-        return std::unexpected(last_error());
-    git_commit *raw_head_commit = nullptr;
-    if (git_commit_lookup(&raw_head_commit, r.get(), &head_oid) != 0)
-        return std::unexpected(last_error());
-    detail::commit_ptr head_commit(raw_head_commit);
-    git_commit *raw_their_commit = nullptr;
-    if (git_commit_lookup(&raw_their_commit, r.get(), their_oid) != 0)
-        return std::unexpected(last_error());
-    detail::commit_ptr their_commit(raw_their_commit);
-
-    detail::sig_ptr sig = default_signature(r.get());
-    if (!sig)
-        return std::unexpected(last_error());
-
-    std::string msg = "Merge branch '" + name + "'";
-    const git_commit *parents[2] = {head_commit.get(), their_commit.get()};
-    git_oid merge_oid;
-    if (git_commit_create(&merge_oid, r.get(), "HEAD", sig.get(), sig.get(),
-                          nullptr, msg.c_str(), tree.get(), 2, parents) != 0)
-        return std::unexpected(last_error());
-
-    git_repository_state_cleanup(r.get());
     return {};
+}
+
+std::expected<void, error> push_remote(std::string repo, std::string remote)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    git_reference *raw_head = nullptr;
+    if (git_repository_head(&raw_head, r.get()) != 0)
+        return std::unexpected(last_error());
+    detail::ref_ptr head(raw_head);
+    const char *branch = git_reference_shorthand(head.get());
+    if (branch == nullptr)
+        return std::unexpected(error{0, "not on a branch"});
+
+    git_remote *raw_remote = nullptr;
+    if (git_remote_lookup(&raw_remote, r.get(), remote.c_str()) != 0)
+        return std::unexpected(last_error());
+    std::unique_ptr<git_remote, decltype(&git_remote_free)> rem(
+        raw_remote, git_remote_free);
+
+    std::string b(branch);
+    std::string spec = "refs/heads/" + b + ":refs/heads/" + b;
+    char *specs[1] = {const_cast<char *>(spec.c_str())};
+    git_strarray refspecs = {specs, 1};
+    git_push_options opts;
+    git_push_options_init(&opts, GIT_PUSH_OPTIONS_VERSION);
+    if (git_remote_push(rem.get(), &refspecs, &opts) != 0)
+        return std::unexpected(last_error());
+    return {};
+}
+
+std::expected<void, error> pull_remote(std::string repo, std::string remote)
+{
+    if (auto fetched = fetch_remote(repo, remote); !fetched)
+        return fetched;
+
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    git_reference *raw_head = nullptr;
+    if (git_repository_head(&raw_head, r.get()) != 0)
+        return std::unexpected(last_error());
+    detail::ref_ptr head(raw_head);
+    const char *branch = git_reference_shorthand(head.get());
+    if (branch == nullptr)
+        return std::unexpected(error{0, "not on a branch"});
+
+    // Merge the just-updated remote-tracking ref into HEAD.
+    std::string tracking = "refs/remotes/" + remote + "/" + std::string(branch);
+    git_reference *raw_track = nullptr;
+    if (git_reference_lookup(&raw_track, r.get(), tracking.c_str()) != 0)
+        return std::unexpected(last_error());
+    detail::ref_ptr track(raw_track);
+
+    git_annotated_commit *raw_their = nullptr;
+    if (git_annotated_commit_from_ref(&raw_their, r.get(), track.get()) != 0)
+        return std::unexpected(last_error());
+    std::unique_ptr<git_annotated_commit, decltype(&git_annotated_commit_free)>
+        their(raw_their, git_annotated_commit_free);
+
+    return merge_annotated(r.get(), their.get(), "Merge " + tracking);
 }
 
 std::expected<void, error> stage(std::string repo, std::string file)

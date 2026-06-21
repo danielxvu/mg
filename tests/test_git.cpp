@@ -313,7 +313,133 @@ fs::path make_repo_diverged()
     commit_file(dir, "a.txt", "content\nmaster line\n", "C2 on master");
     return dir;
 }
+// A working repo with `origin` pointing at a local bare repo (file path, no
+// network), its current branch pushed there. Returns work dir, bare dir, and
+// the branch name.
+struct remote_fixture {
+    fs::path work;
+    fs::path bare;
+    std::string branch;
+};
+remote_fixture make_repo_with_remote()
+{
+    auto bare = make_temp_dir();
+    auto work = make_repo_with_commit("C1"); // a.txt = "content"
+    git_libgit2_init();
+
+    git_repository *braw = nullptr;
+    REQUIRE(git_repository_init(&braw, bare.string().c_str(), /*bare=*/1) == 0);
+    git_repository_free(braw);
+
+    git_repository *wraw = nullptr;
+    REQUIRE(git_repository_open(&wraw, work.string().c_str()) == 0);
+
+    // Current branch shorthand (libgit2's default may be master or main).
+    git_reference *head = nullptr;
+    REQUIRE(git_repository_head(&head, wraw) == 0);
+    std::string branch = git_reference_shorthand(head);
+    git_reference_free(head);
+
+    git_remote *remote = nullptr;
+    REQUIRE(git_remote_create(&remote, wraw, "origin",
+                              bare.string().c_str()) == 0);
+    std::string spec = "refs/heads/" + branch + ":refs/heads/" + branch;
+    char *specs[1] = {const_cast<char *>(spec.c_str())};
+    git_strarray refspecs = {specs, 1};
+    git_push_options popts;
+    git_push_options_init(&popts, GIT_PUSH_OPTIONS_VERSION);
+    REQUIRE(git_remote_push(remote, &refspecs, &popts) == 0);
+    git_remote_free(remote);
+    git_repository_free(wraw);
+    git_libgit2_shutdown();
+    return {work, bare, branch};
+}
+
+// Add an empty commit (reusing the tip's tree) onto `refname` in the repo at
+// `dir`; works on a bare repo. Returns nothing.
+void advance_ref(const fs::path &dir, const std::string &refname,
+                 const char *message)
+{
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_open(&repo, dir.string().c_str()) == 0);
+    git_oid tip;
+    REQUIRE(git_reference_name_to_id(&tip, repo, refname.c_str()) == 0);
+    git_commit *parent = nullptr;
+    REQUIRE(git_commit_lookup(&parent, repo, &tip) == 0);
+    git_tree *tree = nullptr;
+    REQUIRE(git_commit_tree(&tree, parent) == 0);
+    git_signature *sig = nullptr;
+    REQUIRE(git_signature_now(&sig, "T", "t@t") == 0);
+    const git_commit *parents[1] = {parent};
+    git_oid out;
+    REQUIRE(git_commit_create(&out, repo, refname.c_str(), sig, sig, nullptr,
+                              message, tree, 1, parents) == 0);
+    git_signature_free(sig);
+    git_tree_free(tree);
+    git_commit_free(parent);
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+}
 } // namespace
+
+TEST_CASE("push_remote uploads the current branch to the remote")
+{
+    auto fx = make_repo_with_remote();
+    commit_file(fx.work, "a.txt", "content\nlocal change\n", "C2 local");
+
+    REQUIRE(mg::git::push_remote(fx.work.string(), "origin").has_value());
+
+    // The bare repo's branch now matches the local HEAD.
+    auto local = mg::git::read_head(fx.work.string());
+    REQUIRE(local.has_value());
+    CHECK(local->summary == "C2 local");
+    git_libgit2_init();
+    git_repository *braw = nullptr;
+    REQUIRE(git_repository_open(&braw, fx.bare.string().c_str()) == 0);
+    git_oid bare_tip;
+    CHECK(git_reference_name_to_id(&bare_tip, braw,
+                                   ("refs/heads/" + fx.branch).c_str()) == 0);
+    git_repository_free(braw);
+    git_libgit2_shutdown();
+    fs::remove_all(fx.work);
+    fs::remove_all(fx.bare);
+}
+
+TEST_CASE("fetch_remote updates the remote-tracking ref")
+{
+    auto fx = make_repo_with_remote();
+    advance_ref(fx.bare, "refs/heads/" + fx.branch, "C2 upstream"); // bare ahead
+
+    REQUIRE(mg::git::fetch_remote(fx.work.string(), "origin").has_value());
+
+    // refs/remotes/origin/<branch> now exists and points at the new commit.
+    git_libgit2_init();
+    git_repository *wraw = nullptr;
+    REQUIRE(git_repository_open(&wraw, fx.work.string().c_str()) == 0);
+    git_oid tracking;
+    CHECK(git_reference_name_to_id(
+              &tracking, wraw,
+              ("refs/remotes/origin/" + fx.branch).c_str()) == 0);
+    git_repository_free(wraw);
+    git_libgit2_shutdown();
+    fs::remove_all(fx.work);
+    fs::remove_all(fx.bare);
+}
+
+TEST_CASE("pull_remote fast-forwards HEAD onto upstream changes")
+{
+    auto fx = make_repo_with_remote();
+    advance_ref(fx.bare, "refs/heads/" + fx.branch, "C2 upstream"); // bare ahead
+
+    REQUIRE(mg::git::pull_remote(fx.work.string(), "origin").has_value());
+
+    auto h = mg::git::read_head(fx.work.string());
+    REQUIRE(h.has_value());
+    CHECK(h->summary == "C2 upstream"); // fast-forwarded to the upstream commit
+    fs::remove_all(fx.work);
+    fs::remove_all(fx.bare);
+}
 
 TEST_CASE("merge_branch makes a merge commit for a clean divergent merge")
 {
