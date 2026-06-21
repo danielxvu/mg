@@ -311,7 +311,8 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `fm-wt`→fm-note (#56), `fm-blame`→fm-wt (#57),
   `fm-rb-reword`→fm-blame (#58), `fm-bisect`→fm-rb-reword (#59),
   `fm-sub`→fm-bisect (#60), `fm-lp`→fm-sub (#61),
-  `fm-tr-popup`→fm-lp (#62), `fm-ediff-conflict`→fm-tr-popup (#63).
+  `fm-tr-popup`→fm-lp (#62), `fm-ediff-conflict`→fm-tr-popup (#63),
+  `fm-ediff-apply`→fm-ediff-conflict (#64).
   Magit core (A+B, #31-#41) done; UTF-8 "Full" U5-U8 (#42-#45). **Phase C**
   (honest gap vs real magit; spec
   `docs/superpowers/specs/2026-06-21-fm-phase-c-roadmap.md`): ✅ FM-RB-1
@@ -333,7 +334,10 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   dep. ✅ **conflict resolution** (#63): `GIT_STATUS_CONFLICTED`→unmerged,
   `conflicts()` + `resolve_conflict(ours|theirs)`, a "Conflicts" status section,
   and `e` conflict transient (`e o`/`e t`, RET to edit) — closes the rebase
-  conflict-resume gap. Next branch freezes on `fm-ediff-conflict`.
+  conflict-resume gap. ✅ **merge/revert/cherry-pick leave conflicts** (#64):
+  `apply_result`, repo-level `git_merge`/`git_revert`/`git_cherrypick` leave the
+  conflicted state, `commit()` honors MERGE_HEAD (2-parent) + clears state — all
+  four ops now feed the `e o`/`e t` flow. Next branch freezes on `fm-ediff-apply`.
 
   **Phase C status — implemented:** rebase (onto/sequencer/interactive +
   reword), cherry-pick, tags (lightweight+annotated+section), push/pull
@@ -357,8 +361,6 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
       header-only `dtl`). The large *display* piece; file-level conflict
       resolution (#63) already covers the daily workflow. Spec:
       `docs/superpowers/specs/2026-06-21-fm-ediff-conflict-resolution.md`.
-    · adjacent: make merge/revert/cherry-pick **leave** conflicts (like rebase)
-      instead of aborting, so they feed the same `e o`/`e t` flow.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
