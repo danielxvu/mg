@@ -199,8 +199,13 @@ https://github.com/magit/magit`). ✅ **FM-C done** (PR #31, branch `fm-c-commit
   doctest; pty-verified push→pop round-trip. ⚠ **stash-show deferred** (RET on a
   stash → its diff): an M7-diff-sized slice (diff the stash commit vs its
   parent into a read-only buffer) — documented follow-up.
-Phase B (new, highest value): **FM-L log buffer**, **FM-R push/pull/fetch**
-(⚠ network — verify libssh2/TLS transports first), **FM-X reset/revert/merge**.
+Phase B (new, highest value): ✅ **FM-L done** (log buffer, PR #37, branch
+`fm-l-log`) — mg.git `commit_diff` (commit tree vs first parent / empty tree)
++ full `oid` on `commit_brief`; bridge `mg_magit_log_buffer` (MG_LINE_COMMIT,
+oid in path) + `mg_magit_commit_diff`; UI `l` opens *magit-log* (magit-log-mode:
+RET→*magit-commit* diff view, g refresh, q close). tmux-verified. **Next:
+FM-R push/pull/fetch** (⚠ network — verify libssh2/TLS transports first),
+**FM-X reset/revert/merge**.
 Per-slice TDD (test_git → test_bridge → magit_cmd.c → pty) + stacked PR.
 
 ---
@@ -260,10 +265,10 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `u4-classify`→u3-cursor (#30), `fm-c-commit`→u4-classify (#31),
   `fm-s1-stageall`→fm-c-commit (#32), `fm-s2-region`→fm-s1-stageall (#33),
   `fm-t-sections`→fm-s2-region (#34), `fm-b-branches`→fm-t-sections (#35),
-  `fm-z-stash`→fm-b-branches (#36).
-  Phase A (complete-existing) DONE. Next: Phase B — FM-L log buffer (freeze on
-  `fm-z-stash`), then FM-R remotes (⚠ network), FM-X reset/revert/merge. Plus
-  the deferred slices: FM-S2 region-discard (`k`), FM-Z stash-show (RET).
+  `fm-z-stash`→fm-b-branches (#36), `fm-l-log`→fm-z-stash (#37).
+  Phase A DONE; Phase B started (FM-L done). Next: FM-R remotes (⚠ network)
+  freezes on `fm-l-log`, then FM-X reset/revert/merge. Plus the deferred
+  slices: FM-S2 region-discard (`k`), FM-Z stash-show (RET).
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
