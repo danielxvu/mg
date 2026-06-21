@@ -57,6 +57,12 @@ static int	magit_line_index(void);
 static int	magit_log(int, int);
 static int	magit_log_visit(int, int);
 static int	magit_log_refresh(int, int);
+static int	magit_log_revert(int, int);
+static int	magit_merge(int, int);
+static int	magit_revert(int, int);
+static int	magit_reset_soft(int, int);
+static int	magit_reset_mixed(int, int);
+static int	magit_reset_hard(int, int);
 
 /*
  * line -> {kind, hunk, path} map for the most recent render of *magit-status*.
@@ -92,6 +98,25 @@ static PF magit_esc[] = { NULL };		/* ESC -> meta prefix */
 static PF magit_qmark[] = { magit_help };
 static PF magit_S[] = { magit_stage_all };
 static PF magit_U[] = { magit_unstage_all };
+static PF magit_V[] = { magit_revert };
+static PF magit_X[] = { NULL };			/* X -> reset menu prefix */
+static PF magit_m[] = { magit_merge };
+
+/* Reset menu: X h hard / X m mixed / X s soft (each prompts for a revision). */
+static PF reset_h[] = { magit_reset_hard };
+static PF reset_m[] = { magit_reset_mixed };
+static PF reset_s[] = { magit_reset_soft };
+
+static struct KEYMAPE (3) magit_resetmenu = {
+	3,
+	3,
+	rescan,
+	{
+		{ 'h', 'h', reset_h, NULL },	/* X h: hard */
+		{ 'm', 'm', reset_m, NULL },	/* X m: mixed */
+		{ 's', 's', reset_s, NULL }	/* X s: soft */
+	}
+};
 static PF magit_a[] = { magit_stash_apply };
 static PF magit_b[] = { NULL };			/* b -> branch menu prefix */
 static PF magit_c[] = { NULL };			/* c -> commit menu prefix */
@@ -103,17 +128,22 @@ static PF magit_s[] = { magit_stage };
 static PF magit_u[] = { magit_unstage };
 static PF magit_z[] = { NULL };			/* z -> stash menu prefix */
 
-/* *magit-log* keymap: RET shows a commit's diff, g refreshes, q closes. */
+/*
+ * *magit-log* keymap: RET shows a commit's diff, V reverts the commit at point,
+ * g refreshes, q closes.
+ */
 static PF maglog_ret[] = { magit_log_visit };
+static PF maglog_V[] = { magit_log_revert };
 static PF maglog_g[] = { magit_log_refresh };
 static PF maglog_q[] = { delwind };
 
-static struct KEYMAPE (3) maglogmap = {
-	3,
-	3,
+static struct KEYMAPE (4) maglogmap = {
+	4,
+	4,
 	rescan,
 	{
 		{ CCHR('M'), CCHR('M'), maglog_ret, NULL },	/* RET: show commit */
+		{ 'V', 'V', maglog_V, NULL },			/* V: revert commit */
 		{ 'g', 'g', maglog_g, NULL },			/* g: refresh */
 		{ 'q', 'q', maglog_q, NULL }			/* q: close */
 	}
@@ -208,9 +238,9 @@ static struct KEYMAPE (4) magit_commitmenu = {
 };
 
 /* Entries MUST stay in ascending key order -- doscan() relies on it. */
-static struct KEYMAPE (16) magitmap = {
-	16,
-	16,
+static struct KEYMAPE (19) magitmap = {
+	19,
+	19,
 	rescan,
 	{
 		{ CCHR('I'), CCHR('I'), magit_tab, NULL },	/* TAB: expand/collapse */
@@ -220,12 +250,15 @@ static struct KEYMAPE (16) magitmap = {
 		{ '?', '?', magit_qmark, NULL },		/* ?: key help */
 		{ 'S', 'S', magit_S, NULL },			/* S: stage all */
 		{ 'U', 'U', magit_U, NULL },			/* U: unstage all */
+		{ 'V', 'V', magit_V, NULL },			/* V: revert */
+		{ 'X', 'X', magit_X, (KEYMAP *)&magit_resetmenu }, /* X: reset menu */
 		{ 'a', 'a', magit_a, NULL },			/* a: apply stash */
 		{ 'b', 'b', magit_b, (KEYMAP *)&magit_branchmenu }, /* b: branch menu */
 		{ 'c', 'c', magit_c, (KEYMAP *)&magit_commitmenu }, /* c: commit menu */
 		{ 'g', 'g', magit_g, NULL },
 		{ 'k', 'k', magit_k, NULL },
 		{ 'l', 'l', magit_l, NULL },			/* l: log buffer */
+		{ 'm', 'm', magit_m, NULL },			/* m: merge */
 		{ 'q', 'q', magit_q, NULL },
 		{ 's', 's', magit_s, NULL },
 		{ 'u', 'u', magit_u, NULL },
@@ -574,6 +607,29 @@ magit_log_visit(int f, int n)
 	return (TRUE);
 }
 
+/* V in *magit-log*: revert the commit at point (records the inverse on HEAD). */
+static int
+magit_log_revert(int f, int n)
+{
+	const char	*oid;
+	char		 cwd[PATH_MAX], prompt[48];
+
+	if ((oid = magit_log_oid_at_point()) == NULL) {
+		ewprintf("Not on a commit");
+		return (FALSE);
+	}
+	(void)snprintf(prompt, sizeof(prompt), "Revert commit %.8s", oid);
+	if (eyesno(prompt) != TRUE)
+		return (FALSE);
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	if (mg_magit_revert(cwd, oid) != 1) {
+		ewprintf("Revert failed (conflicts?)");
+		return (FALSE);
+	}
+	return (magit_log_refresh(f, n));
+}
+
 /* Resolve the kind/path/hunk of the row under the cursor. */
 static int
 magit_at_point(char **path_out, int *hunk_out)
@@ -765,7 +821,10 @@ magit_help(int f, int n)
 		"  b b/c/k/m  branch: checkout / create / delete / rename",
 		"  c c/a/e/w  commit / amend / extend / reword",
 		"  z z/p    stash: push / pop",
-		"  l        log buffer (RET on a commit shows its diff)",
+		"  l        log buffer (RET shows a commit's diff, V reverts it)",
+		"  m        merge a branch into HEAD",
+		"  V        revert a commit",
+		"  X h/m/s  reset HEAD: hard / mixed / soft",
 		"  g        refresh",
 		"  q        quit this window",
 		"  ?        this help",
@@ -999,6 +1058,87 @@ magit_branch_rename(int f, int n)
 		return (FALSE);
 	}
 	return (magit_refresh(f, n));
+}
+
+/* m: merge a branch into HEAD (the branch at point, else prompt). */
+static int
+magit_merge(int f, int n)
+{
+	char	*path = NULL;
+	char	 name[PATH_MAX], cwd[PATH_MAX];
+	int	 kind, hunk;
+
+	kind = magit_at_point(&path, &hunk);
+	if (kind == MG_LINE_BRANCH)
+		(void)strlcpy(name, path, sizeof(name));
+	else if (eread("Merge branch: ", name, sizeof(name), EFNEW | EFCR) ==
+	    NULL || name[0] == '\0')
+		return (ABORT);
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	if (mg_magit_merge(cwd, name) != 1) {
+		ewprintf("Merge failed (conflicts?)");
+		return (FALSE);
+	}
+	return (magit_refresh(f, n));
+}
+
+/* V: revert a commit (prompts for a revision) -- records the inverse on HEAD. */
+static int
+magit_revert(int f, int n)
+{
+	char	rev[PATH_MAX], cwd[PATH_MAX];
+
+	if (eread("Revert commit: ", rev, sizeof(rev), EFNEW | EFCR) == NULL ||
+	    rev[0] == '\0')
+		return (ABORT);
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	if (mg_magit_revert(cwd, rev) != 1) {
+		ewprintf("Revert failed (conflicts?)");
+		return (FALSE);
+	}
+	return (magit_refresh(f, n));
+}
+
+/* X h/m/s: reset HEAD (and the tree, per mode) to a prompted revision. */
+static int
+magit_do_reset(int mode, int f, int n)
+{
+	char	rev[PATH_MAX], cwd[PATH_MAX], prompt[40];
+
+	(void)snprintf(prompt, sizeof(prompt), "Reset (%s) to: ",
+	    mode == 0 ? "soft" : mode == 2 ? "hard" : "mixed");
+	if (eread("%s", rev, sizeof(rev), EFNEW | EFCR, prompt) == NULL ||
+	    rev[0] == '\0')
+		return (ABORT);
+	if (mode == 2 && eyesno("Hard reset discards working-tree changes") != TRUE)
+		return (FALSE);
+	if (getcwd(cwd, sizeof(cwd)) == NULL)
+		return (FALSE);
+	if (mg_magit_reset(cwd, rev, mode) != 1) {
+		ewprintf("Reset failed");
+		return (FALSE);
+	}
+	return (magit_refresh(f, n));
+}
+
+static int
+magit_reset_soft(int f, int n)
+{
+	return (magit_do_reset(0, f, n));
+}
+
+static int
+magit_reset_mixed(int f, int n)
+{
+	return (magit_do_reset(1, f, n));
+}
+
+static int
+magit_reset_hard(int f, int n)
+{
+	return (magit_do_reset(2, f, n));
 }
 
 static int
