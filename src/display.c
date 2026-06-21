@@ -30,6 +30,9 @@ int	magit_line_highlighted(struct buffer *, struct line *);
 /* True when character `col` (0-based) of `lp` of `bp` is a refined (word-level)
  * difference, so that one cell renders in standout (defined in magit_cmd.c). */
 int	magit_cell_highlighted(struct buffer *, struct line *, int);
+/* Set only while a *magit-ediff* session is open; gates the highlight lookups
+ * so normal rendering pays a single int test, not a call per cell/line. */
+extern int magit_ediff_active;
 /*
  * A virtual-screen cell is an int codepoint (ENABLE_CPP_UPGRADES, required by
  * NATIVE_MAGIT); bit 30 is a spare flag (codepoints fit in 21 bits) used to mark
@@ -439,7 +442,7 @@ vt_render_line(struct line *lp, struct mgwin *wp)
 			vtputuc(cp, w, wp);
 #ifdef ENABLE_NATIVE_MAGIT
 		/* Word-level refinement: mark this char's cell(s) for standout. */
-		if (magit_cell_highlighted(wp->w_bufp, lp, ci))
+		if (magit_ediff_active && magit_cell_highlighted(wp->w_bufp, lp, ci))
 			for (k = start; k < vtcol && k < ncol; k++)
 				if (vp->v_text[k] != VT_CONT)
 					vp->v_text[k] |= MG_HL_BIT;
@@ -649,7 +652,7 @@ update(int modelinecolor)
 			}
 			vscreen[i]->v_color = CTEXT;
 #ifdef ENABLE_NATIVE_MAGIT
-			if (magit_line_highlighted(wp->w_bufp, lp))
+			if (magit_ediff_active && magit_line_highlighted(wp->w_bufp, lp))
 				vscreen[i]->v_color = CMODE;
 #endif
 			vscreen[i]->v_flag |= (VFCHG | VFHBAD);
@@ -666,7 +669,8 @@ update(int modelinecolor)
 			while (i < wp->w_toprow + wp->w_ntrows) {
 				vscreen[i]->v_color = CTEXT;
 #ifdef ENABLE_NATIVE_MAGIT
-				if (lp != wp->w_bufp->b_headp &&
+				if (magit_ediff_active &&
+				    lp != wp->w_bufp->b_headp &&
 				    magit_line_highlighted(wp->w_bufp, lp))
 					vscreen[i]->v_color = CMODE;
 #endif
@@ -984,10 +988,12 @@ uline(int row, struct video *vvp, struct video *pvp)
 #endif
 		while (cp1 != cp2) {
 #ifdef ENABLE_NATIVE_MAGIT
-			want = cellcolor(*cp1, vvp->v_color);
-			if (want >= 0 && want != cur) {
-				ttcolor(want);
-				cur = want;
+			if (magit_ediff_active) {
+				want = cellcolor(*cp1, vvp->v_color);
+				if (want >= 0 && want != cur) {
+					ttcolor(want);
+					cur = want;
+				}
 			}
 #endif
 			ttputcell(*cp1++);
@@ -1049,17 +1055,19 @@ uline(int row, struct video *vvp, struct video *pvp)
 #endif
 	while (cp1 != cp5) {
 #ifdef ENABLE_NATIVE_MAGIT
-		want = cellcolor(*cp1, vvp->v_color);
-		if (want >= 0 && want != cur) {
-			ttcolor(want);
-			cur = want;
+		if (magit_ediff_active) {
+			want = cellcolor(*cp1, vvp->v_color);
+			if (want >= 0 && want != cur) {
+				ttcolor(want);
+				cur = want;
+			}
 		}
 #endif
 		ttputcell(*cp1++);
 		++ttcol;
 	}
 #ifdef ENABLE_NATIVE_MAGIT
-	if (cur != vvp->v_color)	/* restore base color for the erase */
+	if (magit_ediff_active && cur != vvp->v_color)	/* restore base for erase */
 		ttcolor(vvp->v_color);
 #endif
 	if (cp5 != cp3)			/* Do erase.		 */

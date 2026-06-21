@@ -212,6 +212,9 @@ static struct line	*magit_ediff_oreg[MAGIT_EDIFF_HL_MAX];
 static struct line	*magit_ediff_treg[MAGIT_EDIFF_HL_MAX];
 static int		magit_ediff_oreg_n, magit_ediff_treg_n;
 static int		magit_ediff_refrow;	/* refine-attach row counter */
+/* Non-static: lets display.c's per-cell/per-line redisplay loop skip the
+ * highlight lookups entirely (one int test) when no ediff session is open. */
+int			magit_ediff_active;
 
 /* Interactive-rebase plan backing the *git-rebase-todo* buffer. Each entry is
  * one commit; the buffer is a rendered view of this array (line i = entry i). */
@@ -1498,6 +1501,7 @@ magit_ediff_quit(int f, int n)
 {
 	struct buffer	*st;
 
+	magit_ediff_active = 0;
 	magit_ediff_merged_bp = NULL;
 	magit_ediff_hl_n = 0;
 	magit_ediff_ref_n = 0;
@@ -1563,6 +1567,7 @@ magit_ediff(int f, int n)
 
 	curwp = top;		/* focus the interactive merged pane */
 	curbp = merged;
+	magit_ediff_active = 1;	/* enable the redisplay highlight lookups */
 	magit_ediff_sync_scroll();	/* align the side panes now the windows exist */
 	return (TRUE);
 }
