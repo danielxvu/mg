@@ -310,7 +310,8 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `fm-ignore`→fm-tag-annotated (#54), `fm-note`→fm-ignore (#55),
   `fm-wt`→fm-note (#56), `fm-blame`→fm-wt (#57),
   `fm-rb-reword`→fm-blame (#58), `fm-bisect`→fm-rb-reword (#59),
-  `fm-sub`→fm-bisect (#60), `fm-lp`→fm-sub (#61).
+  `fm-sub`→fm-bisect (#60), `fm-lp`→fm-sub (#61),
+  `fm-tr-popup`→fm-lp (#62).
   Magit core (A+B, #31-#41) done; UTF-8 "Full" U5-U8 (#42-#45). **Phase C**
   (honest gap vs real magit; spec
   `docs/superpowers/specs/2026-06-21-fm-phase-c-roadmap.md`): ✅ FM-RB-1
@@ -326,7 +327,10 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   (`T`, #55) · ✅ worktrees (`W a`/`W k` + section, #56) · ✅ blame (`B`, #57) ·
   ✅ rebase reword (`w` in todo, #58) · ✅ bisect (`Z` menu + section, #59) ·
   ✅ submodules listing (`Submodules` section, #60) · ✅ log of a file (`l l`/
-  `l f`, #61). Next branch freezes on `fm-lp`.
+  `l f`, #61). ✅ **transient popup UI + argument infixes** (#62): magit's
+  signature menus — every prefix pops a window of action keys + sticky infixes
+  (Push `-f`/`-u`, Log `-n`), built on the `help_help`/`popbuf` pattern, no new
+  dep. Next branch freezes on `fm-tr-popup`.
 
   **Phase C status — implemented:** rebase (onto/sequencer/interactive +
   reword), cherry-pick, tags (lightweight+annotated+section), push/pull
@@ -344,8 +348,11 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
       need to persist the custom plan across the pause (on-disk state).
     · submodule **add/update/sync** — clone + network (testable via a local bare
       remote, but not yet built); listing only for now.
-    · **ediff** and the transient **popup UI** port — genuinely large /
-      framework-level; we use prefix submaps instead of magit's transient.
+    · **ediff** — multi-pane interactive diff/merge. Engine is already in-house
+      (libgit2 diff + git_merge_file + conflict index); the gap is the A/B/
+      ancestor pane UI on mg's own windows. Optional word-level refinement could
+      use a small header-only diff lib (dtl). Not yet built.
+      Spec for the transient: `docs/superpowers/specs/2026-06-21-fm-tr-transient-popup.md`.
 - doctest pinned `v2.4.11` (FetchContent); one harmless CMake deprecation warning
   from its own bundled `cmake_minimum_required` — ignore.
 - `tests/CMakeLists.txt` exposes `mg_add_test(name srcs…)` and, for modules,
