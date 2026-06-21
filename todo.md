@@ -318,7 +318,8 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `fm-ediff-3-panes`→fm-rb-replay-conflict (#68),
   `fm-ediff-4-refine`→fm-ediff-3-panes (#69),
   `fm-ediff-5-cell-color`→fm-ediff-4-refine (#70),
-  `fm-ediff-6-sync-scroll`→fm-ediff-5-cell-color (#71).
+  `fm-ediff-6-sync-scroll`→fm-ediff-5-cell-color (#71),
+  `fm-ediff-perf`→fm-ediff-6-sync-scroll (#72).
   Magit core (A+B, #31-#41) done; UTF-8 "Full" U5-U8 (#42-#45). **Phase C**
   (honest gap vs real magit; spec
   `docs/superpowers/specs/2026-06-21-fm-phase-c-roadmap.md`): ✅ FM-RB-1
