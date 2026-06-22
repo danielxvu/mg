@@ -322,9 +322,13 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `fm-ediff-perf`→fm-ediff-6-sync-scroll (#72),
   `fm-status-perf`→fm-ediff-perf (#73), `fm-log-perf`→fm-status-perf (#74),
   `fm-status-perf2`→fm-log-perf (#75), `fm-async-status-p1`→fm-log-perf (#76),
-  `fm-async-status-p2`→fm-async-status-p1 (#77). 🎉 **FM-ASYNC-STATUS COMPLETE**
+  `fm-async-status-p2`→fm-async-status-p1 (#77),
+  `fm-async-blame`→fm-async-status-p2 (#78). 🎉 **FM-ASYNC-STATUS COMPLETE**
   — status build off the UI thread (233ms→0.17ms warm on the 37.5k-file repo),
   idle self-pipe wake redraws with no keypress, fingerprint-based staleness.
+  🎉 **FM-ASYNC-BLAME COMPLETE** (#78) — blame / per-file log run on a job-runner
+  thread (request/response, latest-wins, generation stale-drop); the UI pops a
+  placeholder and fills on the idle wake. cpp-tsan gate 185/185, 0 races.
   Magit core (A+B, #31-#41) done; UTF-8 "Full" U5-U8 (#42-#45). **Phase C**
   (honest gap vs real magit; spec
   `docs/superpowers/specs/2026-06-21-fm-phase-c-roadmap.md`): ✅ FM-RB-1
