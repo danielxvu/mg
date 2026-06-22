@@ -120,6 +120,8 @@ static int	magit_region(int *, char **, int *, int *);
 static int	magit_line_index(void);
 static const char *magit_log_oid_at_point(void);
 static int	magit_at_point(char **, int *);
+static void	magit_log_emit(void *, const char *, int, const char *, int);
+static void	magit_plain_emit(void *, const char *, int, const char *, int);
 static int	magit_log(int, int);
 static int	magit_log_file(int, int);
 static int	magit_log_open(int, int);
@@ -185,6 +187,13 @@ static char	magit_log_file_path[PATH_MAX];
 
 /* Max commits shown in *magit-log* -- the `-n` transient infix (see below). */
 static int	magit_log_limit = 100;
+
+/* FM-ASYNC-BLAME: the generation of the latest async blame / log-file request.
+ * magit_async_apply() only fills a buffer if the ready result's generation
+ * still matches -- a newer request (the user moved to another file) supersedes
+ * an in-flight one, whose result is then dropped. */
+static unsigned	magit_blame_gen;
+static unsigned	magit_logfile_gen;
 
 /* For *magit-ediff*: the file being resolved + the conflict-region index per
  * buffer line (-1 for header/blank lines). */
@@ -1153,19 +1162,83 @@ magit_refresh(int f, int n)
 	return (magit_build(bp));
 }
 
+/* Discards a ready async result whose target is gone or superseded. */
+static void
+magit_discard_emit(void *ctx, const char *line, int kind, const char *path,
+    int hunk)
+{
+}
+
 /*
- * Idle/async refresh, driven by the background git monitor: when it publishes
- * a fresh snapshot it sets the dirty flag and pokes the wake pipe. This runs
- * only at safe points -- the top-level input loop (main.c) and the top-level
- * command read in getkey() -- never while a command holds line pointers into
- * the buffer. It consumes the dirty flag, forces a modeline repaint, and (if
- * the *magit-status* buffer exists) rebuilds it in place via the cheap snapshot
- * replay. Like the manual `g` refresh, point returns to the top of the buffer.
+ * Apply any async per-file builds (blame / log-file) the worker has finished.
+ * Runs only at safe points (the idle handler below), never while a command
+ * holds line pointers. A result is applied only if its generation still
+ * matches the latest request for its kind AND the target buffer still exists;
+ * otherwise it is drained and dropped (the user moved on / closed it).
+ */
+static void
+magit_async_apply(void)
+{
+	int		 kind;
+	char		 path[PATH_MAX];
+	unsigned	 gen;
+	struct buffer	*bp;
+	struct mgwin	*wp;
+
+	while (mg_magit_async_peek(&kind, path, sizeof(path), &gen) >= 0) {
+		bp = NULL;
+		if (kind == MG_ASYNC_BLAME && gen == magit_blame_gen)
+			bp = bfind("*magit-blame*", FALSE);
+		else if (kind == MG_ASYNC_LOG_FILE && gen == magit_logfile_gen)
+			bp = bfind("*magit-log*", FALSE);
+
+		if (bp == NULL) {			/* superseded or buffer gone */
+			(void)mg_magit_async_take(magit_discard_emit, NULL);
+			continue;
+		}
+
+		bp->b_flag |= BFIGNDIRTY;
+		if (bclear(bp) != TRUE) {
+			(void)mg_magit_async_take(magit_discard_emit, NULL);
+			continue;
+		}
+		bp->b_flag |= BFREADONLY;
+		if (kind == MG_ASYNC_LOG_FILE) {
+			magit_log_count = 0;	/* magit_log_emit rebuilds the oid map */
+			(void)mg_magit_async_take(magit_log_emit, bp);
+		} else {
+			(void)mg_magit_async_take(magit_plain_emit, bp);
+		}
+
+		bp->b_dotp = bfirstlp(bp);
+		bp->b_doto = 0;
+		for (wp = wheadp; wp != NULL; wp = wp->w_wndp)
+			if (wp->w_bufp == bp) {
+				wp->w_dotp = bp->b_dotp;
+				wp->w_doto = 0;
+				wp->w_markp = NULL;
+				wp->w_marko = 0;
+				wp->w_rflag |= WFFULL;
+			}
+		sgarbf = TRUE;
+	}
+}
+
+/*
+ * Idle handler, driven by the background git workers via the shared wake pipe.
+ * Runs only at safe points -- the top-level input loop (main.c) and the
+ * top-level command read in getkey() -- never while a command holds line
+ * pointers into a buffer. Applies any finished async per-file builds, then (if
+ * the status monitor flagged a change) repaints the modeline and rebuilds
+ * *magit-status* in place via the cheap snapshot replay. Like the manual `g`
+ * refresh, point returns to the top of the buffer.
  */
 void
 magit_idle_refresh(void)
 {
 	struct buffer	*bp;
+
+	magit_async_apply();			/* blame / log-file results */
 
 	if (!mg_magit_take_dirty())
 		return;
@@ -1213,10 +1286,21 @@ magit_log_build(struct buffer *bp)
 	bp->b_flag |= BFREADONLY;
 
 	magit_log_count = 0;
-	if (magit_log_file_path[0] != '\0')
-		(void)mg_magit_log_file_buffer(cwd, magit_log_file_path,
-		    magit_log_limit, magit_log_emit, bp);
-	else
+	if (magit_log_file_path[0] != '\0') {
+		/*
+		 * Per-file log is slow (150-360ms); run it on the worker thread
+		 * with a placeholder, applied on the wake. Whole-repo log is
+		 * ~3ms after the lazy-walk fix, so it stays synchronous.
+		 */
+		magit_logfile_gen = mg_magit_async_request(MG_ASYNC_LOG_FILE,
+		    cwd, magit_log_file_path, magit_log_limit);
+		if (magit_logfile_gen != 0)
+			(void)addlinef(bp, "Loading log for %s...",
+			    magit_log_file_path);
+		else
+			(void)mg_magit_log_file_buffer(cwd, magit_log_file_path,
+			    magit_log_limit, magit_log_emit, bp);
+	} else
 		(void)mg_magit_log_buffer(cwd, magit_log_limit, magit_log_emit,
 		    bp);
 
@@ -1783,7 +1867,17 @@ magit_blame(int f, int n)
 	if (bclear(bp) != TRUE)
 		return (FALSE);
 	bp->b_flag |= BFREADONLY;
-	if (mg_magit_blame_file(cwd, path, magit_plain_emit, bp) == 0) {
+
+	/*
+	 * Blame is slow (0.3-1.2s on big files); run it on the worker thread.
+	 * Pop the buffer immediately with a placeholder and request the build;
+	 * magit_async_apply() fills it on the wake when the result lands. If the
+	 * worker isn't running (not a repo), fall back to a synchronous build.
+	 */
+	magit_blame_gen = mg_magit_async_request(MG_ASYNC_BLAME, cwd, path, 0);
+	if (magit_blame_gen != 0)
+		(void)addlinef(bp, "Blaming %s...", path);
+	else if (mg_magit_blame_file(cwd, path, magit_plain_emit, bp) == 0) {
 		ewprintf("Blame failed (untracked or binary?)");
 		return (FALSE);
 	}

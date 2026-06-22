@@ -86,6 +86,28 @@ int mg_magit_log_buffer(const char *repo_path, int n, mg_magit_emit_fn emit,
 int mg_magit_log_file_buffer(const char *repo_path, const char *file, int n,
                              mg_magit_emit_fn emit, void *ctx);
 
+/* --- Async per-file builds (FM-ASYNC-BLAME) --------------------------------
+ * blame / log-file are slow (0.3-1.2s / 150-360ms) and ran synchronously on the
+ * UI thread. These run them on a worker thread: the UI requests, renders a
+ * placeholder, and applies the captured result at a safe idle point (via the
+ * shared wake fd above). Latest request per kind wins (coalesced). */
+#define MG_ASYNC_BLAME    0  /* mg_magit_blame_file for `path`        */
+#define MG_ASYNC_LOG_FILE 1  /* mg_magit_log_file_buffer for `path`   */
+
+/* Enqueue an async build (the latest request per kind supersedes older ones).
+ * Returns its monotonic generation (>0), or 0 if the worker isn't running. */
+unsigned mg_magit_async_request(int kind, const char *repo_path,
+                                const char *path, int n_commits);
+
+/* Peek the next ready result's metadata without consuming it: returns the kind
+ * (>=0) and fills *gen and path_out, or -1 when nothing is ready. */
+int mg_magit_async_peek(int *kind, char *path_out, size_t path_cap,
+                        unsigned *gen);
+
+/* Consume the next ready result, replaying its captured lines through
+ * emit/ctx. Returns the line count (>=0), or -1 when nothing is ready. */
+int mg_magit_async_take(mg_magit_emit_fn emit, void *ctx);
+
 /* Compose a *magit-commit* buffer for commit `rev`: a header line then its diff
  * (MG_LINE_HUNK / MG_LINE_DIFF). Returns the number of lines emitted, 0 on a
  * bad rev. */

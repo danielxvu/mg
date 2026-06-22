@@ -9,9 +9,12 @@
 #include "bridge.h"
 
 #include <atomic>
+#include <condition_variable>
 #include <cstring>
+#include <deque>
 #include <expected>
 #include <fcntl.h>
+#include <map>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <memory>
@@ -97,25 +100,65 @@ std::string repo_fingerprint(const std::string &repo)
     return fp;
 }
 
-class monitor {
-public:
-    explicit monitor(std::string repo) : repo_(std::move(repo))
+// Shared UI wake: a self-pipe that any background producer (the status monitor
+// and the async job worker) pokes to nudge the idle UI poll() (ttgetc) into a
+// redraw / result-apply with no keypress. Opened before the worker threads
+// start and closed after they join (in mg_magit_start/stop), so the fds are
+// never touched concurrently with open/close. signal()/drain() are otherwise
+// safe across threads: a pipe write/read is kernel-synchronized.
+struct ui_wake {
+    int rd = -1; // pollable read end (UI side)
+    int wr = -1; // write end (producers poke a byte)
+
+    void open_pipe()
     {
-        // Self-pipe so a freshly published snapshot can wake the UI's poll()
-        // (ttwait/ttgetc) and trigger an idle redraw with no keypress. The read
-        // end is non-blocking so the UI can drain it without ever stalling; the
-        // write end is non-blocking so the worker never blocks when the 1-byte
-        // wake is already pending (a full pipe *is* an unconsumed wake).
         int fds[2];
         if (::pipe(fds) == 0) {
-            wake_rd_ = fds[0];
-            wake_wr_ = fds[1];
+            rd = fds[0];
+            wr = fds[1];
             for (int fd : fds) {
                 ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL) | O_NONBLOCK);
                 ::fcntl(fd, F_SETFD, FD_CLOEXEC);
             }
         }
+    }
 
+    void close_pipe()
+    {
+        if (rd >= 0)
+            ::close(rd);
+        if (wr >= 0)
+            ::close(wr);
+        rd = wr = -1;
+    }
+
+    // Non-blocking: a full pipe already means "something changed", so dropping
+    // this byte is fine.
+    void signal() noexcept
+    {
+        if (wr >= 0) {
+            char b = 1;
+            ssize_t r = ::write(wr, &b, 1);
+            (void)r;
+        }
+    }
+
+    void drain() noexcept
+    {
+        if (rd < 0)
+            return;
+        char buf[64];
+        while (::read(rd, buf, sizeof buf) > 0)
+            ; // drain to empty (non-blocking; stops at EAGAIN)
+    }
+};
+
+ui_wake g_wake;
+
+class monitor {
+public:
+    explicit monitor(std::string repo) : repo_(std::move(repo))
+    {
         // Watch the worktree root and .git (catches edits, staging, commits).
         std::vector<std::string> paths{repo_, repo_ + "/.git"};
         if (auto w = mg::fswatch::watcher::create(paths))
@@ -130,30 +173,12 @@ public:
             watcher_->wake(); // release a blocked wait() immediately
         if (thread_.joinable())
             thread_.join();
-        if (wake_rd_ >= 0)
-            ::close(wake_rd_);
-        if (wake_wr_ >= 0)
-            ::close(wake_wr_);
     }
 
     monitor(const monitor &) = delete;
     monitor &operator=(const monitor &) = delete;
 
     int take_dirty() noexcept { return dirty_.exchange(false) ? 1 : 0; }
-
-    // The pollable read end of the wake pipe (-1 if the pipe failed to open).
-    int wake_fd() const noexcept { return wake_rd_; }
-
-    // Discard any pending wake bytes. Called by the UI after poll() reports the
-    // wake fd readable; the actual state is in dirty_/the snapshot, not the byte.
-    void drain_wake() noexcept
-    {
-        if (wake_rd_ < 0)
-            return;
-        char buf[64];
-        while (::read(wake_rd_, buf, sizeof buf) > 0)
-            ; // drain to empty (non-blocking; stops at EAGAIN)
-    }
 
     // Copy the latest status snapshot + the fingerprint it was built at; false
     // if none built yet (cold start).
@@ -209,13 +234,7 @@ private:
         dirty_.store(true);
 
         // Nudge the UI out of its blocking poll() so it redraws even when idle.
-        // Non-blocking: if the pipe is full the previous wake is still unread,
-        // which already means "snapshot changed", so dropping this byte is fine.
-        if (wake_wr_ >= 0) {
-            char b = 1;
-            ssize_t r = ::write(wake_wr_, &b, 1);
-            (void)r;
-        }
+        g_wake.signal();
     }
 
     void run()
@@ -236,14 +255,139 @@ private:
     std::string snapshot_fp_;
     bool have_snapshot_ = false;
     std::atomic<bool> dirty_{false};
-    int wake_rd_ = -1; // pollable read end of the UI wake pipe
-    int wake_wr_ = -1; // worker writes 1 byte here on each publish
     mg::stop_flag stop_;
     std::optional<mg::fswatch::watcher> watcher_;
     std::thread thread_;
 };
 
 std::unique_ptr<monitor> g_monitor;
+
+// --- Async per-file build worker (FM-ASYNC-BLAME) --------------------------
+// A pending request; the mailbox keeps the latest one per kind (coalescing).
+struct async_job {
+    int kind;
+    std::string repo;
+    std::string path;
+    int n;
+    unsigned gen;
+};
+
+// A finished build: the captured line stream, tagged with the request it came
+// from so the UI can drop it if a newer request has since superseded it.
+struct async_result {
+    int kind;
+    std::string path;
+    unsigned gen;
+    std::vector<snap_line> lines;
+};
+
+// One worker thread that drains expensive per-file builds (blame / log-file)
+// off the UI thread. The UI requests; the worker computes (reusing the proven
+// synchronous bridge fns with a capturing emit) and queues an immutable result.
+// Latest request per kind wins; a result superseded before it is published is
+// skipped. Its own libgit2 work uses fresh handles, so it is independent of the
+// monitor thread (a 1.2s blame must not stall the status recompute).
+class job_runner {
+public:
+    job_runner() { thread_ = std::thread([this] { run(); }); }
+
+    ~job_runner()
+    {
+        {
+            std::lock_guard lk(mu_);
+            stop_ = true;
+        }
+        cv_.notify_all();
+        if (thread_.joinable())
+            thread_.join();
+    }
+
+    job_runner(const job_runner &) = delete;
+    job_runner &operator=(const job_runner &) = delete;
+
+    unsigned request(int kind, std::string repo, std::string path, int n)
+    {
+        std::lock_guard lk(mu_);
+        unsigned g = ++gen_;
+        pending_[kind] = async_job{kind, std::move(repo), std::move(path), n, g};
+        cv_.notify_all();
+        return g;
+    }
+
+    bool peek(int &kind, std::string &path, unsigned &gen)
+    {
+        std::lock_guard lk(mu_);
+        if (ready_.empty())
+            return false;
+        kind = ready_.front().kind;
+        path = ready_.front().path;
+        gen = ready_.front().gen;
+        return true;
+    }
+
+    bool take(std::vector<snap_line> &out, int &kind, std::string &path,
+              unsigned &gen)
+    {
+        std::lock_guard lk(mu_);
+        if (ready_.empty())
+            return false;
+        out = std::move(ready_.front().lines);
+        kind = ready_.front().kind;
+        path = ready_.front().path;
+        gen = ready_.front().gen;
+        ready_.pop_front();
+        return true;
+    }
+
+private:
+    void run()
+    {
+        for (;;) {
+            async_job job;
+            {
+                std::unique_lock lk(mu_);
+                cv_.wait(lk, [this] { return stop_ || !pending_.empty(); });
+                if (stop_)
+                    return;
+                auto it = pending_.begin(); // any kind; drained round-robin
+                job = std::move(it->second);
+                pending_.erase(it);
+            }
+
+            // The slow part, off the UI thread, no lock held.
+            std::vector<snap_line> lines;
+            if (job.kind == MG_ASYNC_BLAME)
+                (void)mg_magit_blame_file(job.repo.c_str(), job.path.c_str(),
+                                          snap_capture, &lines);
+            else
+                (void)mg_magit_log_file_buffer(job.repo.c_str(),
+                                               job.path.c_str(), job.n,
+                                               snap_capture, &lines);
+
+            {
+                std::lock_guard lk(mu_);
+                // Skip if a newer request for this kind already supersedes us
+                // (the UI would drop it anyway; don't bother publishing).
+                auto it = pending_.find(job.kind);
+                if (it != pending_.end() && it->second.gen > job.gen)
+                    continue;
+                ready_.push_back(async_result{job.kind, std::move(job.path),
+                                              job.gen, std::move(lines)});
+            }
+            g_wake.signal(); // nudge the idle UI to apply the result
+        }
+    }
+
+    std::mutex mu_;
+    std::condition_variable cv_;
+    bool stop_ = false;
+    std::map<int, async_job> pending_; // latest request per kind
+    std::deque<async_result> ready_;
+    unsigned gen_ = 0;
+    std::thread thread_;
+};
+
+std::unique_ptr<job_runner> g_jobs;
 
 // Human label for a status code, for the magit-status sections.
 const char *state_word(mg::magit::status s)
@@ -263,30 +407,82 @@ const char *state_word(mg::magit::status s)
 
 extern "C" void mg_magit_start(const char *repo_path)
 {
+    g_wake.open_pipe(); // before any worker thread that may signal it
     g_monitor = std::make_unique<monitor>(repo_path ? repo_path : ".");
+    g_jobs = std::make_unique<job_runner>();
 }
 
-extern "C" void mg_magit_stop(void) { g_monitor.reset(); }
+extern "C" void mg_magit_stop(void)
+{
+    g_jobs.reset();    // joins the worker thread
+    g_monitor.reset(); // joins the monitor thread
+    g_wake.close_pipe(); // no thread touches g_wake after the joins
+}
 
 extern "C" int mg_magit_take_dirty(void)
 {
     return g_monitor ? g_monitor->take_dirty() : 0;
 }
 
-extern "C" int mg_magit_wake_fd(void)
-{
-    return g_monitor ? g_monitor->wake_fd() : -1;
-}
+extern "C" int mg_magit_wake_fd(void) { return g_wake.rd; }
 
-extern "C" void mg_magit_drain_wake(void)
-{
-    if (g_monitor)
-        g_monitor->drain_wake();
-}
+extern "C" void mg_magit_drain_wake(void) { g_wake.drain(); }
 
 extern "C" int mg_magit_modeline(char *buf, size_t buflen)
 {
     return g_monitor ? g_monitor->modeline(buf, buflen) : 0;
+}
+
+// --- Async per-file builds (FM-ASYNC-BLAME) --------------------------------
+extern "C" unsigned mg_magit_async_request(int kind, const char *repo,
+                                           const char *path, int n)
+{
+    if (g_jobs == nullptr || repo == nullptr || path == nullptr)
+        return 0;
+    return g_jobs->request(kind, repo, path, n);
+}
+
+extern "C" int mg_magit_async_peek(int *kind, char *path_out, size_t path_cap,
+                                   unsigned *gen)
+{
+    if (g_jobs == nullptr)
+        return -1;
+    int k;
+    std::string p;
+    unsigned g;
+    if (!g_jobs->peek(k, p, g))
+        return -1;
+    if (kind != nullptr)
+        *kind = k;
+    if (gen != nullptr)
+        *gen = g;
+    if (path_out != nullptr && path_cap > 0) {
+        std::size_t len = p.size();
+        if (len >= path_cap)
+            len = path_cap - 1;
+        std::memcpy(path_out, p.data(), len);
+        path_out[len] = '\0';
+    }
+    return k;
+}
+
+extern "C" int mg_magit_async_take(mg_magit_emit_fn emit, void *ctx)
+{
+    if (g_jobs == nullptr || emit == nullptr)
+        return -1;
+    std::vector<snap_line> lines;
+    int k;
+    std::string p;
+    unsigned g;
+    if (!g_jobs->take(lines, k, p, g))
+        return -1;
+    int n = 0;
+    for (const auto &e : lines) {
+        emit(ctx, e.line.c_str(), e.kind,
+             e.path.empty() ? nullptr : e.path.c_str(), e.hunk);
+        ++n;
+    }
+    return n;
 }
 
 // Emit a file's diff hunks (MG_LINE_HUNK header + MG_LINE_DIFF lines) for an

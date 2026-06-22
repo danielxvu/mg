@@ -1672,3 +1672,138 @@ TEST_CASE("status snapshot replay is byte-identical to the synchronous build")
 	CHECK(!collect(true, ex, 2).empty());
 	fs::remove_all(dir);
 }
+
+// FM-ASYNC-BLAME determinism anchor: the worker's captured result for a blame /
+// a log-file must equal the synchronous bridge output for the same repo+path,
+// line-for-line (kind|path|hunk|text). This pins the async path to the proven
+// sync path -- the worker must change *when* the work runs, not *what* it emits.
+namespace {
+void fmt_capture(void *ctx, const char *line, int kind, const char *path,
+                 int hunk)
+{
+	char buf[64];
+	snprintf(buf, sizeof buf, "%d|%s|%d|", kind, path ? path : "", hunk);
+	static_cast<std::vector<std::string> *>(ctx)->push_back(
+	    std::string(buf) + (line ? line : ""));
+}
+void discard(void *, const char *, int, const char *, int) {}
+} // namespace
+
+TEST_CASE("async blame/log-file results match the synchronous build")
+{
+	auto dir = make_repo_one_hunk(); // f.txt committed
+	auto repo = dir.string();
+	mg_magit_start(repo.c_str());
+
+	auto sync_lines = [&](int kind) {
+		std::vector<std::string> v;
+		if (kind == MG_ASYNC_BLAME)
+			mg_magit_blame_file(repo.c_str(), "f.txt", fmt_capture, &v);
+		else
+			mg_magit_log_file_buffer(repo.c_str(), "f.txt", 50, fmt_capture, &v);
+		return v;
+	};
+
+	auto async_lines = [&](int kind) {
+		unsigned gen = mg_magit_async_request(kind, repo.c_str(), "f.txt", 50);
+		REQUIRE(gen > 0);
+		std::vector<std::string> v;
+		for (int i = 0; i < 500; ++i) {
+			int k;
+			char p[256];
+			unsigned g;
+			bool got = false;
+			while (mg_magit_async_peek(&k, p, sizeof p, &g) >= 0) {
+				if (g == gen) {
+					CHECK(k == kind);
+					CHECK(std::string(p) == "f.txt");
+					mg_magit_async_take(fmt_capture, &v);
+					got = true;
+					break;
+				}
+				mg_magit_async_take(discard, nullptr); // drop a stale result
+			}
+			if (got)
+				break;
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		}
+		return v;
+	};
+
+	CHECK(async_lines(MG_ASYNC_BLAME) == sync_lines(MG_ASYNC_BLAME));
+	CHECK(async_lines(MG_ASYNC_LOG_FILE) == sync_lines(MG_ASYNC_LOG_FILE));
+	CHECK(!async_lines(MG_ASYNC_BLAME).empty());
+
+	mg_magit_stop();
+	fs::remove_all(dir);
+}
+
+// FM-ASYNC-BLAME thread-safety gate. The UI thread hammers request/peek/take
+// while the worker thread drains and publishes results -- racing the mailbox
+// (pending_ + gen_), the ready queue, and the shared wake pipe. Under TSan
+// (cpp-tsan) the assertion is zero races; reaching the end joined cleanly is
+// the pass under a normal build.
+TEST_CASE("async request/peek/take is race-free against the worker")
+{
+	auto dir = make_repo_one_hunk();
+	auto repo = dir.string();
+	mg_magit_start(repo.c_str());
+
+	for (int i = 0; i < 200; ++i) {
+		int kind = (i & 1) ? MG_ASYNC_LOG_FILE : MG_ASYNC_BLAME;
+		(void)mg_magit_async_request(kind, repo.c_str(), "f.txt", 20);
+		int k;
+		char p[256];
+		unsigned g;
+		while (mg_magit_async_peek(&k, p, sizeof p, &g) >= 0)
+			mg_magit_async_take(discard, nullptr);
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+	// drain the tail
+	for (int i = 0; i < 200; ++i) {
+		int k;
+		char p[256];
+		unsigned g;
+		if (mg_magit_async_peek(&k, p, sizeof p, &g) >= 0)
+			mg_magit_async_take(discard, nullptr);
+		else
+			std::this_thread::sleep_for(std::chrono::milliseconds(2));
+	}
+
+	mg_magit_stop();
+	fs::remove_all(dir);
+	CHECK(true);
+}
+
+// Latest-wins: rapid-fire requests for the same kind always deliver the most
+// recent generation, and never a generation we never asked for.
+TEST_CASE("async delivers the latest request, never a phantom generation")
+{
+	auto dir = make_repo_one_hunk();
+	auto repo = dir.string();
+	mg_magit_start(repo.c_str());
+
+	unsigned last = 0;
+	for (int i = 0; i < 4; ++i)
+		last = mg_magit_async_request(MG_ASYNC_BLAME, repo.c_str(), "f.txt", 0);
+	REQUIRE(last > 0);
+
+	bool saw_last = false;
+	for (int i = 0; i < 500 && !saw_last; ++i) {
+		int k;
+		char p[256];
+		unsigned g;
+		while (mg_magit_async_peek(&k, p, sizeof p, &g) >= 0) {
+			CHECK(g <= last); // never newer than anything we requested
+			mg_magit_async_take(discard, nullptr);
+			if (g == last)
+				saw_last = true;
+		}
+		if (!saw_last)
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	}
+	CHECK(saw_last);
+
+	mg_magit_stop();
+	fs::remove_all(dir);
+}
