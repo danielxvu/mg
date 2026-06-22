@@ -179,10 +179,14 @@ watcher::wait()
 
     alignas(inotify_event) char buf[4096];
     ssize_t len = ::read(queue_fd_, buf, sizeof buf);
-    if (len < 0)
-        return (errno == EAGAIN || errno == EINTR)
-                   ? out
-                   : std::unexpected(watch_error{"read", errno});
+    if (len < 0) {
+        // A bare `cond ? out : std::unexpected(...)` has no common type
+        // (vector vs unexpected); branch explicitly so each side converts to
+        // the expected<> return type on its own.
+        if (errno == EAGAIN || errno == EINTR)
+            return out;
+        return std::unexpected(watch_error{"read", errno});
+    }
 
     std::vector<bool> seen(paths_.size(), false);
     for (char *ptr = buf; ptr < buf + len;) {

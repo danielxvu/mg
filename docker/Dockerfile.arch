@@ -1,0 +1,46 @@
+# Build + test mg (C++23 modules + native-magit, ENABLE_NATIVE_MAGIT=ON) on
+# Arch Linux -- the primary Linux target. Verifies the modules toolchain, the
+# inotify fswatch backend (compiled here for the first time), and the async
+# stack (status monitor + blame worker) end to end.
+#
+#   docker build -f docker/Dockerfile.arch -t mg-arch .
+#
+# The build + ctest run during `docker build`, so a failure fails the image.
+#
+# Note: the official archlinux image is x86_64-only. On a native x86_64 Arch
+# host (the intended target) this just works. To build it on an arm64 host
+# (e.g. an Apple-silicon Mac) under emulation, pacman 7's download sandbox
+# fails to set up seccomp -- add `--build-arg` plumbing or append
+# `--disable-sandbox` to the pacman line; native x86_64 needs nothing. The code
+# itself is arch-independent (verified on arm64-native Arch + Alpine too).
+FROM archlinux:latest
+
+# clang ships clang-scan-deps (CMake's C++20 module dependency scanner);
+# libgit2 provides its pkg-config .pc that src/magit/CMakeLists.txt consumes.
+RUN pacman -Syu --noconfirm \
+        base-devel clang llvm cmake ninja git libgit2 libutf8proc pkgconf \
+    && pacman -Scc --noconfirm
+
+WORKDIR /src
+COPY . .
+
+# Distro clang in PATH; CMake auto-detects clang-scan-deps next to it. No
+# MacPorts paths (those live only in the macOS `cpp` preset).
+RUN cmake -S . -B /build -G Ninja \
+        -D ENABLE_CPP_UPGRADES=ON \
+        -D ENABLE_NATIVE_MAGIT=ON \
+        -D CMAKE_BUILD_TYPE=RelWithDebInfo \
+        -D CMAKE_C_COMPILER=clang \
+        -D CMAKE_CXX_COMPILER=clang++ \
+        -D CMAKE_POLICY_VERSION_MINIMUM=3.5 \
+    && cmake --build /build
+
+# A few tests exercise the production commit path, which requires a git
+# identity (git_signature_default). A dev machine has one in ~/.gitconfig; a
+# fresh container does not -- provide one so the suite runs as it does locally.
+RUN git config --global user.email "build@mg.test" \
+    && git config --global user.name "mg build"
+
+RUN ctest --test-dir /build --output-on-failure
+
+CMD ["ctest", "--test-dir", "/build", "--output-on-failure"]

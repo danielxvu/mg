@@ -98,7 +98,12 @@ endif()
 add_executable(mg ${MG_SOURCES} ${MG_LIBOBJ})
 
 # config.h lives in the build tree; def.h's `#include "config.h"` finds it here.
-target_include_directories(mg PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/include)
+# src/ is also needed so the lib/ compat shims (MG_LIBOBJ: fparseln, strtonum,
+# … -- compiled only where libc lacks them, e.g. Linux/musl, never on macOS)
+# can resolve their `#include "def.h"`.
+target_include_directories(mg PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_BINARY_DIR}/include)
 
 # Upstream mg_CFLAGS (src/Makefile.am).
 target_compile_options(mg PRIVATE -W -Wall -Wextra -Wno-unused-parameter)

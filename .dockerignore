@@ -1,0 +1,6 @@
+# macOS / local build trees and VCS metadata are not needed in the Linux build
+# context (the test suite drives libgit2 directly, not the host repo).
+build/
+build-c/
+build-tsan/
+.git/

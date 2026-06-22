@@ -1,0 +1,38 @@
+# Build + test mg on Alpine (musl libc) -- the portability check next to the
+# Arch (glibc) build. Uses edge for a recent clang with solid C++23 module
+# support. Exercises the same inotify fswatch backend + async stack on musl.
+#
+#   docker build -f docker/Dockerfile.alpine -t mg-alpine .
+FROM alpine:edge
+
+# clang-extra-tools provides clang-scan-deps; ninja-build is upstream Ninja
+# (>=1.11, required for C++20 modules -- the samurai clone reports 1.9.0 and
+# CMake disables modules with it); libgit2-dev provides headers + pkg-config.
+RUN apk add --no-cache \
+        build-base clang clang-dev clang-extra-tools llvm-dev \
+        cmake ninja-build git libgit2-dev utf8proc-dev pkgconf
+
+# Alpine's ninja-build installs upstream Ninja here, not on PATH as `ninja`.
+ENV PATH="/usr/lib/ninja-build/bin:${PATH}"
+
+WORKDIR /src
+COPY . .
+
+RUN cmake -S . -B /build -G Ninja \
+        -D ENABLE_CPP_UPGRADES=ON \
+        -D ENABLE_NATIVE_MAGIT=ON \
+        -D CMAKE_BUILD_TYPE=RelWithDebInfo \
+        -D CMAKE_C_COMPILER=clang \
+        -D CMAKE_CXX_COMPILER=clang++ \
+        -D CMAKE_POLICY_VERSION_MINIMUM=3.5 \
+    && cmake --build /build
+
+# A few tests exercise the production commit path, which requires a git
+# identity (git_signature_default). A dev machine has one in ~/.gitconfig; a
+# fresh container does not -- provide one so the suite runs as it does locally.
+RUN git config --global user.email "build@mg.test" \
+    && git config --global user.name "mg build"
+
+RUN ctest --test-dir /build --output-on-failure
+
+CMD ["ctest", "--test-dir", "/build", "--output-on-failure"]
