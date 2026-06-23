@@ -269,9 +269,16 @@ private:
     }
 
     // Re-query everything (the full scan). The correct baseline and the fallback
-    // for anything the incremental path can't handle.
+    // for anything the incremental path can't handle. Also re-opens the reused
+    // session: full_refresh runs exactly when refs/index could have moved (.git
+    // change / cold start), so a fresh handle here keeps the session's caches
+    // valid for the warm incremental reuses that follow.
     void full_refresh()
     {
+        if (auto s = mg::git::session::open(repo_))
+            session_.emplace(std::move(*s));
+        else
+            session_.reset();
         view_ = gather_status_view(repo_.c_str());
         publish_view();
     }
@@ -308,7 +315,12 @@ private:
             full_refresh();
             return;
         }
-        auto scoped = mg::git::repo_status_scoped(repo_, dirs);
+        // Scope the scan to the changed dirs on the REUSED session handle: the
+        // index is unchanged on a worktree edit, so libgit2 skips the re-read
+        // (~0.6ms vs ~20ms per-call open). Fall back to a one-shot scan if the
+        // session failed to open.
+        auto scoped = session_ ? session_->status_scoped(dirs)
+                               : mg::git::repo_status_scoped(repo_, dirs);
         if (!scoped) { // scan error -> safe fallback
             full_refresh();
             return;
@@ -339,6 +351,7 @@ private:
     std::string snapshot_fp_;
     bool have_snapshot_ = false;
     status_view view_; // monitor-thread-private; the incremental status cache
+    std::optional<mg::git::session> session_; // reused handle for scoped status
     std::atomic<bool> dirty_{false};
     mg::stop_flag stop_;
     std::optional<mg::fswatch::watcher> watcher_;

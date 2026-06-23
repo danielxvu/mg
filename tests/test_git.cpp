@@ -2456,6 +2456,35 @@ TEST_CASE("apply_status_patch keeps the running set == a fresh full status")
     fs::remove_all(dir);
 }
 
+// FM-REPO-SESSION: a session's results equal the free functions', and -- the
+// property the incremental monitor relies on -- a *reused* session handle picks
+// up later worktree changes (the index is unchanged on a worktree edit, so the
+// warm handle is both fast and correct).
+TEST_CASE("session status matches the free functions, and reuse sees changes")
+{
+    auto dir = make_repo_multidir();
+    auto s = mg::git::session::open(dir.string());
+    REQUIRE(s.has_value());
+
+    std::vector<std::string> ps{"src"};
+    CHECK(status_keys(*s->status_scoped(ps)) ==
+          status_keys(*mg::git::repo_status_scoped(dir.string(), ps)));
+    CHECK(status_keys(*s->status()) ==
+          status_keys(*mg::git::repo_status(dir.string())));
+
+    auto before = s->status_scoped(ps);
+    REQUIRE(before.has_value());
+    std::ofstream(dir / "src" / "newly_created.txt") << "w"; // worktree change
+    auto after = s->status_scoped(ps); // SAME (reused) handle
+    REQUIRE(after.has_value());
+    CHECK(after->size() == before->size() + 1); // reuse saw the new file
+    CHECK(status_keys(*after) ==
+          status_keys(*mg::git::repo_status_scoped(dir.string(), ps))); // == fresh
+
+    git_libgit2_shutdown(); // balance make_repo_multidir's init
+    fs::remove_all(dir);
+}
+
 TEST_CASE("repo_status_scoped: a complete disjoint partition unions to full")
 {
     auto dir = make_repo_multidir();

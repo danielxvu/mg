@@ -329,6 +329,34 @@ repo_status(std::string path);
 std::expected<std::vector<mg::magit::file_status>, error>
 repo_status_scoped(std::string path, std::span<const std::string> pathspecs);
 
+// A reusable repository handle (FM-REPO-SESSION). The free functions above open
+// + read the index + close on every call; a session opens once and keeps the
+// handle, so repeated scoped queries skip the index re-read -- measured ~28x on
+// the warm path (16.8ms -> 0.6ms). Use one PER THREAD, never shared (libgit2
+// handles aren't concurrency-safe). The monitor holds one for its incremental
+// status, re-opening on .git changes (fresh refs/index) and reusing across
+// worktree edits (index unchanged -> warm + correct). PIMPL so the opaque
+// libgit2 handle never crosses the module boundary.
+class session {
+public:
+    static std::expected<session, error> open(std::string path);
+    session(session &&) noexcept;
+    session &operator=(session &&) noexcept;
+    ~session();
+    session(const session &) = delete;
+    session &operator=(const session &) = delete;
+
+    // Same results as repo_status / repo_status_scoped, on the held handle.
+    std::expected<std::vector<mg::magit::file_status>, error> status();
+    std::expected<std::vector<mg::magit::file_status>, error>
+    status_scoped(std::span<const std::string> pathspecs);
+
+private:
+    struct impl;
+    explicit session(std::unique_ptr<impl> p);
+    std::unique_ptr<impl> p_;
+};
+
 std::expected<head_info, error> read_head(std::string path);
 
 // The current branch's upstream tracking status (name + ahead/behind counts).
@@ -664,18 +692,34 @@ static error last_error()
 // Defined below; used by create_tag (annotated) before its definition.
 static detail::sig_ptr default_signature(git_repository *repo);
 
-std::expected<std::vector<mg::magit::file_status>, error>
-repo_status_scoped(std::string path, std::span<const std::string> pathspecs)
-{
+// The session holds the open handle + one libgit2 init for its lifetime (the
+// guard outlives the handle: members destroy in reverse, so repo frees before
+// shutdown).
+struct session::impl {
     detail::init_guard guard;
+    detail::repo_ptr repo;
+};
 
+session::session(std::unique_ptr<impl> p) : p_(std::move(p)) {}
+session::session(session &&) noexcept = default;
+session &session::operator=(session &&) noexcept = default;
+session::~session() = default;
+
+std::expected<session, error> session::open(std::string path)
+{
+    auto p = std::make_unique<impl>(); // default impl: inits libgit2, null repo
+    git_repository *raw = nullptr;
     // flags = 0 makes open_ext walk up parent directories (the default), so
     // launching mg in any subdirectory of a repository still finds it.
-    git_repository *raw_repo = nullptr;
-    if (git_repository_open_ext(&raw_repo, path.c_str(), 0, nullptr) != 0)
+    if (git_repository_open_ext(&raw, path.c_str(), 0, nullptr) != 0)
         return std::unexpected(last_error());
-    detail::repo_ptr repo(raw_repo);
+    p->repo.reset(raw);
+    return session(std::move(p));
+}
 
+std::expected<std::vector<mg::magit::file_status>, error>
+session::status_scoped(std::span<const std::string> pathspecs)
+{
     git_status_options opts;
     git_status_options_init(&opts, GIT_STATUS_OPTIONS_VERSION);
     opts.show = GIT_STATUS_SHOW_INDEX_AND_WORKDIR;
@@ -700,7 +744,7 @@ repo_status_scoped(std::string path, std::span<const std::string> pathspecs)
     }
 
     git_status_list *raw_list = nullptr;
-    if (git_status_list_new(&raw_list, repo.get(), &opts) != 0)
+    if (git_status_list_new(&raw_list, p_->repo.get(), &opts) != 0)
         return std::unexpected(last_error());
     detail::status_list_ptr list(raw_list);
 
@@ -710,6 +754,22 @@ repo_status_scoped(std::string path, std::span<const std::string> pathspecs)
     for (size_t i = 0; i < n; ++i)
         out.push_back(detail::map_entry(git_status_byindex(list.get(), i)));
     return out;
+}
+
+std::expected<std::vector<mg::magit::file_status>, error> session::status()
+{
+    return status_scoped({});
+}
+
+// The free functions open a one-shot session and delegate -- the body lives in
+// session::status_scoped, so there is one implementation.
+std::expected<std::vector<mg::magit::file_status>, error>
+repo_status_scoped(std::string path, std::span<const std::string> pathspecs)
+{
+    auto s = session::open(std::move(path));
+    if (!s)
+        return std::unexpected(s.error());
+    return s->status_scoped(pathspecs);
 }
 
 std::expected<std::vector<mg::magit::file_status>, error>

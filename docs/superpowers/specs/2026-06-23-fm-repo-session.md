@@ -131,6 +131,28 @@ reused exactly when nothing it caches could have changed. Clean and safe.
    benchmark the warm-path win; TSan.
 3. *(Optional)* worker session for blame/log.
 
+## Outcome (shipped)
+
+Phases 0–2 landed; Phase 3 (worker session) skipped — blame/log are one-shot
+per request, not a repeated-query loop, so a session there buys ~nothing.
+
+- **Phase 0** spike: passed (16.8 → 0.6 ms reused scoped status).
+- **Phase 1** `mg::git::session` (PIMPL so the opaque handle never crosses the
+  module boundary): `open` / `status` / `status_scoped`, holding one handle +
+  one libgit2 init for its lifetime. The free functions delegate
+  (`session::open(path)->status_scoped(...)`), so there's one implementation.
+  Tests: session results == the free functions', and a *reused* handle picks up
+  later worktree changes (the warm path's correctness).
+- **Phase 2** the monitor holds `std::optional<session>`, re-opens it in
+  `full_refresh` (.git change / cold start → fresh refs+index) and reuses it in
+  `reconcile` for scoped status across worktree edits — so the warm incremental
+  refresh runs on the cached handle (~0.6 ms, the Phase-0 number) instead of
+  re-opening (~20 ms). Monitor-thread-private, so it stays race-free by
+  construction (the property parallel-status lacked).
+
+Validated: macOS / Alpine / Linux-arm64-TSan all **195/195, 0 races**; the cold
+path (re-open) is unchanged, so everyday git ops don't regress.
+
 ## Risk + honest call
 
 The risk isn't concurrency (the session is single-threaded by construction) —
