@@ -325,7 +325,8 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `fm-async-status-p2`→fm-async-status-p1 (#77),
   `fm-async-blame`→fm-async-status-p2 (#78),
   `fm-linux-firstclass`→fm-async-blame (#79),
-  `fm-linux-parity`→fm-linux-firstclass (#80). 🎉 **FM-ASYNC-STATUS COMPLETE**
+  `fm-linux-parity`→fm-linux-firstclass (#80),
+  `fm-gitignore-watch`→fm-linux-parity (#81). 🎉 **FM-ASYNC-STATUS COMPLETE**
   — status build off the UI thread (233ms→0.17ms warm on the 37.5k-file repo),
   idle self-pipe wake redraws with no keypress, fingerprint-based staleness.
   🎉 **FM-ASYNC-BLAME COMPLETE** (#78) — blame / per-file log run on a job-runner
@@ -341,6 +342,10 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   threads) by holding one global_init for the bridge lifetime; tests/tsan.supp
   filters libgit2 false positives; CI TSan now a required gate. Linux TSan
   188/188, 0 races; macOS 188/188.
+  🎉 **FM-GITIGNORE-WATCH COMPLETE** (#81) — watcher skips gitignored trees via a
+  libgit2-backed predicate (node_modules/build can't affect status); on ~/src
+  d20app 50,975→~1,189 watched dirs, dsp 49,463→~315. fswatch stays git-agnostic
+  (std::function predicate); .git always exempt. macOS/Alpine/Linux-TSan 190/190.
   Magit core (A+B, #31-#41) done; UTF-8 "Full" U5-U8 (#42-#45). **Phase C**
   (honest gap vs real magit; spec
   `docs/superpowers/specs/2026-06-21-fm-phase-c-roadmap.md`): ✅ FM-RB-1
