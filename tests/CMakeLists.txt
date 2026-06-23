@@ -8,7 +8,8 @@ include(FetchContent)
 FetchContent_Declare(doctest
     GIT_REPOSITORY https://github.com/doctest/doctest.git
     GIT_TAG        v2.4.11
-    GIT_SHALLOW    TRUE)
+    GIT_SHALLOW    TRUE
+    EXCLUDE_FROM_ALL)  # keep doctest's own install() rules out of `cmake --install`
 FetchContent_MakeAvailable(doctest)
 
 # `doctest_discover_tests` registers each TEST_CASE with CTest individually.

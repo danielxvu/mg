@@ -160,8 +160,12 @@ public:
     explicit monitor(std::string repo) : repo_(std::move(repo))
     {
         // Watch the worktree root and .git (catches edits, staging, commits).
-        std::vector<std::string> paths{repo_, repo_ + "/.git"};
-        if (auto w = mg::fswatch::watcher::create(paths))
+        // On Linux these are watched recursively, so nested worktree edits and
+        // .git/refs|logs (commits, branch switches) wake the monitor too; we
+        // exclude .git/objects, which churns hugely and never affects status.
+        std::vector<std::string> roots{repo_, repo_ + "/.git"};
+        std::vector<std::string> ignores{repo_ + "/.git/objects"};
+        if (auto w = mg::fswatch::watcher::create(roots, ignores))
             watcher_.emplace(std::move(*w));
         thread_ = std::thread([this] { run(); });
     }

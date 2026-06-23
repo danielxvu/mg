@@ -37,12 +37,39 @@
       "cacheVariables": {
         "ENABLE_TSAN": "ON"
       }
+    },
+    {
+      "name": "cpp-linux",
+      "displayName": "Linux: C++23 + modules (distro clang)",
+      "description": "Native Linux build (Arch primary, Alpine too). Uses the distro clang/clang++ in PATH; CMake auto-detects clang-scan-deps next to it. CMAKE_POLICY_VERSION_MINIMUM=3.5 lets the fetched doctest configure under CMake 4.x. Used by the docker/ images and for native builds: `cmake --preset cpp-linux && cmake --build --preset cpp-linux && ctest --preset cpp-linux`.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "ENABLE_CPP_UPGRADES": "ON",
+        "ENABLE_NATIVE_MAGIT": "ON",
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_POLICY_VERSION_MINIMUM": "3.5"
+      }
+    },
+    {
+      "name": "cpp-linux-tsan",
+      "displayName": "Linux: C++23 + modules under ThreadSanitizer",
+      "description": "cpp-linux with ENABLE_TSAN=ON. On Linux the toolchain's own TSan runtime works directly -- no Apple-runtime rpath dance needed (that path is macOS-only in the CMakeLists ENABLE_TSAN block).",
+      "inherits": "cpp-linux",
+      "binaryDir": "${sourceDir}/build-tsan",
+      "cacheVariables": {
+        "ENABLE_TSAN": "ON"
+      }
     }
   ],
   "buildPresets": [
-    { "name": "c-legacy", "configurePreset": "c-legacy" },
-    { "name": "cpp",       "configurePreset": "cpp" },
-    { "name": "cpp-tsan",  "configurePreset": "cpp-tsan" }
+    { "name": "c-legacy",      "configurePreset": "c-legacy" },
+    { "name": "cpp",           "configurePreset": "cpp" },
+    { "name": "cpp-tsan",      "configurePreset": "cpp-tsan" },
+    { "name": "cpp-linux",     "configurePreset": "cpp-linux" },
+    { "name": "cpp-linux-tsan", "configurePreset": "cpp-linux-tsan" }
   ],
   "testPresets": [
     {
@@ -53,6 +80,16 @@
     {
       "name": "cpp-tsan",
       "configurePreset": "cpp-tsan",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "cpp-linux",
+      "configurePreset": "cpp-linux",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "cpp-linux-tsan",
+      "configurePreset": "cpp-linux-tsan",
       "output": { "outputOnFailure": true }
     }
   ]

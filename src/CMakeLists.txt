@@ -119,6 +119,14 @@ if(UTIL_LIB)
     target_link_libraries(mg PRIVATE ${UTIL_LIB})
 endif()
 
+# --- Install: the editor binary + its man page (GNUInstallDirs layout) -------
+# `cmake --install <build> --prefix <p>` lays down <p>/bin/mg and
+# <p>/share/man/man1/mg.1. The startup file is read from SYSCONFDIR/mg at
+# runtime (STARTUPFILE in config.h); it is user/distro-provided, not shipped.
+install(TARGETS mg RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(FILES ${CMAKE_SOURCE_DIR}/doc/mg.1
+        DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
+
 # --- Smoke test (task F2): `mg -h` prints usage and exits 0, no tty needed ---
 if(BUILD_TESTING)
     add_test(NAME mg_help_exits_zero   COMMAND mg -h)

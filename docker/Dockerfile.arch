@@ -5,6 +5,12 @@
 #
 #   docker build -f docker/Dockerfile.arch -t mg-arch .
 #
+# Native build on an Arch host (same toolchain, no container):
+#   sudo pacman -S --needed clang llvm cmake ninja git libgit2 libutf8proc pkgconf
+#   cmake --preset cpp-linux && cmake --build --preset cpp-linux
+#   ctest --preset cpp-linux            # full suite (incl. recursive inotify)
+#   sudo cmake --install build --prefix /usr/local
+#
 # The build + ctest run during `docker build`, so a failure fails the image.
 #
 # Note: the official archlinux image is x86_64-only. On a native x86_64 Arch
@@ -24,16 +30,17 @@ RUN pacman -Syu --noconfirm \
 WORKDIR /src
 COPY . .
 
-# Distro clang in PATH; CMake auto-detects clang-scan-deps next to it. No
-# MacPorts paths (those live only in the macOS `cpp` preset).
-RUN cmake -S . -B /build -G Ninja \
-        -D ENABLE_CPP_UPGRADES=ON \
-        -D ENABLE_NATIVE_MAGIT=ON \
-        -D CMAKE_BUILD_TYPE=RelWithDebInfo \
-        -D CMAKE_C_COMPILER=clang \
-        -D CMAKE_CXX_COMPILER=clang++ \
-        -D CMAKE_POLICY_VERSION_MINIMUM=3.5 \
-    && cmake --build /build
+# Which preset to build: cpp-linux (default) or cpp-linux-tsan (native-Linux
+# ThreadSanitizer gate -- no Apple-runtime dance needed off macOS). CI builds
+# both. ENV carries it to CMD for `docker run`.
+ARG PRESET=cpp-linux
+ENV MG_PRESET=${PRESET}
+
+# The preset uses the distro clang/clang++ in PATH (CMake auto-detects
+# clang-scan-deps next to it) -- no MacPorts paths (those live only in the macOS
+# `cpp` preset).
+RUN cmake --preset "${PRESET}" \
+    && cmake --build --preset "${PRESET}"
 
 # A few tests exercise the production commit path, which requires a git
 # identity (git_signature_default). A dev machine has one in ~/.gitconfig; a
@@ -41,6 +48,6 @@ RUN cmake -S . -B /build -G Ninja \
 RUN git config --global user.email "build@mg.test" \
     && git config --global user.name "mg build"
 
-RUN ctest --test-dir /build --output-on-failure
+RUN ctest --preset "${MG_PRESET}"
 
-CMD ["ctest", "--test-dir", "/build", "--output-on-failure"]
+CMD ctest --preset "${MG_PRESET}"

@@ -6,6 +6,7 @@
 #include <doctest/doctest.h>
 
 #include <array>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -117,3 +118,73 @@ TEST_CASE("watch_stream yields an event when the watched dir changes")
 
     fs::remove_all(dir);
 }
+
+#if defined(__linux__) // ---- recursive inotify (FM-LINUX-FIRSTCLASS) --------
+
+// inotify is per-directory; the recursive backend must watch nested dirs that
+// existed at create time, so a deep edit fires (kqueue is non-recursive, hence
+// Linux-gated).
+TEST_CASE("inotify watches pre-existing nested directories recursively")
+{
+    auto dir = make_temp_dir();
+    fs::create_directories(dir / "a" / "b" / "c");
+    std::array<std::string, 1> roots{dir.string()};
+    auto w = watcher::create(roots);
+    REQUIRE(w.has_value());
+
+    { std::ofstream(dir / "a" / "b" / "c" / "deep.txt") << "x"; }
+
+    auto evs = w->wait();
+    REQUIRE(evs.has_value());
+    CHECK(evs->size() >= 1);
+
+    fs::remove_all(dir);
+}
+
+// A directory created *after* watching must be picked up dynamically, so a file
+// later created inside it fires too.
+TEST_CASE("inotify dynamically watches directories created after create()")
+{
+    auto dir = make_temp_dir();
+    std::array<std::string, 1> roots{dir.string()};
+    auto w = watcher::create(roots);
+    REQUIRE(w.has_value());
+
+    fs::create_directory(dir / "fresh"); // fires IN_CREATE|IN_ISDIR on root
+    auto first = w->wait();              // processing it watches "fresh"
+    REQUIRE(first.has_value());
+
+    { std::ofstream(dir / "fresh" / "f.txt") << "x"; } // inside the new dir
+    auto second = w->wait();
+    REQUIRE(second.has_value());
+    CHECK(second->size() >= 1); // only fires if "fresh" got watched
+
+    fs::remove_all(dir);
+}
+
+// A change under an ignored prefix must not wake the watcher: the ignored dir
+// is never registered, so the only thing that releases wait() is the wake().
+TEST_CASE("inotify skips ignored subtrees")
+{
+    auto dir = make_temp_dir();
+    fs::create_directory(dir / "ig");
+    std::array<std::string, 1> roots{dir.string()};
+    std::array<std::string, 1> ignores{(dir / "ig").string()};
+    auto w = watcher::create(roots, ignores);
+    REQUIRE(w.has_value());
+
+    std::thread t([&] {
+        { std::ofstream(dir / "ig" / "f.txt") << "x"; } // under the ignored dir
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        w->wake();
+    });
+    auto evs = w->wait();
+    t.join();
+
+    REQUIRE(evs.has_value());
+    CHECK(evs->empty()); // woken only; the ignored change produced no event
+
+    fs::remove_all(dir);
+}
+
+#endif // __linux__

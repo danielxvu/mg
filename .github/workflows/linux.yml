@@ -1,0 +1,44 @@
+name: linux
+
+# Best-of-class Linux CI: build + run the full test suite on both glibc (Arch)
+# and musl (Alpine), and run the ThreadSanitizer gate on a native-Linux runtime.
+# Each job is a single `docker build` -- the Dockerfiles configure, build, and
+# run ctest internally, so a green build IS a green suite (including the
+# recursive-inotify tests, which exercise real inotify here). The ubuntu-latest
+# runner is x86_64, so archlinux:latest builds natively (no emulation).
+
+on:
+  push:
+    branches: [master, cpp-refactor]
+  pull_request:
+
+concurrency:
+  group: linux-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: build + test (${{ matrix.distro }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [arch, alpine]
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker build (configures, builds, runs full ctest)
+        run: docker build -f docker/Dockerfile.${{ matrix.distro }} -t mg-${{ matrix.distro }} .
+
+  tsan:
+    name: ThreadSanitizer (Arch, native runtime)
+    runs-on: ubuntu-latest
+    # Informational canary: the concurrency gate is also covered by the macOS
+    # cpp-tsan run. Local arm64-Linux TSan showed two libgit2-related engine-test
+    # failures (bisect, blame) that do NOT occur under macOS TSan or non-TSan
+    # Linux -- i.e. an arm64+libgit2+TSan artifact, not a race in mg. This job
+    # runs on the x86_64 runner to confirm that; promote to required once green.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker build with the cpp-linux-tsan preset
+        run: docker build -f docker/Dockerfile.arch --build-arg PRESET=cpp-linux-tsan -t mg-arch-tsan .
