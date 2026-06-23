@@ -46,7 +46,10 @@ import mg.coro;
 
 export namespace mg::fswatch {
 
-// Which watched path fired. Events coalesce to one per path per wait().
+// A directory that changed since the last wait(). One wait() returns the set of
+// distinct changed dirs, so the consumer can scope an incremental status to
+// them. A single event with an EMPTY path is the "resync" marker (e.g. inotify
+// queue overflow): the consumer should do a full rescan. See also degraded().
 struct fs_event {
     std::string path;
 };
@@ -109,6 +112,11 @@ public:
     void wake() noexcept;
 
     int fd() const noexcept { return queue_fd_; }
+
+    // True once the kernel watch/fd limit was hit while building/extending the
+    // tree: the watch set is incomplete, so changes in unwatched dirs can be
+    // missed. The consumer should fall back to a full rescan when degraded.
+    bool degraded() const noexcept { return degraded_; }
 
 private:
     watcher() = default;
@@ -273,10 +281,12 @@ watcher::wait()
     if (!(pfds[0].revents & POLLIN))
         return out;
 
-    // Drain every queued event (read until EAGAIN). The consumer recomputes the
-    // whole status on any change, so we coalesce to a single coarse event but
-    // still process each record to keep the watch tree in sync.
-    bool changed = false;
+    // Drain every queued event (read until EAGAIN), collecting the distinct
+    // directories that changed so the consumer can scope an incremental status
+    // to just them. A queue overflow means we lost track -> emit the resync
+    // marker (an event with an empty path) so the consumer does a full rescan.
+    std::unordered_set<std::string> dirs;
+    bool overflow = false;
     alignas(inotify_event) char buf[8192];
     for (;;) {
         ssize_t len = ::read(queue_fd_, buf, sizeof buf);
@@ -287,28 +297,29 @@ watcher::wait()
         }
         for (char *ptr = buf; ptr < buf + len;) {
             auto *ev = reinterpret_cast<inotify_event *>(ptr);
-            changed = true;
-
             if (ev->mask & IN_Q_OVERFLOW) {
-                // Lost events: the full recompute the consumer does is the
-                // resync; nothing more to do but report a change.
-            } else if ((ev->mask & IN_ISDIR) &&
-                       (ev->mask & (IN_CREATE | IN_MOVED_TO))) {
-                // New subdirectory: watch it (and rescan -- files may have
-                // appeared between mkdir and our add).
-                auto it = wd_path_.find(ev->wd);
-                if (it != wd_path_.end() && ev->len > 0)
+                overflow = true;
+            } else if (auto it = wd_path_.find(ev->wd); it != wd_path_.end()) {
+                dirs.insert(it->second);
+                if ((ev->mask & IN_ISDIR) &&
+                    (ev->mask & (IN_CREATE | IN_MOVED_TO)) && ev->len > 0)
+                    // New subdirectory: watch it (and rescan -- files may have
+                    // appeared between mkdir and our add).
                     add_tree(it->second + "/" + ev->name);
-            } else if (ev->mask & (IN_IGNORED | IN_DELETE_SELF | IN_MOVE_SELF)) {
-                wd_path_.erase(ev->wd); // watch gone; forget it
+                else if (ev->mask & (IN_IGNORED | IN_DELETE_SELF | IN_MOVE_SELF))
+                    wd_path_.erase(it); // watch gone; forget it
             }
             ptr += sizeof(inotify_event) + ev->len;
         }
     }
 
-    if (changed)
-        out.push_back(fs_event{wd_path_.empty() ? std::string{}
-                                                : wd_path_.begin()->second});
+    if (overflow) {
+        out.push_back(fs_event{std::string{}}); // resync marker
+        return out;
+    }
+    out.reserve(dirs.size());
+    for (const auto &d : dirs)
+        out.push_back(fs_event{d});
     return out;
 }
 
@@ -414,8 +425,8 @@ watcher::wait()
         return errno == EINTR ? std::expected<std::vector<fs_event>, watch_error>{}
                               : std::unexpected(watch_error{"kevent wait", errno});
 
-    std::vector<fs_event> out;
-    std::vector<std::string> rescan; // dirs whose contents changed
+    std::unordered_set<std::string> dirs; // distinct changed dirs
+    std::vector<std::string> rescan;      // dirs whose contents changed
     for (int i = 0; i < n; ++i) {
         if (evs[i].filter == EVFILT_USER)
             continue; // woken via wake(), not a filesystem change
@@ -424,8 +435,7 @@ watcher::wait()
         if (it == fd_path_.end())
             continue;
 
-        if (out.empty()) // coarse: one event carries the first changed dir
-            out.push_back(fs_event{it->second});
+        dirs.insert(it->second);
 
         if (evs[i].fflags & (NOTE_DELETE | NOTE_RENAME)) {
             // The watched dir vanished/moved: drop it.
@@ -452,6 +462,11 @@ watcher::wait()
                 add_tree(it->path().string());
         }
     }
+
+    std::vector<fs_event> out;
+    out.reserve(dirs.size());
+    for (const auto &d : dirs)
+        out.push_back(fs_event{d});
     return out;
 }
 

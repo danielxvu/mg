@@ -6,6 +6,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdlib>
@@ -221,6 +222,33 @@ TEST_CASE("watcher honors a custom ignore predicate")
     t.join();
     REQUIRE(skipped.has_value());
     CHECK(skipped->empty());
+
+    fs::remove_all(dir);
+}
+
+// wait() returns the *set* of distinct changed dirs (not a single coarse event)
+// so the consumer can scope an incremental status to exactly them.
+TEST_CASE("watcher reports each distinct changed directory")
+{
+    auto dir = make_temp_dir();
+    fs::create_directory(dir / "d1");
+    fs::create_directory(dir / "d2");
+    std::array<std::string, 1> roots{dir.string()};
+    auto w = watcher::create(roots);
+    REQUIRE(w.has_value());
+
+    { std::ofstream(dir / "d1" / "f.txt") << "x"; }
+    { std::ofstream(dir / "d2" / "g.txt") << "y"; }
+
+    auto evs = w->wait();
+    REQUIRE(evs.has_value());
+    auto has = [&](const fs::path &p) {
+        return std::any_of(evs->begin(), evs->end(),
+                           [&](const auto &e) { return e.path == p.string(); });
+    };
+    CHECK(has(dir / "d1"));
+    CHECK(has(dir / "d2"));
+    CHECK(evs->size() >= 2);
 
     fs::remove_all(dir);
 }

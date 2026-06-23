@@ -163,6 +163,34 @@ useful (scoped status is a reusable primitive) and shippable. Benefit is
 concentrated on large repos with frequent worktree churn; small repos already
 recompute in ~1 ms so they're unaffected.
 
+## Outcome (shipped)
+
+All four phases landed and validated:
+
+- **Phase 1** `repo_status_scoped` (PR #82) — scoped/partition status primitive.
+- **gather/compose split** — `mg_magit_status_buffer` factored into
+  `gather_status_view()` + `compose_status_view()`, byte-identical.
+- **Phase 2** watcher reports the distinct **changed-dir set** + a resync marker
+  (empty path, inotify overflow) + a `degraded()` accessor; the monitor batches
+  one reconcile per `wait()`.
+- **Phase 3** the monitor holds a `status_view` cache (monitor-thread-private):
+  a worktree-only batch scope-patches `view.status` via `repo_status_scoped` +
+  `apply_status_patch` and reuses the cached refs/commits; a `.git` change /
+  repo-root / resync / degraded falls back to a full `gather()`. The property
+  test pins `apply_status_patch` to a fresh full `repo_status` after every
+  add/modify/delete/nested/tracked-edit mutation.
+
+**Measured (roll20, 37.5k files):** full `repo_status` 170 ms; a status scoped
+to one changed dir **~20 ms** (~8.5×). The ~20 ms residual is libgit2's index
+iteration (a floor without fsmonitor-level index diffing). Since refs/commits
+(~100 ms) are cached and only refreshed on `.git` changes, the **per-worktree-
+change cost drops from ~300 ms (old full status_buffer) to ~20 ms — ~15×, at
+git+fsmonitor's 28 ms level**, with no daemon. Validated: macOS 194/194 + tmux
+(nested file create auto-reflects with no keypress, and the scoped re-status
+correctly captures all changes under the dir); Alpine 194/194; Linux arm64 TSan
+194/194, 0 races (the reconcile on the monitor thread + snapshot under `mu_`).
+The full-scan path remains the correct baseline + fallback throughout.
+
 ## Out of scope
 
 - Incremental **index/staging** status (full rescan on `.git/index`; later).

@@ -53,6 +53,33 @@ static int apply_code(
     return *r == mg::git::apply_result::conflicts ? 2 : 1;
 }
 
+// All the data the *magit-status* view is composed from. Gathered by querying
+// the repo (gather_status_view) or, for the monitor's incremental path, built
+// up by patching `status` in place while reusing the cached rest. Composed into
+// the line stream by compose_status_view -- the two halves keep "where the data
+// comes from" separate from "how it is rendered", so the monitor can swap a
+// scoped/incremental status set in without touching composition. (At namespace
+// scope so the monitor can hold one as a member and the composer, defined
+// below, shares the type.)
+struct status_view {
+    std::optional<mg::git::head_info> head;
+    std::optional<mg::git::upstream_info> upstream;
+    bool rebasing = false;
+    bool bisecting = false;
+    std::vector<mg::magit::file_status> status; // the incremental target (S)
+    std::vector<mg::git::conflict_entry> conflicts;
+    std::vector<mg::git::commit_brief> unpulled, unpushed, recent;
+    std::vector<mg::git::stash_entry> stashes;
+    std::vector<mg::git::branch_entry> branches;
+    std::vector<std::string> tags;
+    std::vector<mg::git::worktree_entry> worktrees;
+    std::vector<mg::git::submodule_entry> submodules;
+};
+status_view gather_status_view(const char *repo);
+int compose_status_view(const status_view &v, const char *repo_path,
+                        const char *const *expanded, int n_expanded,
+                        mg_magit_emit_fn emit, void *ctx);
+
 namespace {
 
 // One captured status-buffer line (the collapsed snapshot stores these).
@@ -213,24 +240,23 @@ public:
     }
 
 private:
-    void publish()
+    // Compose the cached view_ into the published snapshot + modeline, stamp the
+    // fingerprint, and wake the UI. The expensive scan is NOT here: view_ is
+    // either freshly gathered (full_refresh) or incrementally patched
+    // (reconcile). Runs on the monitor thread only; view_ needs no lock.
+    void publish_view()
     {
         std::string line;
-        if (auto head = mg::git::read_head(repo_);
-            head && !head->branch.empty())
-            line = head->branch + " ";
+        if (view_.head && !view_.head->branch.empty())
+            line = view_.head->branch + " ";
+        line += mg::magit::summarize(view_.status); // counts from cached status
 
-        auto st = mg::git::repo_status(repo_);
-        line += st ? mg::magit::summarize(*st) : std::string("git ?");
-
-        // Full collapsed status snapshot, computed here on the worker thread so
-        // the UI's status build is a cheap replay. Stamp it with the fingerprint
-        // read BEFORE the scan: if a mutation lands mid-scan the snapshot looks
-        // stale and the UI just re-reconciles (never the reverse).
+        // Stamp the fingerprint BEFORE composing: if a mutation lands meanwhile
+        // the snapshot looks stale and the UI just re-reconciles (never reverse).
         std::string fp = repo_fingerprint(repo_);
         std::vector<snap_line> snap;
-        (void)mg_magit_status_buffer(repo_.c_str(), nullptr, 0, snap_capture,
-                                     &snap);
+        (void)compose_status_view(view_, repo_.c_str(), nullptr, 0, snap_capture,
+                                  &snap);
         {
             std::lock_guard lk(mu_);
             current_ = std::move(line);
@@ -239,19 +265,70 @@ private:
             have_snapshot_ = true;
         }
         dirty_.store(true);
+        g_wake.signal(); // nudge the idle UI to redraw
+    }
 
-        // Nudge the UI out of its blocking poll() so it redraws even when idle.
-        g_wake.signal();
+    // Re-query everything (the full scan). The correct baseline and the fallback
+    // for anything the incremental path can't handle.
+    void full_refresh()
+    {
+        view_ = gather_status_view(repo_.c_str());
+        publish_view();
+    }
+
+    // Apply a batch of changed dirs: a worktree-only batch scope-patches view_'s
+    // status (O(changed) -- no full scan); anything that moves the baseline
+    // (a .git change, the repo root itself, the resync marker, or a degraded
+    // watcher) falls back to a full_refresh().
+    void reconcile(const std::vector<mg::fswatch::fs_event> &events)
+    {
+        bool need_full = watcher_ && watcher_->degraded();
+        std::vector<std::string> dirs;
+        for (const auto &e : events) {
+            if (e.path.empty()) { // resync marker (e.g. inotify overflow)
+                need_full = true;
+                break;
+            }
+            std::string rel;
+            if (e.path.size() > repo_.size() &&
+                e.path.compare(0, repo_.size(), repo_) == 0) {
+                rel = e.path.substr(repo_.size());
+                if (!rel.empty() && rel.front() == '/')
+                    rel.erase(0, 1);
+            }
+            // repo root itself, or any .git change (staging/commit/refs move the
+            // whole-tree baseline) -> full rescan.
+            if (rel.empty() || rel == ".git" || rel.starts_with(".git/")) {
+                need_full = true;
+                break;
+            }
+            dirs.push_back(std::move(rel));
+        }
+        if (need_full) {
+            full_refresh();
+            return;
+        }
+        auto scoped = mg::git::repo_status_scoped(repo_, dirs);
+        if (!scoped) { // scan error -> safe fallback
+            full_refresh();
+            return;
+        }
+        mg::git::apply_status_patch(view_.status, *scoped, dirs);
+        publish_view();
     }
 
     void run()
     {
-        publish(); // initial read, before any event
+        full_refresh(); // initial baseline, before any event
         if (!watcher_)
             return;
-        for (auto ev : mg::fswatch::watch_stream(*watcher_, stop_)) {
-            (void)ev;
-            publish();
+        while (!stop_.stop_requested()) {
+            auto events = watcher_->wait();
+            if (!events)
+                break;            // watcher error
+            if (events->empty())
+                continue;         // woken by wake() (e.g. stop), no change
+            reconcile(*events);
         }
     }
 
@@ -261,6 +338,7 @@ private:
     std::vector<snap_line> snapshot_;
     std::string snapshot_fp_;
     bool have_snapshot_ = false;
+    status_view view_; // monitor-thread-private; the incremental status cache
     std::atomic<bool> dirty_{false};
     mg::stop_flag stop_;
     std::optional<mg::fswatch::watcher> watcher_;
@@ -525,27 +603,6 @@ static int emit_file_diff(const char *repo, const char *path, bool staged,
     }
     return n;
 }
-
-// All the data the *magit-status* view is composed from. Gathered by querying
-// the repo (gather_status_view) or, for the monitor's incremental path, built
-// up by patching `status` in place while reusing the cached rest. Composed into
-// the line stream by compose_status_view -- the two halves keep "where the data
-// comes from" separate from "how it is rendered", so the monitor can swap a
-// scoped/incremental status set in without touching composition.
-struct status_view {
-    std::optional<mg::git::head_info> head;
-    std::optional<mg::git::upstream_info> upstream;
-    bool rebasing = false;
-    bool bisecting = false;
-    std::vector<mg::magit::file_status> status; // the incremental target (S)
-    std::vector<mg::git::conflict_entry> conflicts;
-    std::vector<mg::git::commit_brief> unpulled, unpushed, recent;
-    std::vector<mg::git::stash_entry> stashes;
-    std::vector<mg::git::branch_entry> branches;
-    std::vector<std::string> tags;
-    std::vector<mg::git::worktree_entry> worktrees;
-    std::vector<mg::git::submodule_entry> submodules;
-};
 
 // Run every query the full status build needs into one view.
 status_view gather_status_view(const char *repo)

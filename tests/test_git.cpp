@@ -1157,6 +1157,12 @@ TEST_CASE("BENCH magit ops (set MG_BENCH_REPO[, MG_BENCH_FILE])")
 	};
 	bench("read_head           ", [&] { return mg::git::read_head(repo) ? 1 : 0; });
 	bench("repo_status         ", [&] { auto r = mg::git::repo_status(repo); return r ? (int)r->size() : -1; });
+	// Incremental refresh cost: a status scoped to one changed dir (set
+	// MG_BENCH_DIR to a workdir-relative subdir) vs the full scan above.
+	if (const char *d = std::getenv("MG_BENCH_DIR")) {
+		std::vector<std::string> dirs{d};
+		bench("repo_status_scoped  ", [&] { auto r = mg::git::repo_status_scoped(repo, dirs); return r ? (int)r->size() : -1; });
+	}
 	bench("recent_commits(100) ", [&] { auto r = mg::git::recent_commits(repo, 100); return r ? (int)r->size() : -1; });
 	bench("commit_diff(HEAD)   ", [&] { auto r = mg::git::commit_diff(repo, "HEAD"); return r ? (int)r->size() : -1; });
 	bench("upstream_commits(↑) ", [&] { auto r = mg::git::upstream_commits(repo, true); return r ? (int)r->size() : -1; });
@@ -2408,6 +2414,45 @@ TEST_CASE("repo_status_scoped over a dir == full status filtered to that dir")
                        [](auto &s) { return s.rfind("docs/", 0) == 0; }));
 
     git_libgit2_shutdown();
+    fs::remove_all(dir);
+}
+
+// The fsmonitor-lite correctness gate: maintaining a status set by scoped
+// patches must stay byte-for-byte equal to a fresh full repo_status after every
+// mutation (add / modify / delete / new nested dir / tracked-file modify).
+TEST_CASE("apply_status_patch keeps the running set == a fresh full status")
+{
+    auto dir = make_repo_multidir();
+    auto base = mg::git::repo_status(dir.string());
+    REQUIRE(base.has_value());
+    std::vector<mg::magit::file_status> S = *base;
+
+    // After mutating `reldir`, scope-patch S to it and assert S == fresh full.
+    auto resync = [&](const std::string &reldir) {
+        std::vector<std::string> dirs{reldir};
+        auto scoped = mg::git::repo_status_scoped(dir.string(), dirs);
+        REQUIRE(scoped.has_value());
+        mg::git::apply_status_patch(S, *scoped, dirs);
+        auto fresh = mg::git::repo_status(dir.string());
+        REQUIRE(fresh.has_value());
+        CHECK(status_keys(S) == status_keys(*fresh));
+    };
+
+    std::ofstream(dir / "src" / "new1.txt") << "n";          // add untracked
+    resync("src");
+    std::ofstream(dir / "src" / "a.txt") << "changed-bigger"; // modify untracked
+    resync("src");
+    fs::remove(dir / "src" / "a.txt");                        // delete
+    resync("src");
+    std::ofstream(dir / "docs" / "d.txt") << "d";             // change another dir
+    resync("docs");
+    fs::create_directory(dir / "src" / "sub2");
+    std::ofstream(dir / "src" / "sub2" / "x.txt") << "x";     // new nested dir+file
+    resync("src");
+    std::ofstream(dir / "src" / "sub" / "base.txt") << "MODIFIED"; // tracked-file edit
+    resync("src/sub");
+
+    git_libgit2_shutdown(); // balance make_repo_multidir's init
     fs::remove_all(dir);
 }
 

@@ -167,6 +167,30 @@ export namespace mg::git {
 inline void global_init() noexcept { git_libgit2_init(); }
 inline void global_shutdown() noexcept { git_libgit2_shutdown(); }
 
+// Patch a running status set in place: drop every entry under one of `dirs`
+// (workdir-relative directories) and append `scoped` -- the authoritative
+// repo_status_scoped result for those same dirs. After patching, `base` equals
+// a fresh full repo_status for the union of changes, so the incremental monitor
+// never drifts from ground truth (pinned by the property test). Handles
+// add/modify/delete/untracked/rename and collapsed untracked-dir entries (a
+// "dir/" path is under "dir").
+inline void apply_status_patch(std::vector<mg::magit::file_status> &base,
+                               std::span<const mg::magit::file_status> scoped,
+                               std::span<const std::string> dirs)
+{
+    auto under = [&](const std::string &p) {
+        for (const auto &d : dirs)
+            if (p == d || (p.size() > d.size() &&
+                           p.compare(0, d.size(), d) == 0 && p[d.size()] == '/'))
+                return true;
+        return false;
+    };
+    std::erase_if(base, [&](const mg::magit::file_status &f) {
+        return under(f.path);
+    });
+    base.insert(base.end(), scoped.begin(), scoped.end());
+}
+
 // A predicate `pred(absolute_dir)` -> true if that directory is gitignored and
 // so should not be watched (gitignored content cannot change `git status`, and
 // trees like node_modules/build dominate the watch set otherwise). `.git` and
