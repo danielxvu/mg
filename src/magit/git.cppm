@@ -12,7 +12,9 @@ module;
 #include <expected>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <system_error>
@@ -33,6 +35,23 @@ struct init_guard {
     ~init_guard() { git_libgit2_shutdown(); }
     init_guard(const init_guard &) = delete;
     init_guard &operator=(const init_guard &) = delete;
+};
+
+// Backs make_ignore_predicate: a long-lived repo handle + the workdir prefix,
+// guarded by a mutex so the predicate is safe to call from the monitor's two
+// threads (the initial walk runs on the caller's thread, later dynamic walks on
+// the monitor thread -- sequential, but the lock supplies the barrier and
+// satisfies libgit2's one-thread-at-a-time rule).
+struct ignore_checker {
+    init_guard guard;       // keep libgit2 alive for this handle's lifetime
+    git_repository *repo = nullptr;
+    std::string prefix;     // repo workdir, with trailing '/'
+    std::mutex mu;
+    ~ignore_checker()
+    {
+        if (repo != nullptr)
+            git_repository_free(repo);
+    }
 };
 
 using repo_ptr = std::unique_ptr<
@@ -146,6 +165,50 @@ export namespace mg::git {
 // the refcount never returns to 0 mid-flight.
 inline void global_init() noexcept { git_libgit2_init(); }
 inline void global_shutdown() noexcept { git_libgit2_shutdown(); }
+
+// A predicate `pred(absolute_dir)` -> true if that directory is gitignored and
+// so should not be watched (gitignored content cannot change `git status`, and
+// trees like node_modules/build dominate the watch set otherwise). `.git` and
+// everything under it is never ignored -- the watcher needs it for staging /
+// commit detection. Returns an empty function if the repo can't be opened (the
+// caller then watches everything, the prior behaviour). Thread-safe.
+inline std::function<bool(const std::string &)>
+make_ignore_predicate(std::string repo_path)
+{
+    auto chk = std::make_shared<detail::ignore_checker>();
+    if (git_repository_open(&chk->repo, repo_path.c_str()) != 0)
+        return {};
+    // Use the caller's spelling of the repo root as the prefix, NOT
+    // git_repository_workdir() -- the latter canonicalizes symlinks (e.g. macOS
+    // /var -> /private/var), which would mismatch the watcher's paths and make
+    // the predicate silently no-op. The watcher's absolute paths are all built
+    // from repo_path, so a plain prefix strip yields the workdir-relative path
+    // git_ignore_path_is_ignored wants (it cares about the relative string, not
+    // how the root is spelled).
+    chk->prefix = repo_path;
+    if (chk->prefix.empty())
+        return {};
+    if (chk->prefix.back() != '/')
+        chk->prefix += '/';
+    return [chk](const std::string &abs) -> bool {
+        // Only worktree paths are checkable; anything not under the workdir
+        // (notably the .git dir) is never gitignored from the watcher's view.
+        if (abs.size() <= chk->prefix.size() ||
+            abs.compare(0, chk->prefix.size(), chk->prefix) != 0)
+            return false;
+        std::string rel = abs.substr(chk->prefix.size());
+        if (rel == ".git" || rel.starts_with(".git/"))
+            return false; // git ignores .git itself; we must still watch it
+        // The predicate is only ever asked about directories; a trailing slash
+        // tells libgit2 so, so directory-only patterns ("node_modules/") match
+        // (it does not stat the path to discover dir-ness itself).
+        rel += '/';
+        std::lock_guard lk(chk->mu);
+        int ignored = 0;
+        return git_ignore_path_is_ignored(&ignored, chk->repo, rel.c_str()) == 0 &&
+               ignored != 0;
+    };
+}
 
 struct error {
     int klass;            // libgit2 error class

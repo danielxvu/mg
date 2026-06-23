@@ -16,6 +16,7 @@ module;
 #include <cstdint>
 #include <expected>
 #include <filesystem>      // recursive tree walk (both backends)
+#include <functional>      // ignore predicate (git-aware, supplied by caller)
 #include <span>
 #include <string>
 #include <unordered_map>   // wd/fd -> dir path
@@ -68,8 +69,9 @@ public:
             close_all();
             queue_fd_ = std::exchange(other.queue_fd_, -1);
             wake_fd_  = std::exchange(other.wake_fd_, -1);
-            ignores_  = std::move(other.ignores_);
-            degraded_ = std::exchange(other.degraded_, false);
+            ignores_     = std::move(other.ignores_);
+            ignore_pred_ = std::move(other.ignore_pred_);
+            degraded_    = std::exchange(other.degraded_, false);
 #if defined(__linux__)
             wd_path_  = std::move(other.wd_path_);
 #else
@@ -81,18 +83,22 @@ public:
     }
     ~watcher() { close_all(); }
 
-    // Open the queue and watch every root for write/delete/rename events.
+    // Open the queue and watch every root *recursively* for write/delete/rename
+    // events. Both backends register every directory under each root (inotify
+    // per-wd, kqueue per-fd) and keep the set in sync as dirs are created or
+    // removed.
     //
-    // On Linux the roots are watched *recursively* (inotify is not recursive on
-    // its own): every directory under each root is registered, the tree is kept
-    // in sync as directories are created/removed, and a queue overflow triggers
-    // a coarse resync. `ignores` lists path prefixes to skip (e.g. a repo's
-    // `.git/objects`, which churns hugely and is irrelevant to status). On
-    // kqueue (macOS) the roots are watched as given (non-recursive) and
-    // `ignores` is unused -- see the FM-LINUX-FIRSTCLASS spec.
+    // `ignores` lists path prefixes to skip (e.g. a repo's `.git/objects`, which
+    // churns hugely and is irrelevant to status). `ignore_pred`, if set, is also
+    // consulted per directory: the walk skips any directory for which it returns
+    // true. The monitor supplies a git-aware predicate so gitignored trees
+    // (node_modules, build/, …) -- which cannot affect `git status` and would
+    // otherwise dominate the watch set -- are never watched. It is a plain
+    // std::function so mg.fswatch stays git-agnostic.
     static std::expected<watcher, watch_error>
     create(std::span<const std::string> roots,
-           std::span<const std::string> ignores = {});
+           std::span<const std::string> ignores = {},
+           std::function<bool(const std::string &)> ignore_pred = {});
 
     // Block until a watched path changes or wake() is called. The returned
     // vector is empty when woken (no filesystem change).
@@ -140,6 +146,7 @@ private:
     // extending the tree. add_tree() recursively registers a dir + its subdirs;
     // is_ignored() tests a path against the prefixes.
     std::vector<std::string> ignores_;
+    std::function<bool(const std::string &)> ignore_pred_;
     bool degraded_ = false;
     void add_tree(const std::string &dir);
     bool is_ignored(const std::string &path) const;
@@ -174,7 +181,7 @@ bool watcher::is_ignored(const std::string &path) const
             (path.size() > ig.size() && path.compare(0, ig.size(), ig) == 0 &&
              path[ig.size()] == '/'))
             return true;
-    return false;
+    return ignore_pred_ && ignore_pred_(path);
 }
 
 #if defined(__linux__) // ---------------------------------------- inotify ----
@@ -222,7 +229,8 @@ void watcher::add_tree(const std::string &dir)
 
 std::expected<watcher, watch_error>
 watcher::create(std::span<const std::string> roots,
-                std::span<const std::string> ignores)
+                std::span<const std::string> ignores,
+                std::function<bool(const std::string &)> ignore_pred)
 {
     watcher w;
     w.queue_fd_ = ::inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
@@ -233,6 +241,7 @@ watcher::create(std::span<const std::string> roots,
         return std::unexpected(watch_error{"eventfd", errno});
 
     w.ignores_.assign(ignores.begin(), ignores.end());
+    w.ignore_pred_ = std::move(ignore_pred);
     for (const auto &r : roots)
         w.add_tree(r);
     if (w.wd_path_.empty()) // nothing watchable at all -> a real setup failure
@@ -351,7 +360,8 @@ void watcher::add_tree(const std::string &dir)
 
 std::expected<watcher, watch_error>
 watcher::create(std::span<const std::string> roots,
-                std::span<const std::string> ignores)
+                std::span<const std::string> ignores,
+                std::function<bool(const std::string &)> ignore_pred)
 {
     // Best-effort: raise the soft open-file limit toward the hard cap so a deep
     // tree's per-directory fds fit. Never lowers it; ignores failure.
@@ -379,6 +389,7 @@ watcher::create(std::span<const std::string> roots,
         return std::unexpected(watch_error{"kevent EVFILT_USER", errno});
 
     w.ignores_.assign(ignores.begin(), ignores.end());
+    w.ignore_pred_ = std::move(ignore_pred);
     for (const auto &r : roots)
         w.add_tree(r);
     if (w.fd_path_.empty()) // nothing watchable at all -> a real setup failure

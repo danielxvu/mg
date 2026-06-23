@@ -188,3 +188,39 @@ TEST_CASE("watcher skips ignored subtrees")
 
     fs::remove_all(dir);
 }
+
+// The optional ignore predicate is consulted per directory (git-agnostic here:
+// a synthetic predicate). A watched, non-matching dir still fires; a matching
+// one is skipped entirely. (The monitor backs this with libgit2's gitignore
+// check so node_modules/build trees aren't watched.)
+TEST_CASE("watcher honors a custom ignore predicate")
+{
+    auto dir = make_temp_dir();
+    fs::create_directory(dir / "skipme");
+    fs::create_directory(dir / "keep");
+    std::array<std::string, 1> roots{dir.string()};
+    auto pred = [](const std::string &p) {
+        return p.find("/skipme") != std::string::npos;
+    };
+    auto w = watcher::create(roots, {}, pred);
+    REQUIRE(w.has_value());
+
+    // A change under the non-matching dir fires.
+    { std::ofstream(dir / "keep" / "f.txt") << "x"; }
+    auto kept = w->wait();
+    REQUIRE(kept.has_value());
+    CHECK(kept->size() >= 1);
+
+    // A change under the predicate-matched dir does not (woken only).
+    std::thread t([&] {
+        { std::ofstream(dir / "skipme" / "f.txt") << "x"; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        w->wake();
+    });
+    auto skipped = w->wait();
+    t.join();
+    REQUIRE(skipped.has_value());
+    CHECK(skipped->empty());
+
+    fs::remove_all(dir);
+}

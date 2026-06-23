@@ -2305,6 +2305,32 @@ TEST_CASE("checkout_branch switches HEAD to the named branch")
     fs::remove_all(dir);
 }
 
+TEST_CASE("make_ignore_predicate flags gitignored dirs, not tracked dirs or .git")
+{
+    auto dir = make_temp_dir();
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_init(&repo, dir.string().c_str(), 0) == 0);
+    git_repository_free(repo);
+
+    std::ofstream(dir / ".gitignore") << "node_modules/\nbuild/\n";
+    fs::create_directory(dir / "node_modules");
+    fs::create_directory(dir / "build");
+    fs::create_directory(dir / "src");
+
+    auto pred = mg::git::make_ignore_predicate(dir.string());
+    REQUIRE(static_cast<bool>(pred)); // repo opened
+
+    CHECK(pred((dir / "node_modules").string())); // gitignored -> skip
+    CHECK(pred((dir / "build").string()));        // gitignored -> skip
+    CHECK_FALSE(pred((dir / "src").string()));     // tracked tree -> watch
+    CHECK_FALSE(pred((dir / ".git").string()));    // never ignore .git
+    CHECK_FALSE(pred(dir.string()));               // the root itself
+
+    git_libgit2_shutdown();
+    fs::remove_all(dir);
+}
+
 TEST_CASE("discard() reverts a modified tracked file to HEAD")
 {
     auto dir = make_repo_with_commit("v1"); // a.txt committed as "content"

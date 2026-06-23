@@ -130,8 +130,14 @@ Follow-up (resolved both caveats):
 
 ## Out of scope
 
-- Recursive kqueue / full macOS parity (separate; macOS now secondary).
-- git-aware ignore of `.gitignore`d trees (monitor-side; later).
+- Recursive kqueue / full macOS parity — **done** in the FM-LINUX-PARITY
+  follow-up (PR #80).
+- git-aware ignore of `.gitignore`d trees — **done** (PR #81): the monitor
+  supplies a libgit2-backed predicate so gitignored trees (node_modules,
+  build/, …) are never watched. Measured on ~/src: d20app 50,975 → ~1,189
+  watched dirs, dsp 49,463 → ~315, roll20/grimoire ~10k → ~120 — every repo now
+  fits any backend's watch budget, and build/node_modules churn no longer wakes
+  the monitor. `.git` is always exempt (watching it detects staging/commits).
 - fsmonitor/fanotify daemon-style incremental status (libgit2-gated; the
   FM-ASYNC-STATUS spec's "syscall ceiling" note).
 - A general watchman replacement — scope is mg's status monitor needs.
