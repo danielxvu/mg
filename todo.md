@@ -328,7 +328,8 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `fm-linux-parity`→fm-linux-firstclass (#80),
   `fm-gitignore-watch`→fm-linux-parity (#81),
   `fm-status-scoped`→fm-gitignore-watch (#82),
-  `fm-status-incremental`→fm-status-scoped (#83). 🎉 **FM-ASYNC-STATUS COMPLETE**
+  `fm-status-incremental`→fm-status-scoped (#83),
+  `fm-repo-session`→fm-status-incremental (#84). 🎉 **FM-ASYNC-STATUS COMPLETE**
   — status build off the UI thread (233ms→0.17ms warm on the 37.5k-file repo),
   idle self-pipe wake redraws with no keypress, fingerprint-based staleness.
   🎉 **FM-ASYNC-BLAME COMPLETE** (#78) — blame / per-file log run on a job-runner
@@ -360,6 +361,12 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   its global locks. Confirms the only lever is *not scanning* (incremental), not
   scanning in parallel — same reason git uses fsmonitor, not threads. Serial
   gather stays. (Negative result documented in the FM-FSMONITOR-LITE spec.)
+  🎉 **FM-REPO-SESSION COMPLETE** (#84) — reusable mg::git::session (one held
+  libgit2 handle, PIMPL across the module boundary); a Phase-0 spike proved a
+  reused handle skips the index re-read (16.8ms→0.6ms scoped, ~28x). The monitor
+  re-opens the session on .git/full-refresh and reuses it for scoped status on
+  worktree edits → warm incremental refresh ~20ms→~0.6ms, below git+fsmonitor.
+  Monitor-thread-private → race-free by construction. 195/195 macOS+Alpine+TSan.
   Magit core (A+B, #31-#41) done; UTF-8 "Full" U5-U8 (#42-#45). **Phase C**
   (honest gap vs real magit; spec
   `docs/superpowers/specs/2026-06-21-fm-phase-c-roadmap.md`): ✅ FM-RB-1
