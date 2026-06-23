@@ -411,6 +411,11 @@ const char *state_word(mg::magit::status s)
 
 extern "C" void mg_magit_start(const char *repo_path)
 {
+    // Hold one libgit2 init for the whole monitor+worker lifetime so the global
+    // refcount never returns to 0 while they run -- otherwise a per-call
+    // init_guard hitting 0 on one thread races libgit2's global (OpenSSL) setup
+    // on another (TSan-confirmed on the Linux/OpenSSL backend).
+    mg::git::global_init();
     g_wake.open_pipe(); // before any worker thread that may signal it
     g_monitor = std::make_unique<monitor>(repo_path ? repo_path : ".");
     g_jobs = std::make_unique<job_runner>();
@@ -418,9 +423,10 @@ extern "C" void mg_magit_start(const char *repo_path)
 
 extern "C" void mg_magit_stop(void)
 {
-    g_jobs.reset();    // joins the worker thread
-    g_monitor.reset(); // joins the monitor thread
+    g_jobs.reset();      // joins the worker thread
+    g_monitor.reset();   // joins the monitor thread
     g_wake.close_pipe(); // no thread touches g_wake after the joins
+    mg::git::global_shutdown(); // drop the lifetime ref now the threads are gone
 }
 
 extern "C" int mg_magit_take_dirty(void)

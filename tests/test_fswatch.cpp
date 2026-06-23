@@ -1,6 +1,7 @@
 // Unit tests for the mg.fswatch OS-abstracted filesystem watcher (task M2a).
-// Exercised here against the kqueue backend (macOS); the inotify backend mirrors
-// it and is covered by Linux CI. Uses real temp dirs via mkdtemp.
+// Both backends (kqueue on macOS, inotify on Linux) are recursive and arm
+// synchronously, so these run identically on both platforms. Uses real temp
+// dirs via mkdtemp.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
@@ -119,12 +120,13 @@ TEST_CASE("watch_stream yields an event when the watched dir changes")
     fs::remove_all(dir);
 }
 
-#if defined(__linux__) // ---- recursive inotify (FM-LINUX-FIRSTCLASS) --------
+// ---- recursive watching (FM-LINUX-FIRSTCLASS) -------------------------------
+// Both backends are recursive: inotify registers every dir under each root;
+// kqueue opens an fd per dir. These run on both platforms (synchronous arming
+// on both, so "touch then wait" is race-free).
 
-// inotify is per-directory; the recursive backend must watch nested dirs that
-// existed at create time, so a deep edit fires (kqueue is non-recursive, hence
-// Linux-gated).
-TEST_CASE("inotify watches pre-existing nested directories recursively")
+// A deep edit under a pre-existing nested directory must fire.
+TEST_CASE("watcher watches pre-existing nested directories recursively")
 {
     auto dir = make_temp_dir();
     fs::create_directories(dir / "a" / "b" / "c");
@@ -143,7 +145,7 @@ TEST_CASE("inotify watches pre-existing nested directories recursively")
 
 // A directory created *after* watching must be picked up dynamically, so a file
 // later created inside it fires too.
-TEST_CASE("inotify dynamically watches directories created after create()")
+TEST_CASE("watcher dynamically watches directories created after create()")
 {
     auto dir = make_temp_dir();
     std::array<std::string, 1> roots{dir.string()};
@@ -164,7 +166,7 @@ TEST_CASE("inotify dynamically watches directories created after create()")
 
 // A change under an ignored prefix must not wake the watcher: the ignored dir
 // is never registered, so the only thing that releases wait() is the wake().
-TEST_CASE("inotify skips ignored subtrees")
+TEST_CASE("watcher skips ignored subtrees")
 {
     auto dir = make_temp_dir();
     fs::create_directory(dir / "ig");
@@ -186,5 +188,3 @@ TEST_CASE("inotify skips ignored subtrees")
 
     fs::remove_all(dir);
 }
-
-#endif // __linux__

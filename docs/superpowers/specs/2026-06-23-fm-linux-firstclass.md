@@ -109,11 +109,24 @@ All four phases landed and validated in containers:
 - **Install** — `cmake --install` lays down `bin/mg` + `share/man/man1/mg.1`
   only (doctest excluded via `EXCLUDE_FROM_ALL`). Verified on macOS + Arch.
 
-Known item: arm64-Linux **TSan** flags two libgit2 engine tests (bisect, blame)
-that pass under macOS TSan and non-TSan Linux — an arm64+libgit2+TSan artifact,
-not an mg race; the CI canary runs on x86_64 to confirm. The two latent
-Linux-only build bugs (lib/ include path, inotify ternary) were fixed in the
-preceding Docker commit.
+Follow-up (resolved both caveats):
+
+- **macOS parity** — the kqueue backend is now recursive too (per-dir fd +
+  EVFILT_VNODE, dynamic rescan-on-change, `RLIMIT_NOFILE` raised, degrade on
+  EMFILE). The 3 recursive doctests now run on **both** platforms (synchronous
+  arming on both; FSEvents was rejected because its async arming + coalescing
+  latency would make the tests flaky). macOS is now 188/188.
+- **Linux TSan** — what looked like an "arm64 artifact" was two real things:
+  (1) libgit2's uninstrumented global mutexes (false positives) → filtered via
+  `tests/tsan.supp`; and (2) a **genuine data race** — the per-call
+  `git_libgit2_init`/`shutdown` refcount crossing 0↔1 concurrently on the
+  monitor and worker threads, racing libgit2's global **OpenSSL** setup/teardown
+  (invisible on macOS, which uses SecureTransport). Fixed by holding one
+  `mg::git::global_init()` for the whole monitor+worker lifetime
+  (`mg_magit_start`→`stop`) so the refcount never returns to 0 mid-flight. Linux
+  TSan is now **188/188, 0 races**, and the CI TSan job is a required gate (no
+  longer a canary). The two latent Linux-only build bugs (lib/ include path,
+  inotify ternary) were fixed in the preceding Docker commit.
 
 ## Out of scope
 

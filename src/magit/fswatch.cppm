@@ -15,15 +15,13 @@ module;
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <filesystem>      // recursive tree walk (both backends)
 #include <span>
 #include <string>
+#include <unordered_map>   // wd/fd -> dir path
+#include <unordered_set>   // kqueue: dedup re-adds
 #include <utility>
 #include <vector>
-
-#if defined(__linux__)
-#  include <filesystem>
-#  include <unordered_map>
-#endif
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -35,6 +33,7 @@ module;
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
 #  include <array>
 #  include <sys/event.h>
+#  include <sys/resource.h> // raise RLIMIT_NOFILE for the per-dir watch fds
 #  include <sys/types.h>
 #else
 #  error "mg.fswatch: unsupported platform (needs kqueue or inotify)"
@@ -69,13 +68,13 @@ public:
             close_all();
             queue_fd_ = std::exchange(other.queue_fd_, -1);
             wake_fd_  = std::exchange(other.wake_fd_, -1);
-#if defined(__linux__)
-            wd_path_  = std::move(other.wd_path_);
             ignores_  = std::move(other.ignores_);
             degraded_ = std::exchange(other.degraded_, false);
+#if defined(__linux__)
+            wd_path_  = std::move(other.wd_path_);
 #else
-            watch_fds_ = std::move(other.watch_fds_);
-            paths_     = std::move(other.paths_);
+            fd_path_  = std::move(other.fd_path_);
+            watched_  = std::move(other.watched_);
 #endif
         }
         return *this;
@@ -115,10 +114,13 @@ private:
     void close_all() noexcept
     {
 #if !defined(__linux__)
-        for (int f : watch_fds_) // kqueue: per-dir open fds
-            if (f >= 0)
-                ::close(f);
-        watch_fds_.clear();
+        for (const auto &kv : fd_path_) // kqueue: per-dir open fds
+            if (kv.first >= 0)
+                ::close(kv.first);
+        fd_path_.clear();
+        watched_.clear();
+#else
+        wd_path_.clear(); // inotify wds are dropped when queue_fd_ is closed
 #endif
         if (wake_fd_ >= 0) {
             ::close(wake_fd_);
@@ -132,18 +134,20 @@ private:
 
     int queue_fd_ = -1; // kqueue fd, or inotify fd
     int wake_fd_  = -1; // inotify: eventfd; kqueue: unused (-1)
-#if defined(__linux__)
-    // Recursive inotify state: every watched directory's wd -> its path, the
-    // ignore prefixes, and a degraded flag set if the kernel watch limit
-    // (max_user_watches) is hit while building/extending the tree.
-    std::unordered_map<int, std::string> wd_path_;
+
+    // Recursive-watch state shared by both backends: the ignore prefixes and a
+    // degraded flag set when the kernel watch/fd limit is hit while building or
+    // extending the tree. add_tree() recursively registers a dir + its subdirs;
+    // is_ignored() tests a path against the prefixes.
     std::vector<std::string> ignores_;
     bool degraded_ = false;
-    void add_tree(const std::string &dir); // recursively watch dir + subdirs
+    void add_tree(const std::string &dir);
     bool is_ignored(const std::string &path) const;
+#if defined(__linux__)
+    std::unordered_map<int, std::string> wd_path_; // inotify: watch desc -> dir
 #else
-    std::vector<int> watch_fds_;      // kqueue: per-dir open fds
-    std::vector<std::string> paths_;  // parallel to watch_fds_
+    std::unordered_map<int, std::string> fd_path_; // kqueue: open fd -> dir
+    std::unordered_set<std::string> watched_;      // kqueue: avoid re-watching
 #endif
 };
 
@@ -161,10 +165,8 @@ mg::generator<fs_event> watch_stream(watcher &w, mg::stop_flag stop)
     }
 }
 
-#if defined(__linux__) // ---------------------------------------- inotify ----
-// Recursive watcher: inotify is per-directory, not recursive, so we register
-// every directory under each root and keep the set in sync as the tree changes.
-
+// True if `path` is, or is nested under, any ignore prefix. Shared by both
+// backends; the recursive walk skips these subtrees.
 bool watcher::is_ignored(const std::string &path) const
 {
     for (const auto &ig : ignores_)
@@ -174,6 +176,10 @@ bool watcher::is_ignored(const std::string &path) const
             return true;
     return false;
 }
+
+#if defined(__linux__) // ---------------------------------------- inotify ----
+// Recursive watcher: inotify is per-directory, not recursive, so we register
+// every directory under each root and keep the set in sync as the tree changes.
 
 // Register `dir` and, depth-first, every directory beneath it (skipping ignored
 // subtrees). Idempotent: inotify returns the same wd for an already-watched
@@ -298,38 +304,85 @@ watcher::wait()
 }
 
 #else // ----------------------------------------------------------- kqueue ----
+// Recursive watcher: kqueue's EVFILT_VNODE is per-open-fd (per directory), so
+// -- like inotify -- we open + register every directory under each root and
+// keep the set in sync. One fd per directory, so we raise RLIMIT_NOFILE and
+// degrade (not fail) if it is exhausted on a very large tree.
+
+// Register `dir` and, depth-first, every directory beneath it (skipping ignored
+// subtrees and dirs already watched -- open() is not idempotent, so re-adding
+// would leak fds). Sets degraded_ if the open-file limit is hit.
+void watcher::add_tree(const std::string &dir)
+{
+    namespace fs = std::filesystem;
+    std::vector<std::string> stack{dir};
+    while (!stack.empty()) {
+        std::string d = std::move(stack.back());
+        stack.pop_back();
+        if (is_ignored(d) || watched_.count(d))
+            continue;
+
+        int wfd = ::open(d.c_str(), O_RDONLY);
+        if (wfd < 0) {
+            if (errno == EMFILE || errno == ENFILE)
+                degraded_ = true; // out of fds; function on what we have
+            continue;             // unreadable/vanished dir: skip, keep going
+        }
+        struct kevent kev;
+        EV_SET(&kev, wfd, EVFILT_VNODE, EV_ADD | EV_CLEAR,
+               NOTE_WRITE | NOTE_DELETE | NOTE_RENAME | NOTE_EXTEND, 0, nullptr);
+        if (::kevent(queue_fd_, &kev, 1, nullptr, 0, nullptr) < 0) {
+            ::close(wfd);
+            continue;
+        }
+        fd_path_[wfd] = d;
+        watched_.insert(d);
+
+        std::error_code ec;
+        for (fs::directory_iterator it(d, fs::directory_options::skip_permission_denied,
+                                       ec), end;
+             !ec && it != end; it.increment(ec)) {
+            std::error_code ec2;
+            if (it->is_directory(ec2) && !ec2)
+                stack.push_back(it->path().string());
+        }
+    }
+}
 
 std::expected<watcher, watch_error>
-watcher::create(std::span<const std::string> paths,
-                std::span<const std::string> /*ignores: kqueue is non-recursive*/)
+watcher::create(std::span<const std::string> roots,
+                std::span<const std::string> ignores)
 {
+    // Best-effort: raise the soft open-file limit toward the hard cap so a deep
+    // tree's per-directory fds fit. Never lowers it; ignores failure.
+    struct rlimit rl;
+    if (::getrlimit(RLIMIT_NOFILE, &rl) == 0 && rl.rlim_cur < 10240) {
+        rlim_t want = (rl.rlim_max == RLIM_INFINITY || rl.rlim_max > 10240)
+                          ? 10240
+                          : rl.rlim_max;
+        if (want > rl.rlim_cur) {
+            rl.rlim_cur = want;
+            ::setrlimit(RLIMIT_NOFILE, &rl);
+        }
+    }
+
     watcher w;
     w.queue_fd_ = ::kqueue();
     if (w.queue_fd_ < 0)
         return std::unexpected(watch_error{"kqueue", errno});
 
-    // A user-triggerable event so wake() can unblock a blocked wait().
+    // A user-triggerable event so wake() can unblock a blocked wait(). Its own
+    // filter space (EVFILT_USER), so it never collides with the per-dir fds.
     struct kevent uev;
     EV_SET(&uev, kWakeIdent, EVFILT_USER, EV_ADD | EV_CLEAR, 0, 0, nullptr);
     if (::kevent(w.queue_fd_, &uev, 1, nullptr, 0, nullptr) < 0)
         return std::unexpected(watch_error{"kevent EVFILT_USER", errno});
 
-    for (const auto &p : paths) {
-        int fd = ::open(p.c_str(), O_RDONLY);
-        if (fd < 0)
-            return std::unexpected(watch_error{"open: " + p, errno});
-
-        struct kevent kev;
-        EV_SET(&kev, fd, EVFILT_VNODE, EV_ADD | EV_CLEAR,
-               NOTE_WRITE | NOTE_DELETE | NOTE_RENAME | NOTE_EXTEND, 0,
-               reinterpret_cast<void *>(static_cast<std::intptr_t>(w.paths_.size())));
-        if (::kevent(w.queue_fd_, &kev, 1, nullptr, 0, nullptr) < 0) {
-            ::close(fd);
-            return std::unexpected(watch_error{"kevent register: " + p, errno});
-        }
-        w.watch_fds_.push_back(fd);
-        w.paths_.push_back(p);
-    }
+    w.ignores_.assign(ignores.begin(), ignores.end());
+    for (const auto &r : roots)
+        w.add_tree(r);
+    if (w.fd_path_.empty()) // nothing watchable at all -> a real setup failure
+        return std::unexpected(watch_error{"open (no roots)", errno});
     return w;
 }
 
@@ -343,7 +396,7 @@ void watcher::wake() noexcept
 std::expected<std::vector<fs_event>, watch_error>
 watcher::wait()
 {
-    std::array<struct kevent, 16> evs;
+    std::array<struct kevent, 32> evs;
     int n = ::kevent(queue_fd_, nullptr, 0, evs.data(),
                      static_cast<int>(evs.size()), nullptr); // block indefinitely
     if (n < 0)
@@ -351,15 +404,41 @@ watcher::wait()
                               : std::unexpected(watch_error{"kevent wait", errno});
 
     std::vector<fs_event> out;
-    std::vector<bool> seen(paths_.size(), false);
+    std::vector<std::string> rescan; // dirs whose contents changed
     for (int i = 0; i < n; ++i) {
         if (evs[i].filter == EVFILT_USER)
             continue; // woken via wake(), not a filesystem change
-        auto idx = static_cast<std::size_t>(
-            reinterpret_cast<std::intptr_t>(evs[i].udata));
-        if (idx < paths_.size() && !seen[idx]) {
-            seen[idx] = true;
-            out.push_back(fs_event{paths_[idx]});
+        int wfd = static_cast<int>(evs[i].ident);
+        auto it = fd_path_.find(wfd);
+        if (it == fd_path_.end())
+            continue;
+
+        if (out.empty()) // coarse: one event carries the first changed dir
+            out.push_back(fs_event{it->second});
+
+        if (evs[i].fflags & (NOTE_DELETE | NOTE_RENAME)) {
+            // The watched dir vanished/moved: drop it.
+            ::close(wfd);
+            watched_.erase(it->second);
+            fd_path_.erase(it);
+        } else {
+            // NOTE_WRITE/EXTEND: its entries changed -> maybe new subdirs.
+            rescan.push_back(it->second);
+        }
+    }
+    // kqueue doesn't say *what* changed in a dir, so for each changed dir we
+    // enumerate its immediate children and recursively watch any new subdir
+    // (add_tree skips the changed dir itself, which is already watched).
+    namespace fs = std::filesystem;
+    for (const auto &d : rescan) {
+        std::error_code ec;
+        for (fs::directory_iterator it(d, fs::directory_options::skip_permission_denied,
+                                       ec), end;
+             !ec && it != end; it.increment(ec)) {
+            std::error_code ec2;
+            if (it->is_directory(ec2) && !ec2 &&
+                !watched_.count(it->path().string()))
+                add_tree(it->path().string());
         }
     }
     return out;

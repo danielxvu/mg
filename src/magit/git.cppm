@@ -137,6 +137,16 @@ mg::magit::file_status map_entry(const git_status_entry *e)
 
 export namespace mg::git {
 
+// Process-wide libgit2 lifetime control. Each engine call already holds a
+// refcounted detail::init_guard, but when the refcount crosses 0<->1 libgit2
+// sets up / tears down global state (notably OpenSSL on Linux). If two threads
+// do that concurrently it is a data race (ThreadSanitizer-confirmed). Callers
+// that run the engine on multiple threads should hold one global_init() for the
+// whole lifetime -- before the threads start, released after they join -- so
+// the refcount never returns to 0 mid-flight.
+inline void global_init() noexcept { git_libgit2_init(); }
+inline void global_shutdown() noexcept { git_libgit2_shutdown(); }
+
 struct error {
     int klass;            // libgit2 error class
     std::string message;

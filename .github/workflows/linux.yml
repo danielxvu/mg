@@ -32,12 +32,9 @@ jobs:
   tsan:
     name: ThreadSanitizer (Arch, native runtime)
     runs-on: ubuntu-latest
-    # Informational canary: the concurrency gate is also covered by the macOS
-    # cpp-tsan run. Local arm64-Linux TSan showed two libgit2-related engine-test
-    # failures (bisect, blame) that do NOT occur under macOS TSan or non-TSan
-    # Linux -- i.e. an arm64+libgit2+TSan artifact, not a race in mg. This job
-    # runs on the x86_64 runner to confirm that; promote to required once green.
-    continue-on-error: true
+    # Native-Linux ThreadSanitizer gate. libgit2's uninstrumented global mutexes
+    # are filtered via tests/tsan.supp (wired through the cpp-linux-tsan test
+    # preset); mg's own concurrency stays fully checked.
     steps:
       - uses: actions/checkout@v4
       - name: docker build with the cpp-linux-tsan preset

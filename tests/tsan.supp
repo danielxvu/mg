@@ -1,0 +1,10 @@
+# ThreadSanitizer suppressions for the mg test suite.
+#
+# libgit2 is a system library built WITHOUT ThreadSanitizer, so TSan never sees
+# its global mutexes get initialized in git_libgit2_init() and then reports
+# lock/unlock on them as "use of an invalid mutex" / "unlock of an unlocked
+# mutex". Every such report originates inside libgit2 (frame #1) from ordinary,
+# single-threaded engine calls -- they are not data races or lock bugs in mg.
+# Suppress any report whose stack passes through libgit2; mg's own concurrency
+# (the status monitor + the blame/log worker) remains fully checked.
+called_from_lib:libgit2

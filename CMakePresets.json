@@ -80,7 +80,10 @@
     {
       "name": "cpp-tsan",
       "configurePreset": "cpp-tsan",
-      "output": { "outputOnFailure": true }
+      "output": { "outputOnFailure": true },
+      "environment": {
+        "TSAN_OPTIONS": "suppressions=${sourceDir}/tests/tsan.supp"
+      }
     },
     {
       "name": "cpp-linux",
@@ -90,7 +93,10 @@
     {
       "name": "cpp-linux-tsan",
       "configurePreset": "cpp-linux-tsan",
-      "output": { "outputOnFailure": true }
+      "output": { "outputOnFailure": true },
+      "environment": {
+        "TSAN_OPTIONS": "suppressions=${sourceDir}/tests/tsan.supp"
+      }
     }
   ]
 }
