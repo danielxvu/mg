@@ -26,10 +26,23 @@ when the index is unchanged, skips the full index re-read.** That is the warm
 
 **Phase 0 is a throwaway spike, not the rewrite:** open one handle, run
 `git_status` (scoped to a dir) in a loop on roll20 *without* mutating the index,
-and measure 2nd-call latency vs the cold per-call ~20 ms. If it drops to low
-single digits / sub-ms → proceed. **If libgit2 re-reads the index regardless →
-stop here; the rewrite buys nothing and isn't worth the churn.** This is a ~30-
-minute measurement that decides whether the milestone happens at all.
+and measure 2nd-call latency vs the cold per-call ~20 ms.
+
+**RESULT: PASSED — go.** Raw-libgit2 probe on roll20:
+
+| | per-call open | reused handle (2nd+ call) |
+| --- | --- | --- |
+| scoped to a small subdir | 16.8 ms | **0.6 ms** (~28×) |
+| whole repo | 144 ms | 120 ms (~1.2×) |
+
+A reused handle skips the index re-read: scoped status drops 16.8 → 0.6 ms, so
+the ~20 ms incremental floor *is* the per-call index re-parse and reuse removes
+it. `UPDATE_INDEX` does not defeat reuse (0.60 vs 0.54 ms), so we keep it. The
+whole-repo case barely moves (the 37k-file `lstat` walk is inherent per call) —
+which is fine: the win lands exactly on the **warm incremental path** (worktree
+edits → scoped status), the common case, taking it ~20 ms → ~0.6 ms, below
+git+fsmonitor. The cold `full_refresh` re-opens and stays ~120–140 ms,
+unchanged.
 
 ## Design (assuming the gate passes)
 
