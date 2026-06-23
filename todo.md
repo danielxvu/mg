@@ -326,7 +326,9 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `fm-async-blame`→fm-async-status-p2 (#78),
   `fm-linux-firstclass`→fm-async-blame (#79),
   `fm-linux-parity`→fm-linux-firstclass (#80),
-  `fm-gitignore-watch`→fm-linux-parity (#81). 🎉 **FM-ASYNC-STATUS COMPLETE**
+  `fm-gitignore-watch`→fm-linux-parity (#81),
+  `fm-status-scoped`→fm-gitignore-watch (#82),
+  `fm-status-incremental`→fm-status-scoped (#83). 🎉 **FM-ASYNC-STATUS COMPLETE**
   — status build off the UI thread (233ms→0.17ms warm on the 37.5k-file repo),
   idle self-pipe wake redraws with no keypress, fingerprint-based staleness.
   🎉 **FM-ASYNC-BLAME COMPLETE** (#78) — blame / per-file log run on a job-runner
@@ -346,6 +348,13 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   libgit2-backed predicate (node_modules/build can't affect status); on ~/src
   d20app 50,975→~1,189 watched dirs, dsp 49,463→~315. fswatch stays git-agnostic
   (std::function predicate); .git always exempt. macOS/Alpine/Linux-TSan 190/190.
+  🎉 **FM-FSMONITOR-LITE COMPLETE** (#82 primitive, #83 reconcile) — incremental
+  watcher-driven status: monitor holds a status_view cache, scope-patches only
+  the changed dirs (repo_status_scoped + apply_status_patch), reuses cached refs;
+  .git/root/resync/degraded → full rescan. Per-worktree-change cost ~300ms→~20ms
+  (~15x, ≈ git+fsmonitor) on roll20. Property test pins incremental==full;
+  194/194 macOS+Alpine+Linux-TSan, 0 races. repo_status_scoped also powers the
+  pending FM-PARALLEL-STATUS (cold-path partition scan).
   Magit core (A+B, #31-#41) done; UTF-8 "Full" U5-U8 (#42-#45). **Phase C**
   (honest gap vs real magit; spec
   `docs/superpowers/specs/2026-06-21-fm-phase-c-roadmap.md`): ✅ FM-RB-1
