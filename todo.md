@@ -324,7 +324,8 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   `fm-status-perf2`→fm-log-perf (#75), `fm-async-status-p1`→fm-log-perf (#76),
   `fm-async-status-p2`→fm-async-status-p1 (#77),
   `fm-async-blame`→fm-async-status-p2 (#78),
-  `fm-linux-firstclass`→fm-async-blame (#79). 🎉 **FM-ASYNC-STATUS COMPLETE**
+  `fm-linux-firstclass`→fm-async-blame (#79),
+  `fm-linux-parity`→fm-linux-firstclass (#80). 🎉 **FM-ASYNC-STATUS COMPLETE**
   — status build off the UI thread (233ms→0.17ms warm on the 37.5k-file repo),
   idle self-pipe wake redraws with no keypress, fingerprint-based staleness.
   🎉 **FM-ASYNC-BLAME COMPLETE** (#78) — blame / per-file log run on a job-runner
@@ -334,6 +335,12 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   edits + .git/refs|logs wake the monitor; dynamic add, overflow resync, ENOSPC
   degrade, .git/objects ignored); cpp-linux[-tsan] presets; Arch+Alpine CI; install
   rules. Arch/Alpine 188/188 in-container; macOS kqueue path unchanged.
+  🎉 **FM-LINUX-PARITY COMPLETE** (#80) — recursive kqueue (macOS parity, the 3
+  recursive tests now run on both backends); FIXED a real libgit2/OpenSSL global-
+  init data race (per-call init refcount crossing 0↔1 across the monitor+worker
+  threads) by holding one global_init for the bridge lifetime; tests/tsan.supp
+  filters libgit2 false positives; CI TSan now a required gate. Linux TSan
+  188/188, 0 races; macOS 188/188.
   Magit core (A+B, #31-#41) done; UTF-8 "Full" U5-U8 (#42-#45). **Phase C**
   (honest gap vs real magit; spec
   `docs/superpowers/specs/2026-06-21-fm-phase-c-roadmap.md`): ✅ FM-RB-1
