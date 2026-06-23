@@ -4,6 +4,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -11,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <vector>
 
 #include <git2.h>
 
@@ -2326,6 +2328,105 @@ TEST_CASE("make_ignore_predicate flags gitignored dirs, not tracked dirs or .git
     CHECK_FALSE(pred((dir / "src").string()));     // tracked tree -> watch
     CHECK_FALSE(pred((dir / ".git").string()));    // never ignore .git
     CHECK_FALSE(pred(dir.string()));               // the root itself
+
+    git_libgit2_shutdown();
+    fs::remove_all(dir);
+}
+
+namespace {
+// Sorted "path|index|worktree" keys for comparing status result sets.
+std::vector<std::string> status_keys(const std::vector<mg::magit::file_status> &v)
+{
+    std::vector<std::string> k;
+    for (const auto &f : v)
+        k.push_back(f.path + "|" + std::to_string((int)f.index) + "|" +
+                    std::to_string((int)f.worktree));
+    std::sort(k.begin(), k.end());
+    return k;
+}
+// A repo whose dirs are tracked (a committed base file in each), then dirtied
+// with untracked files at root and in two nested dirs. Tracked ancestors make
+// git report the individual nested files (not a collapsed untracked dir).
+fs::path make_repo_multidir()
+{
+    auto dir = make_temp_dir();
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_init(&repo, dir.string().c_str(), 0) == 0);
+    fs::create_directories(dir / "src" / "sub");
+    fs::create_directory(dir / "docs");
+    std::ofstream(dir / "base.txt") << "x";
+    std::ofstream(dir / "src" / "sub" / "base.txt") << "x";
+    std::ofstream(dir / "docs" / "base.txt") << "x";
+
+    git_index *idx = nullptr;
+    REQUIRE(git_repository_index(&idx, repo) == 0);
+    for (const char *p : {"base.txt", "src/sub/base.txt", "docs/base.txt"})
+        REQUIRE(git_index_add_bypath(idx, p) == 0);
+    REQUIRE(git_index_write(idx) == 0);
+    git_oid tree_oid;
+    REQUIRE(git_index_write_tree(&tree_oid, idx) == 0);
+    git_tree *tree = nullptr;
+    REQUIRE(git_tree_lookup(&tree, repo, &tree_oid) == 0);
+    git_signature *sig = nullptr;
+    REQUIRE(git_signature_now(&sig, "t", "t@t") == 0);
+    git_oid coid;
+    REQUIRE(git_commit_create(&coid, repo, "HEAD", sig, sig, nullptr, "base",
+                              tree, 0, nullptr) == 0);
+    git_signature_free(sig);
+    git_tree_free(tree);
+    git_index_free(idx);
+    git_repository_free(repo);
+
+    std::ofstream(dir / "root.txt") << "r";          // untracked at root
+    std::ofstream(dir / "src" / "a.txt") << "a";      // untracked under tracked src
+    std::ofstream(dir / "src" / "sub" / "b.txt") << "b"; // untracked, nested
+    std::ofstream(dir / "docs" / "c.txt") << "c";     // untracked under tracked docs
+    return dir;
+}
+} // namespace
+
+TEST_CASE("repo_status_scoped over a dir == full status filtered to that dir")
+{
+    auto dir = make_repo_multidir();
+    auto full = mg::git::repo_status(dir.string());
+    REQUIRE(full.has_value());
+    std::vector<std::string> ps{"src"};
+    auto scoped = mg::git::repo_status_scoped(dir.string(), ps);
+    REQUIRE(scoped.has_value());
+
+    std::vector<mg::magit::file_status> expected;
+    for (const auto &f : *full)
+        if (f.path.rfind("src/", 0) == 0)
+            expected.push_back(f);
+    CHECK(status_keys(*scoped) == status_keys(expected));
+    // sanity: the nested file is in, the out-of-scope ones are not
+    auto k = status_keys(*scoped);
+    CHECK(std::any_of(k.begin(), k.end(),
+                      [](auto &s) { return s.rfind("src/sub/b.txt", 0) == 0; }));
+    CHECK(std::none_of(k.begin(), k.end(),
+                       [](auto &s) { return s.rfind("docs/", 0) == 0; }));
+
+    git_libgit2_shutdown();
+    fs::remove_all(dir);
+}
+
+TEST_CASE("repo_status_scoped: a complete disjoint partition unions to full")
+{
+    auto dir = make_repo_multidir();
+    auto full = mg::git::repo_status(dir.string());
+    REQUIRE(full.has_value());
+
+    // Partition the top-level entries: {src} and {docs, root.txt}.
+    std::vector<std::string> g1{"src"}, g2{"docs", "root.txt"};
+    auto p1 = mg::git::repo_status_scoped(dir.string(), g1);
+    auto p2 = mg::git::repo_status_scoped(dir.string(), g2);
+    REQUIRE(p1.has_value());
+    REQUIRE(p2.has_value());
+
+    std::vector<mg::magit::file_status> u = *p1;
+    u.insert(u.end(), p2->begin(), p2->end());
+    CHECK(status_keys(u) == status_keys(*full)); // no gaps, no dupes
 
     git_libgit2_shutdown();
     fs::remove_all(dir);

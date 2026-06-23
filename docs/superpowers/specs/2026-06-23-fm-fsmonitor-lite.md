@@ -68,11 +68,45 @@ reports the **set of changed directories**; scoped status re-examines each.
 Dir-level is plenty: re-statusing one directory is microseconds vs the whole
 repo.
 
+## Shared primitive + the parallel-status consumer (FM-PARALLEL-STATUS)
+
+`repo_status_scoped` is built to serve **two** consumers, so it is designed for
+both up front (avoids a later refactor):
+
+- **Incremental (this milestone):** scope to the *changed* dirs → O(changed).
+- **Parallel cold scan (companion milestone, FM-PARALLEL-STATUS):** the
+  fallback/cold full scan (open, commit, stage — still 179 ms + ~100 ms refs
+  today) is attacked with parallelism, reusing the same primitive:
+  1. **Fan out the independent components.** `status_buffer` = scan ∥ branches ∥
+     tags ∥ recent_commits, run concurrently on the existing `job_runner` pool →
+     wall-clock `max(...)` (~179 ms) instead of the serial sum (~285 ms).
+  2. **Partition the scan.** Split the worktree's top-level entries into N
+     groups; each thread opens its **own** libgit2 handle and runs
+     `repo_status_scoped` on its group; merge. Disjoint pathspecs + per-thread
+     handles + no rename detection → safe; the union of a complete partition
+     equals the full `repo_status`. ~179 ms → ~30–40 ms on 8 cores — into
+     fsmonitor territory, no daemon.
+  3. **Cache + lazy refs** (refresh only on `.git` change; bound the displayed
+     ref set).
+
+  Honest ceiling: parallelism narrows the cold gap but can't *beat* fsmonitor
+  cold (we still `lstat` every file, just across cores); incremental wins the
+  warm case outright. The two compose: warm → fsmonitor-lite (sub-ms), cold →
+  parallel partitioned scan (~30–40 ms).
+
+Implication for the primitive: `repo_status_scoped(repo, pathspecs)` takes a
+**list** of workdir-relative pathspecs (dirs *and* root-level files), opens its
+own repo handle (so parallel callers each get a thread-private handle), and its
+results for a *complete, disjoint* partition must union to exactly the full
+`repo_status` — a tested property below.
+
 ## Pieces
 
-1. **Engine — `mg::git::repo_status_scoped(repo, std::span<std::string> paths)`**
-   → status entries limited to `paths` (workdir-relative) via
-   `git_status_options.pathspec`. Same entry shape as `repo_status`.
+1. **Engine — `mg::git::repo_status_scoped(repo, std::span<const std::string>
+   pathspecs)`** → status entries limited to `pathspecs` (workdir-relative) via
+   `git_status_options.pathspec`. Opens its own handle. Same entry shape as
+   `repo_status`. Serves both the incremental and the parallel-partition
+   consumers.
 2. **Watcher — report the changed-dir set.** `wait()` stops coalescing to a
    single `fs_event` and returns the distinct changed dirs (it already has each
    dir from `wd_path_`/`fd_path_`). Overflow/degraded → a distinguished resync
@@ -96,6 +130,10 @@ bugs. The gate, mirroring FM-ASYNC-STATUS's "replay == sync" anchor:
   divergence fails. This pins incremental output to the proven full scan.
 - **Scoped-status doctest:** `repo_status_scoped(repo, {dir})` == full
   `repo_status` filtered to `dir`, for tracked/untracked/deleted/nested cases.
+- **Partition-union doctest (serves FM-PARALLEL-STATUS):** for a complete,
+  disjoint partition of the worktree's top-level entries, the union of
+  `repo_status_scoped` over each group == the full `repo_status` (no gaps, no
+  dupes — incl. root-level files and untracked).
 - **Fallback doctest:** an index/HEAD change forces a full rescan (assert the
   staged reclassification is picked up).
 - **TSan:** the reconcile runs on the monitor thread against the same `S` the

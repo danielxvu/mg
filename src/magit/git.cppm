@@ -16,6 +16,7 @@ module;
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -293,6 +294,16 @@ struct hunk {
 
 std::expected<std::vector<mg::magit::file_status>, error>
 repo_status(std::string path);
+
+// Like repo_status, but limited to entries matching `pathspecs` (workdir-
+// relative dirs and/or files; git pathspec matching, so "src" covers src/**).
+// Empty `pathspecs` == the whole repo (repo_status delegates here). Opens its
+// own repo handle, so parallel callers can each scope a disjoint partition on a
+// private thread; the union of a complete, disjoint partition equals the full
+// repo_status. Powers both incremental (changed dirs) and parallel (partition)
+// status -- see the FM-FSMONITOR-LITE spec.
+std::expected<std::vector<mg::magit::file_status>, error>
+repo_status_scoped(std::string path, std::span<const std::string> pathspecs);
 
 std::expected<head_info, error> read_head(std::string path);
 
@@ -630,7 +641,7 @@ static error last_error()
 static detail::sig_ptr default_signature(git_repository *repo);
 
 std::expected<std::vector<mg::magit::file_status>, error>
-repo_status(std::string path)
+repo_status_scoped(std::string path, std::span<const std::string> pathspecs)
 {
     detail::init_guard guard;
 
@@ -651,6 +662,19 @@ repo_status(std::string path)
                  GIT_STATUS_OPT_EXCLUDE_SUBMODULES |
                  GIT_STATUS_OPT_UPDATE_INDEX;
 
+    // Limit the scan to the given pathspecs (default git pathspec matching, so a
+    // directory "src" covers src/**). Empty == whole repo. The pointers borrow
+    // the caller's strings, which outlive this synchronous call; libgit2 does
+    // not mutate them.
+    std::vector<char *> specs;
+    specs.reserve(pathspecs.size());
+    for (const auto &s : pathspecs)
+        specs.push_back(const_cast<char *>(s.c_str()));
+    if (!specs.empty()) {
+        opts.pathspec.strings = specs.data();
+        opts.pathspec.count = specs.size();
+    }
+
     git_status_list *raw_list = nullptr;
     if (git_status_list_new(&raw_list, repo.get(), &opts) != 0)
         return std::unexpected(last_error());
@@ -662,6 +686,12 @@ repo_status(std::string path)
     for (size_t i = 0; i < n; ++i)
         out.push_back(detail::map_entry(git_status_byindex(list.get(), i)));
     return out;
+}
+
+std::expected<std::vector<mg::magit::file_status>, error>
+repo_status(std::string path)
+{
+    return repo_status_scoped(std::move(path), {});
 }
 
 std::expected<head_info, error> read_head(std::string path)
