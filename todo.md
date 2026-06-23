@@ -353,8 +353,13 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   the changed dirs (repo_status_scoped + apply_status_patch), reuses cached refs;
   .git/root/resync/degraded → full rescan. Per-worktree-change cost ~300ms→~20ms
   (~15x, ≈ git+fsmonitor) on roll20. Property test pins incremental==full;
-  194/194 macOS+Alpine+Linux-TSan, 0 races. repo_status_scoped also powers the
-  pending FM-PARALLEL-STATUS (cold-path partition scan).
+  194/194 macOS+Alpine+Linux-TSan, 0 races.
+  ⛔ **FM-PARALLEL-STATUS — tried, NOT viable, reverted.** Parallelizing the cold
+  full scan (fan-out + partitioned repo_status_scoped) ran ~5x SLOWER on roll20
+  (~225ms→~1080ms): libgit2 re-reads the full index per partition + serializes on
+  its global locks. Confirms the only lever is *not scanning* (incremental), not
+  scanning in parallel — same reason git uses fsmonitor, not threads. Serial
+  gather stays. (Negative result documented in the FM-FSMONITOR-LITE spec.)
   Magit core (A+B, #31-#41) done; UTF-8 "Full" U5-U8 (#42-#45). **Phase C**
   (honest gap vs real magit; spec
   `docs/superpowers/specs/2026-06-21-fm-phase-c-roadmap.md`): ✅ FM-RB-1

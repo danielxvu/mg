@@ -89,16 +89,29 @@ both up front (avoids a later refactor):
   3. **Cache + lazy refs** (refresh only on `.git` change; bound the displayed
      ref set).
 
-  Honest ceiling: parallelism narrows the cold gap but can't *beat* fsmonitor
-  cold (we still `lstat` every file, just across cores); incremental wins the
-  warm case outright. The two compose: warm → fsmonitor-lite (sub-ms), cold →
-  parallel partitioned scan (~30–40 ms).
+  **RESULT: NOT VIABLE on libgit2 — tried and reverted.** Implemented the full
+  fan-out (independent components via `std::async` + a partitioned scan) and
+  measured it on roll20: status_buffer went from **~225 ms serial to ~1080 ms**
+  — ~5× *slower*. Two structural reasons, both inherent to libgit2:
+  1. **Per-call repo-open + full index read.** Each `repo_status_scoped` opens
+     its own handle and re-reads the entire 37.5k-entry index; N partitions pay
+     that fixed cost N times. The index read doesn't partition.
+  2. **libgit2 global locks.** Concurrent operations contend on libgit2's
+     internal mutexes (odb cache, mwindow, refdb), so they serialize *and* add
+     context-switch thrash rather than scaling.
+  This is exactly why git ships one tuned C scan + an fsmonitor daemon rather
+  than threading status, and why no libgit2 client (mg, gitui) can parallelize
+  its way to fsmonitor speed. The lever that works is **not scanning** —
+  incremental (this milestone, shipped) — not scanning in parallel. The
+  always-correct serial `gather_status_view` stays. The `repo_status_scoped`
+  primitive remains valuable for the incremental path; only the *parallel*
+  consumer is abandoned.
 
 Implication for the primitive: `repo_status_scoped(repo, pathspecs)` takes a
-**list** of workdir-relative pathspecs (dirs *and* root-level files), opens its
-own repo handle (so parallel callers each get a thread-private handle), and its
-results for a *complete, disjoint* partition must union to exactly the full
-`repo_status` — a tested property below.
+**list** of workdir-relative pathspecs (dirs *and* root-level files) and opens
+its own repo handle. (It was also designed for a complete-partition union to
+equal the full `repo_status` — a tested property below — which is sound; the
+partition just doesn't pay off in *wall-clock* on libgit2, per the result above.)
 
 ## Pieces
 
