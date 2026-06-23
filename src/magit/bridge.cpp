@@ -526,21 +526,73 @@ static int emit_file_diff(const char *repo, const char *path, bool staged,
     return n;
 }
 
-extern "C" int mg_magit_status_buffer(const char *repo_path,
-                                      const char *const *expanded,
-                                      int n_expanded, mg_magit_emit_fn emit,
-                                      void *ctx)
-{
-    if (repo_path == nullptr || emit == nullptr)
-        return 0;
+// All the data the *magit-status* view is composed from. Gathered by querying
+// the repo (gather_status_view) or, for the monitor's incremental path, built
+// up by patching `status` in place while reusing the cached rest. Composed into
+// the line stream by compose_status_view -- the two halves keep "where the data
+// comes from" separate from "how it is rendered", so the monitor can swap a
+// scoped/incremental status set in without touching composition.
+struct status_view {
+    std::optional<mg::git::head_info> head;
+    std::optional<mg::git::upstream_info> upstream;
+    bool rebasing = false;
+    bool bisecting = false;
+    std::vector<mg::magit::file_status> status; // the incremental target (S)
+    std::vector<mg::git::conflict_entry> conflicts;
+    std::vector<mg::git::commit_brief> unpulled, unpushed, recent;
+    std::vector<mg::git::stash_entry> stashes;
+    std::vector<mg::git::branch_entry> branches;
+    std::vector<std::string> tags;
+    std::vector<mg::git::worktree_entry> worktrees;
+    std::vector<mg::git::submodule_entry> submodules;
+};
 
+// Run every query the full status build needs into one view.
+status_view gather_status_view(const char *repo)
+{
+    status_view v;
+    if (auto h = mg::git::read_head(repo))
+        v.head = std::move(*h);
+    if (auto u = mg::git::upstream_status(repo))
+        v.upstream = std::move(*u);
+    v.rebasing = mg::git::rebase_in_progress(repo);
+    v.bisecting = mg::git::bisect_active(repo);
+    if (auto s = mg::git::repo_status(repo))
+        v.status = std::move(*s);
+    if (auto c = mg::git::conflicts(repo))
+        v.conflicts = std::move(*c);
+    if (auto up = mg::git::upstream_commits(repo, /*unpushed=*/false))
+        v.unpulled = std::move(*up);
+    if (auto up = mg::git::upstream_commits(repo, /*unpushed=*/true))
+        v.unpushed = std::move(*up);
+    if (auto st = mg::git::stashes(repo))
+        v.stashes = std::move(*st);
+    if (auto rc = mg::git::recent_commits(repo, 10))
+        v.recent = std::move(*rc);
+    if (auto b = mg::git::branches(repo))
+        v.branches = std::move(*b);
+    if (auto t = mg::git::tags(repo))
+        v.tags = std::move(*t);
+    if (auto w = mg::git::worktrees(repo))
+        v.worktrees = std::move(*w);
+    if (auto sm = mg::git::submodules(repo))
+        v.submodules = std::move(*sm);
+    return v;
+}
+
+// Render `v` to the line stream. `repo_path` is only used to compute inline
+// diffs for expanded entries. Output is the exact composition the inline
+// status build used to produce (the test suite + determinism anchor pin it).
+int compose_status_view(const status_view &v, const char *repo_path,
+                        const char *const *expanded, int n_expanded,
+                        mg_magit_emit_fn emit, void *ctx)
+{
     int n = 0;
     auto out = [&](const std::string &line, int kind = MG_LINE_OTHER,
                    const char *path = nullptr, int hunk = -1) {
         emit(ctx, line.c_str(), kind, path, hunk);
         ++n;
     };
-
     auto is_expanded = [&](const std::string &p) {
         for (int i = 0; i < n_expanded; ++i)
             if (expanded != nullptr && expanded[i] != nullptr && p == expanded[i])
@@ -551,39 +603,39 @@ extern "C" int mg_magit_status_buffer(const char *repo_path,
         n += emit_file_diff(repo_path, path.c_str(), staged, emit, ctx);
     };
 
-    if (auto head = mg::git::read_head(repo_path)) {
-        out("On branch " +
-            (head->branch.empty() ? std::string("(unknown)") : head->branch));
-        if (!head->short_oid.empty())
-            out("Head:     " + head->short_oid + " " + head->summary);
+    if (v.head) {
+        out("On branch " + (v.head->branch.empty() ? std::string("(unknown)")
+                                                    : v.head->branch));
+        if (!v.head->short_oid.empty())
+            out("Head:     " + v.head->short_oid + " " + v.head->summary);
     }
 
-    if (auto up = mg::git::upstream_status(repo_path); up && up->has_upstream) {
-        std::string line = "Upstream: " + up->name;
-        if (up->ahead != 0 || up->behind != 0)
-            line += " [ahead " + std::to_string(up->ahead) + ", behind " +
-                    std::to_string(up->behind) + "]";
+    if (v.upstream && v.upstream->has_upstream) {
+        std::string line = "Upstream: " + v.upstream->name;
+        if (v.upstream->ahead != 0 || v.upstream->behind != 0)
+            line += " [ahead " + std::to_string(v.upstream->ahead) + ", behind " +
+                    std::to_string(v.upstream->behind) + "]";
         out(line);
     }
 
-    if (mg::git::rebase_in_progress(repo_path)) {
+    if (v.rebasing) {
         out("");
         out("Rebasing -- resolve conflicts, then r r (continue) / r s (skip) / "
             "r a (abort)",
             MG_LINE_SECTION);
     }
 
-    if (mg::git::bisect_active(repo_path)) {
+    if (v.bisecting) {
         out("");
         out("Bisecting -- test the checked-out commit, then Z b (bad) / Z g "
             "(good); Z r resets",
             MG_LINE_SECTION);
     }
 
-    if (auto st = mg::git::repo_status(repo_path)) {
+    {
         using S = mg::magit::status;
         std::vector<const mg::magit::file_status *> untracked, unstaged, staged;
-        for (const auto &e : *st) {
+        for (const auto &e : v.status) {
             if (e.index == S::unmerged || e.worktree == S::unmerged)
                 continue; // shown in the dedicated Conflicts section below
             if (e.worktree == S::untracked) {
@@ -597,14 +649,14 @@ extern "C" int mg_magit_status_buffer(const char *repo_path,
         }
 
         auto section = [&](const char *title,
-                           const std::vector<const mg::magit::file_status *> &v,
+                           const std::vector<const mg::magit::file_status *> &vec,
                            bool labeled, bool use_index, int kind, bool diffable) {
-            if (v.empty())
+            if (vec.empty())
                 return;
             out("");
-            out(std::string(title) + " (" + std::to_string(v.size()) + ")",
+            out(std::string(title) + " (" + std::to_string(vec.size()) + ")",
                 MG_LINE_SECTION);
-            for (const auto *e : v) {
+            for (const auto *e : vec) {
                 std::string text =
                     labeled ? "  " + std::string(state_word(use_index ? e->index
                                                                       : e->worktree)) +
@@ -615,12 +667,12 @@ extern "C" int mg_magit_status_buffer(const char *repo_path,
                     emit_diff(e->path, use_index);
             }
         };
-        if (auto cf = mg::git::conflicts(repo_path); cf && !cf->empty()) {
+        if (!v.conflicts.empty()) {
             out("");
-            out("Conflicts (" + std::to_string(cf->size()) +
+            out("Conflicts (" + std::to_string(v.conflicts.size()) +
                     ") -- e o/e t whole file - E ediff (per region) - RET edit",
                 MG_LINE_SECTION);
-            for (const auto &c : *cf)
+            for (const auto &c : v.conflicts)
                 out("  " + c.path, MG_LINE_CONFLICT, c.path.c_str());
         }
         section("Untracked files", untracked, false, false, MG_LINE_UNTRACKED, false);
@@ -629,7 +681,7 @@ extern "C" int mg_magit_status_buffer(const char *repo_path,
     }
 
     auto commit_section = [&](const char *title,
-                              std::vector<mg::git::commit_brief> &&commits) {
+                              const std::vector<mg::git::commit_brief> &commits) {
         if (commits.empty())
             return;
         out("");
@@ -638,62 +690,68 @@ extern "C" int mg_magit_status_buffer(const char *repo_path,
         for (const auto &c : commits)
             out("  " + c.short_oid + " " + c.summary);
     };
-    if (auto up = mg::git::upstream_commits(repo_path, /*unpushed=*/false))
-        commit_section("Unpulled commits", std::move(*up));
-    if (auto up = mg::git::upstream_commits(repo_path, /*unpushed=*/true))
-        commit_section("Unpushed commits", std::move(*up));
+    commit_section("Unpulled commits", v.unpulled);
+    commit_section("Unpushed commits", v.unpushed);
 
-    if (auto stashes = mg::git::stashes(repo_path);
-        stashes && !stashes->empty()) {
+    if (!v.stashes.empty()) {
         out("");
-        out("Stashes (" + std::to_string(stashes->size()) + ")",
-            MG_LINE_SECTION);
-        for (const auto &s : *stashes)
+        out("Stashes (" + std::to_string(v.stashes.size()) + ")", MG_LINE_SECTION);
+        for (const auto &s : v.stashes)
             out("  stash@{" + std::to_string(s.index) + "} " + s.message,
                 MG_LINE_STASH, nullptr, static_cast<int>(s.index));
     }
 
-    if (auto commits = mg::git::recent_commits(repo_path, 10);
-        commits && !commits->empty()) {
+    if (!v.recent.empty()) {
         out("");
         out("Recent commits", MG_LINE_SECTION);
-        for (const auto &c : *commits)
+        for (const auto &c : v.recent)
             out("  " + c.short_oid + " " + c.summary);
     }
 
-    if (auto branches = mg::git::branches(repo_path);
-        branches && !branches->empty()) {
+    if (!v.branches.empty()) {
         out("");
-        out("Branches (" + std::to_string(branches->size()) + ")",
+        out("Branches (" + std::to_string(v.branches.size()) + ")",
             MG_LINE_SECTION);
-        for (const auto &b : *branches)
+        for (const auto &b : v.branches)
             out(std::string(b.is_head ? "* " : "  ") + b.name, MG_LINE_BRANCH,
                 b.name.c_str());
     }
 
-    if (auto tags = mg::git::tags(repo_path); tags && !tags->empty()) {
+    if (!v.tags.empty()) {
         out("");
-        out("Tags (" + std::to_string(tags->size()) + ")", MG_LINE_SECTION);
-        for (const auto &t : *tags)
+        out("Tags (" + std::to_string(v.tags.size()) + ")", MG_LINE_SECTION);
+        for (const auto &t : v.tags)
             out("  " + t, MG_LINE_TAG, t.c_str());
     }
 
-    if (auto wts = mg::git::worktrees(repo_path); wts && !wts->empty()) {
+    if (!v.worktrees.empty()) {
         out("");
-        out("Worktrees (" + std::to_string(wts->size()) + ")", MG_LINE_SECTION);
-        for (const auto &w : *wts)
+        out("Worktrees (" + std::to_string(v.worktrees.size()) + ")",
+            MG_LINE_SECTION);
+        for (const auto &w : v.worktrees)
             out("  " + w.name + "  " + w.path, MG_LINE_WORKTREE, w.name.c_str());
     }
 
-    if (auto subs = mg::git::submodules(repo_path); subs && !subs->empty()) {
+    if (!v.submodules.empty()) {
         out("");
-        out("Submodules (" + std::to_string(subs->size()) + ")",
+        out("Submodules (" + std::to_string(v.submodules.size()) + ")",
             MG_LINE_SECTION);
-        for (const auto &s : *subs)
+        for (const auto &s : v.submodules)
             out("  " + s.path, MG_LINE_SUBMODULE, s.path.c_str());
     }
 
     return n;
+}
+
+extern "C" int mg_magit_status_buffer(const char *repo_path,
+                                      const char *const *expanded,
+                                      int n_expanded, mg_magit_emit_fn emit,
+                                      void *ctx)
+{
+    if (repo_path == nullptr || emit == nullptr)
+        return 0;
+    return compose_status_view(gather_status_view(repo_path), repo_path,
+                               expanded, n_expanded, emit, ctx);
 }
 
 // Render the status buffer by replaying a *collapsed* snapshot (no inline
