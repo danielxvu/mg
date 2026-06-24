@@ -23,6 +23,15 @@ module;
 
 #include <git2.h>
 
+#include <spawn.h>    // posix_spawnp -- run the real `git` for hook/sign/auth ops
+#include <sys/wait.h> // waitpid
+#include <unistd.h>   // pipe, read, close
+
+// The process environment, for posix_spawnp. Declared in the global module
+// fragment so it attaches to the global module (not mg.git) and resolves to the
+// executable's real `environ` -- a namespace-scoped extern would mangle wrong.
+extern "C" char **environ;
+
 export module mg.git;
 
 import mg.magit;
@@ -37,6 +46,60 @@ struct init_guard {
     init_guard(const init_guard &) = delete;
     init_guard &operator=(const init_guard &) = delete;
 };
+
+// Run the real `git -C <repo> <args...>` and capture its combined stdout+stderr
+// (FM-GIT-CLI-WRITES). Mutations that must honour hooks / signing / credentials
+// go through this instead of libgit2, which skips all of them. argv is passed
+// directly to posix_spawnp -- never a shell -- so repo/branch names with
+// metacharacters are inert. stdout+stderr share one pipe (no two-stream
+// deadlock; hook/error text comes back as one blob to surface on failure).
+struct git_run {
+    int code;          // process exit code (-1 if spawn/wait failed)
+    std::string output; // combined stdout+stderr
+};
+inline git_run run_git(const std::string &repo,
+                       const std::vector<std::string> &args)
+{
+    int pfd[2];
+    if (::pipe(pfd) != 0)
+        return {-1, "pipe() failed"};
+
+    posix_spawn_file_actions_t fa;
+    posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_adddup2(&fa, pfd[1], 1); // child stdout -> pipe
+    posix_spawn_file_actions_adddup2(&fa, pfd[1], 2); // child stderr -> pipe
+    posix_spawn_file_actions_addclose(&fa, pfd[0]);
+    posix_spawn_file_actions_addclose(&fa, pfd[1]);
+
+    std::vector<std::string> full{"git", "-C", repo};
+    full.insert(full.end(), args.begin(), args.end());
+    std::vector<char *> argv;
+    argv.reserve(full.size() + 1);
+    for (auto &s : full)
+        argv.push_back(const_cast<char *>(s.c_str()));
+    argv.push_back(nullptr);
+
+    pid_t pid = 0;
+    int rc = ::posix_spawnp(&pid, "git", &fa, nullptr, argv.data(), environ);
+    posix_spawn_file_actions_destroy(&fa);
+    ::close(pfd[1]); // parent only reads
+    if (rc != 0) {
+        ::close(pfd[0]);
+        return {-1, "failed to run git"};
+    }
+
+    std::string out;
+    char buf[4096];
+    ssize_t n;
+    while ((n = ::read(pfd[0], buf, sizeof buf)) > 0)
+        out.append(buf, static_cast<std::size_t>(n));
+    ::close(pfd[0]);
+
+    int status = 0;
+    ::waitpid(pid, &status, 0);
+    int code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    return {code, std::move(out)};
+}
 
 // Backs make_ignore_predicate: a long-lived repo handle + the workdir prefix,
 // guarded by a mutex so the predicate is safe to call from the monitor's two
@@ -3063,68 +3126,27 @@ std::expected<void, error> discard(std::string repo, std::string file)
 
 std::expected<std::string, error> commit(std::string repo, std::string message)
 {
-    detail::init_guard guard;
-    git_repository *raw = nullptr;
-    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
-        return std::unexpected(last_error());
-    detail::repo_ptr r(raw);
-
-    git_signature *raw_sig = nullptr;
-    if (git_signature_default(&raw_sig, r.get()) != 0)
-        return std::unexpected(last_error()); // user.name/user.email unset
-    detail::sig_ptr sig(raw_sig);
-
-    git_index *raw_idx = nullptr;
-    if (git_repository_index(&raw_idx, r.get()) != 0)
-        return std::unexpected(last_error());
-    detail::index_ptr idx(raw_idx);
-
-    git_oid tree_oid;
-    if (git_index_write_tree(&tree_oid, idx.get()) != 0)
-        return std::unexpected(last_error());
-    git_tree *raw_tree = nullptr;
-    if (git_tree_lookup(&raw_tree, r.get(), &tree_oid) != 0)
-        return std::unexpected(last_error());
-    detail::tree_ptr tree(raw_tree);
-
-    // Parents = current HEAD (if born) plus any MERGE_HEAD entries, so a commit
-    // after resolving a conflicted merge becomes a real multi-parent merge.
-    std::vector<detail::commit_ptr> owned;
-    std::vector<const git_commit *> parents;
-    git_commit *raw_parent = nullptr;
-    git_oid head_oid;
-    if (git_reference_name_to_id(&head_oid, r.get(), "HEAD") == 0 &&
-        git_commit_lookup(&raw_parent, r.get(), &head_oid) == 0) {
-        owned.emplace_back(raw_parent);
-        parents.push_back(raw_parent);
+    // FM-GIT-CLI-WRITES: go through the real `git commit` so pre-commit /
+    // commit-msg / post-commit hooks fire and commit.gpgsign signing is honoured
+    // -- libgit2's git_commit_create does none of that. The staged index and any
+    // in-progress MERGE_HEAD are already on disk, so plain `git commit` makes the
+    // right (possibly multi-parent) commit and clears the merge state itself.
+    auto run = detail::run_git(repo, {"commit", "-m", message});
+    if (run.code != 0) {
+        // Surface the hook / git output verbatim so a rejection is visible.
+        std::string msg = run.output.empty() ? "git commit failed" : run.output;
+        while (!msg.empty() && (msg.back() == '\n' || msg.back() == '\r'))
+            msg.pop_back();
+        return std::unexpected(error{0, std::move(msg)});
     }
-    struct collect {
-        git_repository *repo;
-        std::vector<detail::commit_ptr> *owned;
-        std::vector<const git_commit *> *parents;
-    } ctx{r.get(), &owned, &parents};
-    git_repository_mergehead_foreach(
-        r.get(),
-        [](const git_oid *oid, void *payload) -> int {
-            auto *c = static_cast<collect *>(payload);
-            git_commit *mh = nullptr;
-            if (git_commit_lookup(&mh, c->repo, oid) == 0) {
-                c->owned->emplace_back(mh);
-                c->parents->push_back(mh);
-            }
-            return 0;
-        },
-        &ctx);
 
-    git_oid commit_oid;
-    if (git_commit_create(&commit_oid, r.get(), "HEAD", sig.get(), sig.get(),
-                          nullptr, message.c_str(), tree.get(), parents.size(),
-                          parents.empty() ? nullptr : parents.data()) != 0)
-        return std::unexpected(last_error());
-
-    // Clear any in-progress merge / cherry-pick / revert state now committed.
-    git_repository_state_cleanup(r.get());
-    return detail::short_oid(&commit_oid);
+    // --short=8 keeps mg's 8-hex short-oid convention (detail::short_oid);
+    // git's bare --short would abbreviate to its own minimum-unique length.
+    auto head = detail::run_git(repo, {"rev-parse", "--short=8", "HEAD"});
+    std::string oid = head.output;
+    while (!oid.empty() && (oid.back() == '\n' || oid.back() == '\r'))
+        oid.pop_back();
+    return oid;
 }
 
 // Shared amend over HEAD: `message` (NULL keeps HEAD's), and the current index
@@ -3207,7 +3229,13 @@ std::expected<std::string, error> head_message(std::string repo)
         return std::unexpected(last_error());
     detail::commit_ptr c(raw_c);
     const char *m = git_commit_message(c.get());
-    return std::string(m != nullptr ? m : "");
+    std::string msg(m != nullptr ? m : "");
+    // git stores messages with a trailing newline (stripspace); strip it so the
+    // returned message is the content the user typed -- matches the old libgit2
+    // commit path and what a reword editor should present.
+    while (!msg.empty() && (msg.back() == '\n' || msg.back() == '\r'))
+        msg.pop_back();
+    return msg;
 }
 
 // Flatten a libgit2 diff into our hunk/diff_line value types.

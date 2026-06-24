@@ -1492,10 +1492,64 @@ TEST_CASE("commit() creates a commit from the staged tree")
     REQUIRE(h.has_value());
     CHECK(h->summary == "my first commit");
 
+    // git appends a trailing newline when it stores the message; head_message
+    // strips it so the content round-trips exactly (no stray blank line).
+    auto m = mg::git::head_message(dir.string());
+    REQUIRE(m.has_value());
+    CHECK(*m == "my first commit");
+
     auto st = mg::git::repo_status(dir.string());
     REQUIRE(st.has_value());
     for (const auto &e : *st)
         CHECK(e.path != "f.txt"); // committed, no longer staged
+    fs::remove_all(dir);
+}
+
+// FM-GIT-CLI-WRITES: commit() must run through the real `git` so repo hooks
+// fire. Write an executable hook into .git/hooks and assert mg honours it --
+// impossible with the libgit2 commit path, which skips hooks entirely.
+void install_hook(const fs::path &dir, const char *name, const std::string &body)
+{
+    auto hooks = dir / ".git" / "hooks";
+    fs::create_directories(hooks);
+    auto p = hooks / name;
+    std::ofstream(p) << "#!/bin/sh\n" << body;
+    fs::permissions(p, fs::perms::owner_all | fs::perms::group_read |
+                           fs::perms::group_exec | fs::perms::others_read |
+                           fs::perms::others_exec);
+}
+
+TEST_CASE("commit() runs the pre-commit hook and fails when it rejects")
+{
+    auto dir = make_temp_dir();
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_init(&repo, dir.string().c_str(), 0) == 0);
+    git_config *cfg = nullptr;
+    REQUIRE(git_repository_config(&cfg, repo) == 0);
+    git_config_set_string(cfg, "user.name", "Test");
+    git_config_set_string(cfg, "user.email", "t@example.com");
+    git_config_free(cfg);
+    std::ofstream(dir / "f.txt") << "hello";
+    git_index *idx = nullptr;
+    REQUIRE(git_repository_index(&idx, repo) == 0);
+    REQUIRE(git_index_add_bypath(idx, "f.txt") == 0);
+    REQUIRE(git_index_write(idx) == 0);
+    git_index_free(idx);
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+
+    install_hook(dir, "pre-commit", "echo 'rejected by policy' >&2\nexit 1\n");
+
+    auto r = mg::git::commit(dir.string(), "blocked commit");
+    REQUIRE_FALSE(r.has_value());                          // hook vetoed it
+    CHECK(r.error().message.find("rejected by policy") !=  // output surfaced
+          std::string::npos);
+
+    // And nothing was committed: HEAD is still unborn.
+    auto h = mg::git::read_head(dir.string());
+    REQUIRE(h.has_value());
+    CHECK(h->summary.empty());
     fs::remove_all(dir);
 }
 
