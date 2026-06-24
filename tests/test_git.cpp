@@ -758,6 +758,20 @@ TEST_CASE("cherry_pick fails on a bad revision")
     fs::remove_all(dir);
 }
 
+// FM-GIT-CLI-WRITES P2: cherry_pick must run through real git so hooks fire on
+// the resulting commit -- libgit2's git_cherrypick + git_commit_create never do.
+TEST_CASE("cherry_pick runs hooks (post-commit fires on the picked commit)")
+{
+    std::string base;
+    auto dir = make_repo_cherrypick(base);
+    auto sentinel = (dir / "post-commit-ran").string();
+    install_hook(dir, "post-commit", "touch '" + sentinel + "'\n");
+
+    REQUIRE(mg::git::cherry_pick(dir.string(), "other").has_value());
+    CHECK(fs::exists(sentinel)); // hook fired -- impossible on the libgit2 path
+    fs::remove_all(dir);
+}
+
 TEST_CASE("commits_range lists commits after onto, oldest first")
 {
     auto dir = make_repo_for_interactive(); // feature: C1->C2->C3->C4

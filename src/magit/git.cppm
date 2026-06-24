@@ -755,6 +755,10 @@ static error last_error()
 // Defined below; used by create_tag (annotated) before its definition.
 static detail::sig_ptr default_signature(git_repository *repo);
 
+// Defined below (near commit); used by merge/cherry-pick/revert above it.
+static std::expected<apply_result, error>
+apply_via_cli(const std::string &repo, std::vector<std::string> args);
+
 // The session holds the open handle + one libgit2 init for its lifetime (the
 // guard outlives the handle: members destroy in reverse, so repo frees before
 // shutdown).
@@ -2113,64 +2117,10 @@ reset_to(std::string repo, std::string rev, reset_mode mode)
 std::expected<apply_result, error>
 revert_commit(std::string repo, std::string rev)
 {
-    detail::init_guard guard;
-    git_repository *raw = nullptr;
-    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
-        return std::unexpected(last_error());
-    detail::repo_ptr r(raw);
-
-    git_object *raw_obj = nullptr;
-    if (git_revparse_single(&raw_obj, r.get(), rev.c_str()) != 0)
-        return std::unexpected(last_error());
-    detail::object_ptr obj(raw_obj);
-    git_commit *raw_target = nullptr;
-    if (git_commit_lookup(&raw_target, r.get(), git_object_id(obj.get())) != 0)
-        return std::unexpected(last_error());
-    detail::commit_ptr target(raw_target);
-
-    // Apply the revert to the index + working tree (sets REVERT_HEAD).
-    git_revert_options opts;
-    git_revert_options_init(&opts, GIT_REVERT_OPTIONS_VERSION);
-    opts.checkout_opts.checkout_strategy = GIT_CHECKOUT_SAFE;
-    if (git_revert(r.get(), target.get(), &opts) != 0)
-        return std::unexpected(last_error());
-
-    git_index *raw_idx = nullptr;
-    if (git_repository_index(&raw_idx, r.get()) != 0)
-        return std::unexpected(last_error());
-    detail::index_ptr idx(raw_idx);
-    if (git_index_has_conflicts(idx.get()))
-        return apply_result::conflicts; // leave REVERT_HEAD + markers
-
-    git_oid tree_oid;
-    if (git_index_write_tree(&tree_oid, idx.get()) != 0)
-        return std::unexpected(last_error());
-    git_tree *raw_tree = nullptr;
-    if (git_tree_lookup(&raw_tree, r.get(), &tree_oid) != 0)
-        return std::unexpected(last_error());
-    detail::tree_ptr tree(raw_tree);
-
-    git_oid head_oid;
-    if (git_reference_name_to_id(&head_oid, r.get(), "HEAD") != 0)
-        return std::unexpected(last_error());
-    git_commit *raw_head = nullptr;
-    if (git_commit_lookup(&raw_head, r.get(), &head_oid) != 0)
-        return std::unexpected(last_error());
-    detail::commit_ptr head(raw_head);
-
-    detail::sig_ptr sig = default_signature(r.get());
-    if (!sig)
-        return std::unexpected(last_error());
-
-    const char *summary = git_commit_summary(target.get());
-    std::string msg = "Revert \"" + std::string(summary ? summary : "") + "\"";
-    const git_commit *parents[1] = {head.get()};
-    git_oid commit_oid;
-    if (git_commit_create(&commit_oid, r.get(), "HEAD", sig.get(), sig.get(),
-                          nullptr, msg.c_str(), tree.get(), 1, parents) != 0)
-        return std::unexpected(last_error());
-    git_repository_state_cleanup(r.get());
-    return apply_result::done;
+    // Through real git so hooks fire + the revert commit is signed. --no-edit
+    // takes git's default `Revert "<summary>"` message non-interactively; a
+    // conflicting revert is left in progress (REVERT_HEAD + markers).
+    return apply_via_cli(repo, {"revert", "--no-edit", std::move(rev)});
 }
 
 // Merge an already-resolved annotated commit into HEAD: up-to-date (noop) /
@@ -2271,24 +2221,12 @@ merge_annotated(git_repository *repo, git_annotated_commit *their,
 std::expected<apply_result, error>
 merge_branch(std::string repo, std::string name)
 {
-    detail::init_guard guard;
-    git_repository *raw = nullptr;
-    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
-        return std::unexpected(last_error());
-    detail::repo_ptr r(raw);
-
-    git_reference *raw_ref = nullptr;
-    if (git_branch_lookup(&raw_ref, r.get(), name.c_str(), GIT_BRANCH_LOCAL) != 0)
-        return std::unexpected(last_error());
-    detail::ref_ptr ref(raw_ref);
-
-    git_annotated_commit *raw_their = nullptr;
-    if (git_annotated_commit_from_ref(&raw_their, r.get(), ref.get()) != 0)
-        return std::unexpected(last_error());
-    std::unique_ptr<git_annotated_commit, decltype(&git_annotated_commit_free)>
-        their(raw_their, git_annotated_commit_free);
-
-    return merge_annotated(r.get(), their.get(), "Merge branch '" + name + "'");
+    // Through real git so a merge commit fires hooks + is signed; git also
+    // picks fast-forward vs. true merge and writes the default
+    // `Merge branch '<name>'` message. --no-edit keeps it non-interactive; a
+    // conflicting merge is left in progress (MERGE_HEAD + markers). A bad branch
+    // name exits non-zero with no conflict -> a real error.
+    return apply_via_cli(repo, {"merge", "--no-edit", std::move(name)});
 }
 
 using rebase_ptr =
@@ -2336,65 +2274,11 @@ rebase_drive(git_repository *repo, git_rebase *rebase, git_signature *sig,
 std::expected<apply_result, error>
 cherry_pick(std::string repo, std::string rev)
 {
-    detail::init_guard guard;
-    git_repository *raw = nullptr;
-    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
-        return std::unexpected(last_error());
-    detail::repo_ptr r(raw);
-
-    detail::sig_ptr sig = default_signature(r.get());
-    if (!sig)
-        return std::unexpected(last_error());
-
-    // The commit to pick.
-    git_object *raw_obj = nullptr;
-    if (git_revparse_single(&raw_obj, r.get(), rev.c_str()) != 0)
-        return std::unexpected(last_error());
-    detail::object_ptr obj(raw_obj);
-    git_commit *raw_pick = nullptr;
-    if (git_commit_lookup(&raw_pick, r.get(), git_object_id(obj.get())) != 0)
-        return std::unexpected(last_error());
-    detail::commit_ptr pick(raw_pick);
-
-    // Apply to the index + working tree (sets CHERRY_PICK_HEAD).
-    git_cherrypick_options opts;
-    git_cherrypick_options_init(&opts, GIT_CHERRYPICK_OPTIONS_VERSION);
-    opts.checkout_opts.checkout_strategy = GIT_CHECKOUT_SAFE;
-    if (git_cherrypick(r.get(), pick.get(), &opts) != 0)
-        return std::unexpected(last_error());
-
-    git_index *raw_idx = nullptr;
-    if (git_repository_index(&raw_idx, r.get()) != 0)
-        return std::unexpected(last_error());
-    detail::index_ptr idx(raw_idx);
-    if (git_index_has_conflicts(idx.get()))
-        return apply_result::conflicts; // leave CHERRY_PICK_HEAD + markers
-
-    git_oid tree_oid;
-    if (git_index_write_tree(&tree_oid, idx.get()) != 0)
-        return std::unexpected(last_error());
-    git_tree *raw_tree = nullptr;
-    if (git_tree_lookup(&raw_tree, r.get(), &tree_oid) != 0)
-        return std::unexpected(last_error());
-    detail::tree_ptr tree(raw_tree);
-
-    git_oid head_oid;
-    if (git_reference_name_to_id(&head_oid, r.get(), "HEAD") != 0)
-        return std::unexpected(last_error());
-    git_commit *raw_head = nullptr;
-    if (git_commit_lookup(&raw_head, r.get(), &head_oid) != 0)
-        return std::unexpected(last_error());
-    detail::commit_ptr head(raw_head);
-
-    // Keep the picked commit's author; we are the committer.
-    const git_commit *parents[1] = {head.get()};
-    git_oid new_oid;
-    if (git_commit_create(&new_oid, r.get(), "HEAD", git_commit_author(pick.get()),
-                          sig.get(), nullptr, git_commit_message(pick.get()),
-                          tree.get(), 1, parents) != 0)
-        return std::unexpected(last_error());
-    git_repository_state_cleanup(r.get());
-    return apply_result::done;
+    // Through real git so the picked commit fires hooks + is signed; git keeps
+    // the original author + message (as the libgit2 path did). A conflicting
+    // pick is left in progress (CHERRY_PICK_HEAD + markers); a bad rev exits
+    // non-zero with no conflict -> a real error.
+    return apply_via_cli(repo, {"cherry-pick", std::move(rev)});
 }
 
 std::expected<rebase_result, error>
@@ -3154,6 +3038,37 @@ std::expected<std::string, error> commit(std::string repo, std::string message)
     // plain `git commit` makes the right (possibly multi-parent) commit and
     // clears the merge / cherry-pick / revert state itself.
     return commit_via_cli(repo, {"commit", "-m", std::move(message)});
+}
+
+// FM-GIT-CLI-WRITES (P2): run a `git` op that, on a clean apply, lands a commit
+// (and so fires hooks + signing) but on conflict is *left in progress* for the
+// user to resolve -- merge / cherry-pick / revert. Map it to apply_result the
+// same way the libgit2 versions did: exit 0 => done; a non-zero exit that left
+// the index conflicted => conflicts (CHERRY_PICK_HEAD/REVERT_HEAD/MERGE_HEAD and
+// markers stay on disk for the `e o`/`e t` + `c c` flow); any other non-zero
+// exit (bad ref, hook veto, ...) => a real error carrying git's output.
+static std::expected<apply_result, error>
+apply_via_cli(const std::string &repo, std::vector<std::string> args)
+{
+    auto run = detail::run_git(repo, std::move(args));
+    if (run.code == 0)
+        return apply_result::done;
+
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) == 0) {
+        detail::repo_ptr r(raw);
+        git_index *raw_idx = nullptr;
+        if (git_repository_index(&raw_idx, r.get()) == 0) {
+            detail::index_ptr idx(raw_idx);
+            if (git_index_has_conflicts(idx.get()))
+                return apply_result::conflicts;
+        }
+    }
+    std::string msg = run.output.empty() ? "git failed" : run.output;
+    while (!msg.empty() && (msg.back() == '\n' || msg.back() == '\r'))
+        msg.pop_back();
+    return std::unexpected(error{0, std::move(msg)});
 }
 
 // FM-GIT-CLI-WRITES: the amend family also routes through `git commit --amend`
