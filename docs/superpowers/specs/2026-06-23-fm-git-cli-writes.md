@@ -110,9 +110,20 @@ The mutation just runs git; the UI updates itself.
    `git revert --no-edit`. The ~190 lines of libgit2 apply-then-commit-by-hand
    are deleted; `merge_annotated` stays (pull uses it — Phase 3). Test:
    post-commit hook fires on cherry_pick. 198/198 macOS+Alpine.
-3. **push / pull / fetch** through the CLI with TUI suspend-and-inherit, so the
-   real credential helper / SSH agent / progress work; retire
-   `mg_magit_set_cred_prompt`.
+3. ✅ **DONE** — **push / pull / fetch** through the CLI with TUI
+   suspend-and-inherit, so the real credential helper / SSH agent / GPG /
+   progress work. Engine `git_terminal(repo, args)` runs git *without*
+   redirecting stdio (child inherits the cooked tty); returns git's exit code,
+   or `-1` if git couldn't be exec'd. Bridge `mg_magit_{fetch,push,pull}_cli`
+   build the argv. C UI `magit_run_net` does the `spawncli` dance (ttcooked +
+   tttidy → run git on the real terminal → "press ENTER" pause → ttreinit +
+   ttraw + sgarbf repaint). **Decision: kept the libgit2 fallback** (rather than
+   retiring `mg_magit_set_cred_prompt`): on `-1` each op falls back to the
+   libgit2 remote path + cred prompt, so an environment without `git` on PATH
+   still works. Tested: `git_terminal` push/bad-ref to a file:// remote (unit);
+   tmux smoke test of the real binary (P p → suspend → live git progress →
+   ENTER → clean redraw → bare remote received the commit). 200/200
+   macOS+Alpine, OFF build clean. 🎉 **FM-GIT-CLI-WRITES COMPLETE.**
 
 Each phase: macOS + Alpine + the OFF build green; the libgit2 read path
 untouched.

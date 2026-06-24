@@ -386,8 +386,16 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   (0=done; non-zero+conflicted index=conflicts with *_HEAD+markers left for
   e o/e t + c c; other non-zero=error). ~190 lines of libgit2
   apply-then-commit-by-hand deleted; merge_annotated kept for pull. 198/198
-  macOS+Alpine. Next: P3 push/pull/fetch with TUI suspend-and-inherit (the
-  terminal-handoff risk) + retire mg_magit_set_cred_prompt.
+  macOS+Alpine. ✅ **P3 done** — push/pull/fetch through real git with TUI
+  suspend-and-inherit so the user's credential helper / SSH agent / GPG /
+  progress all work. Engine `git_terminal(repo,args)` (inherits stdio, no
+  redirect; -1 if git unspawnable); bridge `mg_magit_{fetch,push,pull}_cli`;
+  C-UI `magit_run_net` does the spawncli dance (ttcooked+tttidy → git on the
+  real tty → ENTER pause → ttreinit+ttraw+sgarbf). **Kept the libgit2 fallback**
+  (user choice): on -1, fall back to the libgit2 path + cred prompt. Verified by
+  a tmux smoke test (P p suspends, live git progress, ENTER, clean redraw, bare
+  remote received the push) + file:// unit tests. 200/200 macOS+Alpine, OFF
+  clean. 🎉 **FM-GIT-CLI-WRITES COMPLETE (read/write split, P1-P3).** PR #85.
   Magit core (A+B, #31-#41) done; UTF-8 "Full" U5-U8 (#42-#45). **Phase C**
   (honest gap vs real magit; spec
   `docs/superpowers/specs/2026-06-21-fm-phase-c-roadmap.md`): ✅ FM-RB-1
