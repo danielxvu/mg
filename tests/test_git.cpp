@@ -190,6 +190,20 @@ void set_test_config(const fs::path &dir)
     git_libgit2_shutdown();
 }
 
+// FM-GIT-CLI-WRITES: mutations must run through the real `git` so repo hooks
+// fire. Write an executable hook into .git/hooks and assert mg honours it --
+// impossible with the libgit2 paths, which skip hooks entirely.
+void install_hook(const fs::path &dir, const char *name, const std::string &body)
+{
+    auto hooks = dir / ".git" / "hooks";
+    fs::create_directories(hooks);
+    auto p = hooks / name;
+    std::ofstream(p) << "#!/bin/sh\n" << body;
+    fs::permissions(p, fs::perms::owner_all | fs::perms::group_read |
+                           fs::perms::group_exec | fs::perms::others_read |
+                           fs::perms::others_exec);
+}
+
 // A repo with a single commit on HEAD (built with libgit2).
 fs::path make_repo_with_commit(const char *message)
 {
@@ -1434,6 +1448,26 @@ TEST_CASE("commit_reword changes only HEAD's message")
     fs::remove_all(dir);
 }
 
+TEST_CASE("commit_amend runs the pre-commit hook and fails when it rejects")
+{
+    auto dir = make_repo_with_commit("first commit");
+    set_test_config(dir);
+    std::ofstream(dir / "a.txt") << "amended content";
+    REQUIRE(mg::git::stage(dir.string(), "a.txt").has_value());
+
+    install_hook(dir, "pre-commit", "echo 'amend blocked' >&2\nexit 1\n");
+
+    auto r = mg::git::commit_amend(dir.string(), "amended message");
+    REQUIRE_FALSE(r.has_value());
+    CHECK(r.error().message.find("amend blocked") != std::string::npos);
+
+    // HEAD untouched: still the original message, still one commit.
+    auto h = mg::git::read_head(dir.string());
+    REQUIRE(h.has_value());
+    CHECK(h->summary == "first commit");
+    fs::remove_all(dir);
+}
+
 TEST_CASE("head_message returns HEAD's full commit message")
 {
     auto dir = make_repo_with_commit("subject line\n\nbody text here");
@@ -1503,20 +1537,6 @@ TEST_CASE("commit() creates a commit from the staged tree")
     for (const auto &e : *st)
         CHECK(e.path != "f.txt"); // committed, no longer staged
     fs::remove_all(dir);
-}
-
-// FM-GIT-CLI-WRITES: commit() must run through the real `git` so repo hooks
-// fire. Write an executable hook into .git/hooks and assert mg honours it --
-// impossible with the libgit2 commit path, which skips hooks entirely.
-void install_hook(const fs::path &dir, const char *name, const std::string &body)
-{
-    auto hooks = dir / ".git" / "hooks";
-    fs::create_directories(hooks);
-    auto p = hooks / name;
-    std::ofstream(p) << "#!/bin/sh\n" << body;
-    fs::permissions(p, fs::perms::owner_all | fs::perms::group_read |
-                           fs::perms::group_exec | fs::perms::others_read |
-                           fs::perms::others_exec);
 }
 
 TEST_CASE("commit() runs the pre-commit hook and fails when it rejects")

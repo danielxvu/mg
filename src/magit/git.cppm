@@ -3124,22 +3124,21 @@ std::expected<void, error> discard(std::string repo, std::string file)
     return {};
 }
 
-std::expected<std::string, error> commit(std::string repo, std::string message)
+// FM-GIT-CLI-WRITES: run a `git` mutation that lands a new HEAD, then report it.
+// A non-zero exit maps to an error carrying git's combined output (so hook
+// rejections / signing failures surface verbatim); success returns the new
+// HEAD's short oid. Going through the CLI is the only way hooks fire and
+// commit.gpgsign is honoured -- libgit2's commit/amend skip both.
+static std::expected<std::string, error>
+commit_via_cli(const std::string &repo, std::vector<std::string> args)
 {
-    // FM-GIT-CLI-WRITES: go through the real `git commit` so pre-commit /
-    // commit-msg / post-commit hooks fire and commit.gpgsign signing is honoured
-    // -- libgit2's git_commit_create does none of that. The staged index and any
-    // in-progress MERGE_HEAD are already on disk, so plain `git commit` makes the
-    // right (possibly multi-parent) commit and clears the merge state itself.
-    auto run = detail::run_git(repo, {"commit", "-m", message});
+    auto run = detail::run_git(repo, std::move(args));
     if (run.code != 0) {
-        // Surface the hook / git output verbatim so a rejection is visible.
         std::string msg = run.output.empty() ? "git commit failed" : run.output;
         while (!msg.empty() && (msg.back() == '\n' || msg.back() == '\r'))
             msg.pop_back();
         return std::unexpected(error{0, std::move(msg)});
     }
-
     // --short=8 keeps mg's 8-hex short-oid convention (detail::short_oid);
     // git's bare --short would abbreviate to its own minimum-unique length.
     auto head = detail::run_git(repo, {"rev-parse", "--short=8", "HEAD"});
@@ -3149,68 +3148,35 @@ std::expected<std::string, error> commit(std::string repo, std::string message)
     return oid;
 }
 
-// Shared amend over HEAD: `message` (NULL keeps HEAD's), and the current index
-// tree when `use_index_tree` (else keep HEAD's tree). Author is preserved; the
-// committer is refreshed. update_ref = "HEAD" moves the branch.
-static std::expected<std::string, error>
-amend_impl(std::string repo, const char *message, bool use_index_tree)
+std::expected<std::string, error> commit(std::string repo, std::string message)
 {
-    detail::init_guard guard;
-    git_repository *raw = nullptr;
-    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
-        return std::unexpected(last_error());
-    detail::repo_ptr r(raw);
-
-    git_oid head_oid;
-    if (git_reference_name_to_id(&head_oid, r.get(), "HEAD") != 0)
-        return std::unexpected(last_error());
-    git_commit *raw_head = nullptr;
-    if (git_commit_lookup(&raw_head, r.get(), &head_oid) != 0)
-        return std::unexpected(last_error());
-    detail::commit_ptr head(raw_head);
-
-    git_signature *raw_sig = nullptr;
-    if (git_signature_default(&raw_sig, r.get()) != 0)
-        return std::unexpected(last_error()); // user.name/user.email unset
-    detail::sig_ptr sig(raw_sig);
-
-    detail::tree_ptr tree;
-    if (use_index_tree) {
-        git_index *raw_idx = nullptr;
-        if (git_repository_index(&raw_idx, r.get()) != 0)
-            return std::unexpected(last_error());
-        detail::index_ptr idx(raw_idx);
-        git_oid tree_oid;
-        if (git_index_write_tree(&tree_oid, idx.get()) != 0)
-            return std::unexpected(last_error());
-        git_tree *raw_tree = nullptr;
-        if (git_tree_lookup(&raw_tree, r.get(), &tree_oid) != 0)
-            return std::unexpected(last_error());
-        tree.reset(raw_tree);
-    }
-
-    git_oid out;
-    if (git_commit_amend(&out, head.get(), "HEAD", nullptr, sig.get(), nullptr,
-                         message, tree.get()) != 0)
-        return std::unexpected(last_error());
-    return detail::short_oid(&out);
+    // The staged index and any in-progress MERGE_HEAD are already on disk, so
+    // plain `git commit` makes the right (possibly multi-parent) commit and
+    // clears the merge / cherry-pick / revert state itself.
+    return commit_via_cli(repo, {"commit", "-m", std::move(message)});
 }
 
+// FM-GIT-CLI-WRITES: the amend family also routes through `git commit --amend`
+// so hooks fire and the result is signed -- libgit2's git_commit_amend skipped
+// both. `--amend` folds in the staged index by default, which is exactly what
+// commit_amend/commit_extend want; commit_reword adds `--only` (no pathspec) so
+// git amends only the message and ignores any staged changes.
 std::expected<std::string, error>
 commit_amend(std::string repo, std::string message)
 {
-    return amend_impl(std::move(repo), message.c_str(), true);
+    return commit_via_cli(repo, {"commit", "--amend", "-m", std::move(message)});
 }
 
 std::expected<std::string, error> commit_extend(std::string repo)
 {
-    return amend_impl(std::move(repo), nullptr, true);
+    return commit_via_cli(repo, {"commit", "--amend", "--no-edit"});
 }
 
 std::expected<std::string, error>
 commit_reword(std::string repo, std::string message)
 {
-    return amend_impl(std::move(repo), message.c_str(), false);
+    return commit_via_cli(repo,
+                          {"commit", "--amend", "--only", "-m", std::move(message)});
 }
 
 std::expected<std::string, error> head_message(std::string repo)
