@@ -100,8 +100,16 @@ The mutation just runs git; the UI updates itself.
    round-trips. Tests: pre-commit-hook rejection fails commit + commit_amend and
    surfaces the output (impossible on the libgit2 path). 197/197 macOS+Alpine,
    OFF build unaffected.
-2. **merge / cherry-pick / revert** through the CLI (hooks + signing + the
-   conflict-exit mapping).
+2. ✅ **DONE** — **merge / cherry-pick / revert** through the CLI (hooks +
+   signing + the conflict-exit mapping). A shared `apply_via_cli` maps the CLI
+   result to `apply_result` exactly as the libgit2 versions did: exit 0 →
+   `done`; non-zero with a conflicted index → `conflicts` (CHERRY_PICK_HEAD /
+   REVERT_HEAD / MERGE_HEAD + markers left on disk for the `e o`/`e t` + `c c`
+   flow); any other non-zero exit → an error carrying git's output. `merge_branch`
+   → `git merge --no-edit`, `cherry_pick` → `git cherry-pick`, `revert_commit` →
+   `git revert --no-edit`. The ~190 lines of libgit2 apply-then-commit-by-hand
+   are deleted; `merge_annotated` stays (pull uses it — Phase 3). Test:
+   post-commit hook fires on cherry_pick. 198/198 macOS+Alpine.
 3. **push / pull / fetch** through the CLI with TUI suspend-and-inherit, so the
    real credential helper / SSH agent / progress work; retire
    `mg_magit_set_cred_prompt`.

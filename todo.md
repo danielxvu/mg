@@ -380,8 +380,14 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   pre-commit hook that rejects now fails the commit and surfaces its output
   (impossible on the old path — the headline). head_message strips git's
   stripspace trailing newline; rev-parse `--short=8` keeps mg's 8-hex oid.
-  197/197 macOS+Alpine, OFF build magit-gated. Next: P2 merge/cherry-pick/revert
-  (conflict-exit mapping), P3 push/pull/fetch (TUI suspend-and-inherit).
+  197/197 macOS+Alpine, OFF build magit-gated. ✅ **P2 done** — merge /
+  cherry-pick / revert routed through `git` (so the resulting commit fires
+  hooks + is signed); shared `apply_via_cli` maps exit-code→apply_result
+  (0=done; non-zero+conflicted index=conflicts with *_HEAD+markers left for
+  e o/e t + c c; other non-zero=error). ~190 lines of libgit2
+  apply-then-commit-by-hand deleted; merge_annotated kept for pull. 198/198
+  macOS+Alpine. Next: P3 push/pull/fetch with TUI suspend-and-inherit (the
+  terminal-handoff risk) + retire mg_magit_set_cred_prompt.
   Magit core (A+B, #31-#41) done; UTF-8 "Full" U5-U8 (#42-#45). **Phase C**
   (honest gap vs real magit; spec
   `docs/superpowers/specs/2026-06-21-fm-phase-c-roadmap.md`): ✅ FM-RB-1
