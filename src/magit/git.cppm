@@ -576,6 +576,14 @@ pull_remote(std::string repo, std::string remote);
 std::expected<rebase_result, error>
 pull_rebase(std::string repo, std::string remote);
 
+// FM-GIT-CLI-WRITES P3: run `git -C repo args...` *inheriting the current
+// stdio* (the real terminal), for interactive network ops -- so the user's
+// credential helper / SSH agent / GPG pinentry / progress meter all work, which
+// the libgit2 path cannot do. The caller (UI thread) must put the tty in cooked
+// mode around this. Returns git's exit code (0 = success), or -1 if `git` could
+// not be executed at all -- the signal to fall back to the libgit2 remote path.
+int git_terminal(std::string repo, std::vector<std::string> args);
+
 // Create local branch `name` at HEAD (does not switch to it).
 std::expected<void, error> create_branch(std::string repo, std::string name);
 
@@ -2868,6 +2876,30 @@ pull_rebase(std::string repo, std::string remote)
         return std::unexpected(error{0, "not on a branch"});
     std::string tracking = "refs/remotes/" + remote + "/" + std::string(branch);
     return rebase_onto(repo, tracking);
+}
+
+int git_terminal(std::string repo, std::vector<std::string> args)
+{
+    // Like detail::run_git, but WITHOUT redirecting stdio: the child inherits
+    // the caller's terminal (already in cooked mode), so credential helper /
+    // SSH agent / GPG pinentry / progress all talk to the real tty. No libgit2.
+    std::vector<std::string> full{"git", "-C", std::move(repo)};
+    for (auto &a : args)
+        full.push_back(std::move(a));
+    std::vector<char *> argv;
+    argv.reserve(full.size() + 1);
+    for (auto &s : full)
+        argv.push_back(const_cast<char *>(s.c_str()));
+    argv.push_back(nullptr);
+
+    pid_t pid = 0;
+    int rc = ::posix_spawnp(&pid, "git", nullptr, nullptr, argv.data(), environ);
+    if (rc != 0)
+        return -1; // git could not be executed -> caller falls back to libgit2
+
+    int status = 0;
+    ::waitpid(pid, &status, 0);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 
 std::expected<void, error> stage(std::string repo, std::string file)

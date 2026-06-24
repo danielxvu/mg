@@ -2786,18 +2786,120 @@ magit_cred_prompt(const char *prompt, int hidden, char *out, int outlen)
 	return (1);
 }
 
+/*
+ * FM-GIT-CLI-WRITES P3: hand the terminal to a child `git` for an interactive
+ * network op (push / pull / fetch), so git's credential helper / SSH agent /
+ * GPG pinentry / progress meter all talk to the real tty -- the libgit2 path
+ * cannot. magit_tty_suspend() is the spawncli prologue: leave raw mode + the
+ * alt screen so the child inherits a cooked terminal.
+ */
+static int
+magit_tty_suspend(void)
+{
+	ttcolor(CTEXT);
+	ttnowindow();
+	ttmove(nrow - 1, 0);
+	if (epresf != FALSE) {
+		tteeol();
+		epresf = FALSE;
+	}
+	if (ttcooked() == FALSE)
+		return (FALSE);
+	tttidy();
+	ttflush();
+	return (TRUE);
+}
+
+/* Restore raw mode + queue a full repaint (the spawncli epilogue). */
+static void
+magit_tty_restore(void)
+{
+	ttreinit();
+	sgarbf = TRUE;
+	(void)ttraw();
+}
+
+/* As magit_tty_restore, but first let the user read git's output (auth result,
+ * push summary, errors) before mg repaints over it. */
+static void
+magit_tty_pause_and_restore(void)
+{
+	char	buf[64];
+
+	fputs("\n-- press ENTER to return to mg --", stdout);
+	fflush(stdout);
+	(void)fgets(buf, sizeof(buf), stdin);
+	magit_tty_restore();
+}
+
+enum magit_net_op { MNET_FETCH, MNET_PUSH, MNET_PULL, MNET_PULL_REBASE };
+
+/*
+ * Run an interactive git network op with the terminal handed to git. `banner`
+ * prints on the inherited tty first. Returns git's exit code (0 = success), -1
+ * if git could not be executed (caller falls back to the libgit2 path), or -2
+ * if the tty could not be suspended (abort). On return the tty is back in raw
+ * mode with a repaint queued.
+ */
+static int
+magit_run_net(enum magit_net_op op, const char *cwd, int a, int b,
+    const char *banner)
+{
+	int	code;
+
+	if (magit_tty_suspend() == FALSE)
+		return (-2);
+	fputs(banner, stdout);
+	fputc('\n', stdout);
+	fflush(stdout);
+
+	switch (op) {
+	case MNET_PUSH:
+		code = mg_magit_push_cli(cwd, a, b);
+		break;
+	case MNET_PULL:
+		code = mg_magit_pull_cli(cwd, 0);
+		break;
+	case MNET_PULL_REBASE:
+		code = mg_magit_pull_cli(cwd, 1);
+		break;
+	case MNET_FETCH:
+	default:
+		code = mg_magit_fetch_cli(cwd);
+		break;
+	}
+
+	if (code == -1)
+		magit_tty_restore();		/* git never ran -> fall back */
+	else
+		magit_tty_pause_and_restore();
+	return (code);
+}
+
 /* f: fetch from origin (updates remote-tracking refs). */
 static int
 magit_fetch(int f, int n)
 {
 	char	cwd[PATH_MAX];
+	int	code;
 
 	if (getcwd(cwd, sizeof(cwd)) == NULL)
 		return (FALSE);
-	ewprintf("Fetching from origin...");
-	if (mg_magit_fetch(cwd, "origin") != 1) {
-		ewprintf("Fetch failed (no origin, or auth required)");
+	code = magit_run_net(MNET_FETCH, cwd, 0, 0, "Fetching from origin...");
+	if (code == -2)
 		return (FALSE);
+	if (code == -1) {			/* git unavailable -> libgit2 */
+		ewprintf("Fetching from origin...");
+		if (mg_magit_fetch(cwd, "origin") != 1) {
+			ewprintf("Fetch failed (no origin, or auth required)");
+			return (FALSE);
+		}
+		ewprintf("Fetched from origin");
+		return (magit_refresh(f, n));
+	}
+	if (code != 0) {
+		ewprintf("Fetch failed (see output)");
+		return (magit_refresh(f, n));
 	}
 	ewprintf("Fetched from origin");
 	return (magit_refresh(f, n));
@@ -2808,11 +2910,23 @@ static int
 magit_pull(int f, int n)
 {
 	char	cwd[PATH_MAX];
+	int	code;
 
 	if (getcwd(cwd, sizeof(cwd)) == NULL)
 		return (FALSE);
-	ewprintf("Pulling from origin...");
-	return (magit_apply_report(mg_magit_pull(cwd, "origin"), "Pull", f, n));
+	code = magit_run_net(MNET_PULL, cwd, 0, 0, "Pulling from origin...");
+	if (code == -2)
+		return (FALSE);
+	if (code == -1)				/* git unavailable -> libgit2 */
+		return (magit_apply_report(mg_magit_pull(cwd, "origin"), "Pull",
+		    f, n));
+	if (code != 0) {
+		ewprintf("Pull stopped -- if conflicts, resolve (e o / e t), "
+		    "then c c");
+		return (magit_refresh(f, n));
+	}
+	ewprintf("Pull done");
+	return (magit_refresh(f, n));
 }
 
 /* Shared push helper: `force` / `set_upstream` map to the engine flags. */
@@ -2820,13 +2934,27 @@ static int
 magit_do_push(int force, int set_upstream, int f, int n)
 {
 	char	cwd[PATH_MAX];
+	int	code;
 
 	if (getcwd(cwd, sizeof(cwd)) == NULL)
 		return (FALSE);
-	ewprintf("Pushing to origin...");
-	if (mg_magit_push(cwd, "origin", force, set_upstream) != 1) {
-		ewprintf("Push failed (no origin, non-fast-forward, or auth required)");
+	code = magit_run_net(MNET_PUSH, cwd, force, set_upstream,
+	    "Pushing to origin...");
+	if (code == -2)
 		return (FALSE);
+	if (code == -1) {			/* git unavailable -> libgit2 */
+		ewprintf("Pushing to origin...");
+		if (mg_magit_push(cwd, "origin", force, set_upstream) != 1) {
+			ewprintf("Push failed (no origin, non-fast-forward, or "
+			    "auth required)");
+			return (FALSE);
+		}
+		ewprintf("Pushed to origin");
+		return (magit_refresh(f, n));
+	}
+	if (code != 0) {
+		ewprintf("Push failed (see output)");
+		return (magit_refresh(f, n));
 	}
 	ewprintf("Pushed to origin");
 	return (magit_refresh(f, n));
@@ -2845,11 +2973,24 @@ static int
 magit_pull_rebase(int f, int n)
 {
 	char	cwd[PATH_MAX];
+	int	code;
 
 	if (getcwd(cwd, sizeof(cwd)) == NULL)
 		return (FALSE);
-	return (magit_rebase_report(mg_magit_pull_rebase(cwd, "origin"),
-	    "Pull --rebase", f, n));
+	code = magit_run_net(MNET_PULL_REBASE, cwd, 0, 0,
+	    "Pulling (rebase) from origin...");
+	if (code == -2)
+		return (FALSE);
+	if (code == -1)				/* git unavailable -> libgit2 */
+		return (magit_rebase_report(mg_magit_pull_rebase(cwd, "origin"),
+		    "Pull --rebase", f, n));
+	if (code != 0) {
+		ewprintf("Pull --rebase stopped -- resolve, then r r / r s / "
+		    "r a");
+		return (magit_refresh(f, n));
+	}
+	ewprintf("Pull --rebase complete");
+	return (magit_refresh(f, n));
 }
 
 /*

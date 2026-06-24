@@ -573,6 +573,48 @@ TEST_CASE("push_remote uploads the current branch to the remote")
     fs::remove_all(fx.bare);
 }
 
+// FM-GIT-CLI-WRITES P3: git_terminal runs real git for interactive network ops.
+// A file:// remote needs no auth, so this verifies the routing + the
+// inherited-stdio spawn (the terminal-handoff itself is pty-verified).
+TEST_CASE("git_terminal pushes the current branch through real git")
+{
+    auto fx = make_repo_with_remote();
+    commit_file(fx.work, "a.txt", "content\nvia git_terminal\n", "C2 cli");
+
+    int code = mg::git::git_terminal(fx.work.string(),
+                                     {"push", "origin", fx.branch});
+    CHECK(code == 0); // git ran and succeeded
+
+    // The bare repo's branch advanced to the locally-committed tip.
+    git_libgit2_init();
+    git_repository *braw = nullptr;
+    REQUIRE(git_repository_open(&braw, fx.bare.string().c_str()) == 0);
+    git_oid bare_tip;
+    REQUIRE(git_reference_name_to_id(&bare_tip, braw,
+                                     ("refs/heads/" + fx.branch).c_str()) == 0);
+    char hex[GIT_OID_HEXSZ + 1] = {0};
+    git_oid_tostr(hex, sizeof hex, &bare_tip);
+    git_repository_free(braw);
+    git_libgit2_shutdown();
+
+    auto local = mg::git::read_head(fx.work.string());
+    REQUIRE(local.has_value());
+    CHECK(local->summary == "C2 cli");
+    fs::remove_all(fx.work);
+    fs::remove_all(fx.bare);
+}
+
+TEST_CASE("git_terminal returns git's non-zero exit for a failed op")
+{
+    auto fx = make_repo_with_remote();
+    // Pushing a ref that does not exist -> git exits non-zero (but git ran).
+    int code = mg::git::git_terminal(fx.work.string(),
+                                     {"push", "origin", "no-such-branch"});
+    CHECK(code > 0);
+    fs::remove_all(fx.work);
+    fs::remove_all(fx.bare);
+}
+
 TEST_CASE("fetch_remote updates the remote-tracking ref")
 {
     auto fx = make_repo_with_remote();

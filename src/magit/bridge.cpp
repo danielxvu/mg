@@ -1176,6 +1176,42 @@ extern "C" int mg_magit_pull_rebase(const char *repo_path, const char *remote)
     return rebase_code(mg::git::pull_rebase(repo_path, remote ? remote : "origin"));
 }
 
+// FM-GIT-CLI-WRITES P3: the CLI (terminal-inherit) variants. The caller puts
+// the tty in cooked mode first; these just build the argv and run real git.
+extern "C" int mg_magit_fetch_cli(const char *repo_path)
+{
+    if (repo_path == nullptr)
+        return -1;
+    return mg::git::git_terminal(repo_path, {"fetch", "origin"});
+}
+
+extern "C" int mg_magit_push_cli(const char *repo_path, int force,
+                                 int set_upstream)
+{
+    if (repo_path == nullptr)
+        return -1;
+    std::vector<std::string> args{"push"};
+    if (force)
+        args.emplace_back("--force-with-lease");
+    if (set_upstream)
+        args.emplace_back("-u");
+    args.emplace_back("origin");
+    args.emplace_back("HEAD");
+    return mg::git::git_terminal(repo_path, std::move(args));
+}
+
+extern "C" int mg_magit_pull_cli(const char *repo_path, int rebase)
+{
+    if (repo_path == nullptr)
+        return -1;
+    std::vector<std::string> args{"pull"};
+    if (rebase)
+        args.emplace_back("--rebase");
+    args.emplace_back("--no-edit");
+    args.emplace_back("origin");
+    return mg::git::git_terminal(repo_path, std::move(args));
+}
+
 extern "C" int mg_magit_reset(const char *repo_path, const char *rev, int mode)
 {
     if (repo_path == nullptr || rev == nullptr || mode < 0 || mode > 2)
