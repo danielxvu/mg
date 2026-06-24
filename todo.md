@@ -367,6 +367,21 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   re-opens the session on .git/full-refresh and reuses it for scoped status on
   worktree edits → warm incremental refresh ~20ms→~0.6ms, below git+fsmonitor.
   Monitor-thread-private → race-free by construction. 195/195 macOS+Alpine+TSan.
+  🚧 **FM-GIT-CLI-WRITES (read/write split) — Phase 1 done** (branch
+  `fm-git-cli-writes`, stacked on `fm-repo-session`; spec
+  `docs/superpowers/specs/2026-06-23-fm-git-cli-writes.md`). Reads stay on
+  libgit2 (fast — the session work); *mutations that run hooks / sign /
+  authenticate* go through the real `git` so behaviour is exactly git's. P1:
+  `detail::run_git` (posix_spawnp, argv array — never a shell — combined
+  stdout+stderr captured) + `commit_via_cli`; `commit` and the amend family
+  (`commit_amend`/`commit_extend`/`commit_reword` → `git commit --amend`
+  [`--no-edit`/`--only`]) now fire pre-commit/commit-msg/post-commit hooks and
+  honour `commit.gpgsign`, which libgit2's create/amend skipped entirely. A
+  pre-commit hook that rejects now fails the commit and surfaces its output
+  (impossible on the old path — the headline). head_message strips git's
+  stripspace trailing newline; rev-parse `--short=8` keeps mg's 8-hex oid.
+  197/197 macOS+Alpine, OFF build magit-gated. Next: P2 merge/cherry-pick/revert
+  (conflict-exit mapping), P3 push/pull/fetch (TUI suspend-and-inherit).
   Magit core (A+B, #31-#41) done; UTF-8 "Full" U5-U8 (#42-#45). **Phase C**
   (honest gap vs real magit; spec
   `docs/superpowers/specs/2026-06-21-fm-phase-c-roadmap.md`): ✅ FM-RB-1

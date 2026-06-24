@@ -87,10 +87,19 @@ The mutation just runs git; the UI updates itself.
 
 ## Phases (highest-value / lowest-terminal-risk first)
 
-1. **`run_git` + commit through the CLI** (`git commit -F <msg>` and the
-   amend/extend/reword variants) — the headline: hooks + signing now run.
-   Output captured to a buffer, shown on hook rejection. The watcher
-   auto-refreshes after.
+1. ✅ **DONE** — **`run_git` + commit through the CLI** (`git commit -m <msg>`
+   and the amend/extend/reword variants) — the headline: hooks + signing now
+   run. Output captured (combined stdout+stderr via one pipe), surfaced as the
+   error message on hook rejection. The watcher auto-refreshes after.
+   `detail::run_git` (posix_spawnp, argv array — never a shell) + a shared
+   `commit_via_cli` helper that maps a non-zero exit to an error carrying git's
+   output and returns the new HEAD's `--short=8` oid. `commit`, `commit_amend`
+   (`--amend -m`), `commit_extend` (`--amend --no-edit`), `commit_reword`
+   (`--amend --only -m`, no pathspec → message-only) all delegate; `amend_impl`
+   dropped. `head_message` strips git's stripspace trailing newline so content
+   round-trips. Tests: pre-commit-hook rejection fails commit + commit_amend and
+   surfaces the output (impossible on the libgit2 path). 197/197 macOS+Alpine,
+   OFF build unaffected.
 2. **merge / cherry-pick / revert** through the CLI (hooks + signing + the
    conflict-exit mapping).
 3. **push / pull / fetch** through the CLI with TUI suspend-and-inherit, so the
