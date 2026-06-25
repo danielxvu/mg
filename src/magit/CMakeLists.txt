@@ -40,6 +40,7 @@ if(ENABLE_ZIG_STATUS)
         # time so the custom command can invoke it as a single argument.
         set(ZIG_REPACK_DIR ${CMAKE_CURRENT_BINARY_DIR}/zig_repack)
         set(ZIG_REPACK_SCRIPT ${CMAKE_CURRENT_BINARY_DIR}/zig_repack_apple.sh)
+        execute_process(COMMAND uname -m OUTPUT_VARIABLE _ZIG_HOST_ARCH OUTPUT_STRIP_TRAILING_WHITESPACE)
         file(GENERATE OUTPUT ${ZIG_REPACK_SCRIPT} CONTENT
 "#!/bin/sh
 set -e
@@ -54,7 +55,7 @@ mkdir -p \"$ZIG_REPACK_DIR\"
 cd \"$ZIG_REPACK_DIR\"
 ar x \"$ZIG_RAW_LIB\"
 chmod +r ./*.o
-ld -r -arch arm64 ./libneomg_zig_zcu.o -o ./merged_zig.o
+ld -r -arch ${_ZIG_HOST_ARCH} ./*.o -o ./merged_zig.o
 libtool -static -o \"$ZIG_LIB\" ./merged_zig.o
 "
             FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
