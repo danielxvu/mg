@@ -87,5 +87,5 @@ libtool -static -o \"$ZIG_LIB\" ./merged_zig.o
     add_dependencies(mg_magit neomg_zig_lib)
     target_link_libraries(mg_magit PRIVATE ${ZIG_LIB})
     target_include_directories(mg_magit PRIVATE ${ZIG_DIR}/include)
-    target_compile_definitions(mg_magit PRIVATE MG_ZIG_STATUS)
+    target_compile_definitions(mg_magit PUBLIC MG_ZIG_STATUS)
 endif()

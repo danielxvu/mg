@@ -13,6 +13,7 @@ module;
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -26,6 +27,10 @@ module;
 #include <spawn.h>    // posix_spawnp -- run the real `git` for hook/sign/auth ops
 #include <sys/wait.h> // waitpid
 #include <unistd.h>   // pipe, read, close
+
+#ifdef MG_ZIG_STATUS
+#include "neomg_zig.h"
+#endif
 
 // The process environment, for posix_spawnp. Declared in the global module
 // fragment so it attaches to the global module (not mg.git) and resolves to the
@@ -393,6 +398,13 @@ struct staged_entry {
 // differ are returned (UNMODIFIED paths are excluded).
 std::expected<std::vector<staged_entry>, error>
 staged_status(std::string repo);
+
+// Hybrid status: Zig worktree (Y) + libgit2 staged (X), merged into one
+// file_status vector identical in shape to repo_status. When MG_ZIG_STATUS is
+// not defined, or if either sub-call fails, falls back to repo_status (libgit2
+// full scan). This is the FM-ZIG-READ-ENGINE Phase 2 fast path.
+std::expected<std::vector<mg::magit::file_status>, error>
+hybrid_status(std::string repo);
 
 // Like repo_status, but limited to entries matching `pathspecs` (workdir-
 // relative dirs and/or files; git pathspec matching, so "src" covers src/**).
@@ -972,6 +984,64 @@ staged_status(std::string repo_path)
             out.push_back(std::move(e));
     }
     return out;
+}
+
+// hybrid_status: Zig Y + libgit2 X, merged. Falls back to repo_status on any
+// failure or when MG_ZIG_STATUS is not defined at compile time.
+std::expected<std::vector<mg::magit::file_status>, error>
+hybrid_status(std::string repo)
+{
+#ifdef MG_ZIG_STATUS
+    // 1. Zig worktree dimension -> map path -> file_status{index=unmodified, worktree=y}
+    std::map<std::string, mg::magit::file_status> by_path;
+    struct Cap { std::map<std::string, mg::magit::file_status> *m; };
+    Cap cap{&by_path};
+
+    int rc = neomg_zig_worktree_status(
+        repo.c_str(), repo.size(),
+        [](void *ctx, const char *p, std::size_t n, char /*x*/, char y) {
+            auto *c = static_cast<Cap *>(ctx);
+            std::string path(p, n);
+            auto &f = (*c->m)[path];
+            f.path = path;
+            f.index = mg::magit::status::unmodified; // set by staged_status below
+            switch (y) {
+            case 'M': f.worktree = mg::magit::status::modified;   break;
+            case 'D': f.worktree = mg::magit::status::deleted;     break;
+            case '?': f.worktree = mg::magit::status::untracked;   break;
+            default:  f.worktree = mg::magit::status::unmodified;  break;
+            }
+        },
+        &cap);
+
+    if (rc != 0)
+        return repo_status(repo); // unsupported platform -> full libgit2 fallback
+
+    // 2. libgit2 staged (X) column -> set index for each staged path.
+    auto st = staged_status(repo);
+    if (!st)
+        return repo_status(repo); // staged_status failed -> full fallback
+
+    for (auto &e : *st) {
+        bool existed = by_path.count(e.path) > 0;
+        auto &f = by_path[e.path];
+        f.path = e.path;
+        f.index = e.x;
+        // If this is a new entry (Zig didn't emit it — staged-only, worktree clean),
+        // initialise worktree to unmodified; otherwise keep whatever Zig set.
+        if (!existed)
+            f.worktree = mg::magit::status::unmodified;
+    }
+
+    // 3. Flatten map -> vector.
+    std::vector<mg::magit::file_status> out;
+    out.reserve(by_path.size());
+    for (auto &[_, f] : by_path)
+        out.push_back(f);
+    return out;
+#else
+    return repo_status(repo);
+#endif
 }
 
 std::expected<head_info, error> read_head(std::string path)

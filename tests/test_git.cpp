@@ -2798,3 +2798,212 @@ TEST_CASE("staged_status reports index-vs-HEAD changes (X column)")
     CHECK(x["b.txt"] == mg::magit::status::added);
     fs::remove_all(dir);
 }
+
+// ---- hybrid_status equivalence tests (FM-ZIG-READ-ENGINE Phase 2) ----------
+//
+// Oracle: repo_status (full libgit2 scan). Assertion: hybrid_status produces
+// the SAME set of {path, index-char, worktree-char} on every corpus scenario.
+// All cases are guarded by MG_ZIG_STATUS so they compile + run only when the
+// Zig lib is linked.
+//
+// When MG_ZIG_STATUS is absent, hybrid_status delegates to repo_status and the
+// tests below are compiled out -- the OFF-build check in the task brief verifies
+// that the binary still links successfully without the guard.
+
+#ifdef MG_ZIG_STATUS
+
+namespace {
+// Convert a file_status vector to a set of tuples for order-independent equality.
+static std::set<std::tuple<std::string, char, char>>
+status_set(const std::vector<mg::magit::file_status> &v)
+{
+    std::set<std::tuple<std::string, char, char>> s;
+    for (auto &f : v)
+        s.insert({f.path, static_cast<char>(f.index),
+                  static_cast<char>(f.worktree)});
+    return s;
+}
+
+// Build a repo with a representative MIX of file states:
+//   a.txt: committed and then modified in the worktree (' M')
+//   b.txt: committed (via commit_file) and then deleted from the worktree (' D')
+//   c.txt: staged-new (index, never committed) ('A ')
+//   d.txt: staged-modified (committed, then staged change) ('M ')
+//   u.txt: untracked ('??')
+// Returns the directory; caller must remove_all it.
+fs::path make_mixed_repo()
+{
+    auto dir = make_repo_with_commit("base"); // a.txt committed as "content"
+    set_test_config(dir);
+
+    // Add b.txt and d.txt as committed files.
+    commit_file(dir, "b.txt", "bee\n", "add b");
+    commit_file(dir, "d.txt", "dee\n", "add d");
+
+    git_libgit2_init();
+
+    // a.txt: worktree modification (unstaged)
+    std::ofstream(dir / "a.txt") << "content modified in worktree";
+
+    // b.txt: delete from worktree (unstaged deletion)
+    fs::remove(dir / "b.txt");
+
+    // c.txt: stage a new file
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_open(&repo, dir.string().c_str()) == 0);
+    std::ofstream(dir / "c.txt") << "cee\n";
+    git_index *idx = nullptr;
+    REQUIRE(git_repository_index(&idx, repo) == 0);
+    REQUIRE(git_index_add_bypath(idx, "c.txt") == 0);
+
+    // d.txt: stage a modification
+    std::ofstream(dir / "d.txt") << "dee modified and staged";
+    REQUIRE(git_index_add_bypath(idx, "d.txt") == 0);
+    REQUIRE(git_index_write(idx) == 0);
+    git_index_free(idx);
+    git_repository_free(repo);
+
+    // u.txt: untracked (left on disk, not staged)
+    std::ofstream(dir / "u.txt") << "untracked content";
+
+    git_libgit2_shutdown();
+    return dir;
+}
+} // namespace
+
+TEST_CASE("hybrid_status == libgit2 repo_status on a mixed-state tree")
+{
+    auto dir = make_mixed_repo();
+    auto h = mg::git::hybrid_status(dir.string());
+    auto g = mg::git::repo_status(dir.string());
+    REQUIRE(h.has_value());
+    REQUIRE(g.has_value());
+    CHECK(status_set(*h) == status_set(*g));
+    fs::remove_all(dir);
+}
+
+TEST_CASE("hybrid_status == repo_status on a clean repo (no changes)")
+{
+    auto dir = make_repo_with_commit("clean");
+    auto h = mg::git::hybrid_status(dir.string());
+    auto g = mg::git::repo_status(dir.string());
+    REQUIRE(h.has_value());
+    REQUIRE(g.has_value());
+    CHECK(status_set(*h) == status_set(*g));
+    CHECK(h->empty()); // clean repos have no entries
+    fs::remove_all(dir);
+}
+
+TEST_CASE("hybrid_status == repo_status with only staged changes (X only)")
+{
+    auto dir = make_repo_with_commit("base");
+    set_test_config(dir);
+    // Stage a modification and a new file; nothing changed in the worktree.
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_open(&repo, dir.string().c_str()) == 0);
+    std::ofstream(dir / "a.txt") << "staged change";
+    std::ofstream(dir / "n.txt") << "new staged";
+    git_index *idx = nullptr;
+    REQUIRE(git_repository_index(&idx, repo) == 0);
+    REQUIRE(git_index_add_bypath(idx, "a.txt") == 0);
+    REQUIRE(git_index_add_bypath(idx, "n.txt") == 0);
+    REQUIRE(git_index_write(idx) == 0);
+    git_index_free(idx);
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+
+    auto h = mg::git::hybrid_status(dir.string());
+    auto g = mg::git::repo_status(dir.string());
+    REQUIRE(h.has_value());
+    REQUIRE(g.has_value());
+    CHECK(status_set(*h) == status_set(*g));
+    fs::remove_all(dir);
+}
+
+TEST_CASE("hybrid_status == repo_status with only worktree changes (Y only)")
+{
+    auto dir = make_repo_with_commit("base");
+    // Modify worktree but don't stage anything.
+    std::ofstream(dir / "a.txt") << "worktree only change";
+    std::ofstream(dir / "u.txt") << "untracked";
+
+    auto h = mg::git::hybrid_status(dir.string());
+    auto g = mg::git::repo_status(dir.string());
+    REQUIRE(h.has_value());
+    REQUIRE(g.has_value());
+    CHECK(status_set(*h) == status_set(*g));
+    fs::remove_all(dir);
+}
+
+TEST_CASE("hybrid_status == repo_status with same file staged AND worktree-modified (MM)")
+{
+    auto dir = make_repo_with_commit("base");
+    set_test_config(dir);
+    // Stage one change, then make another worktree change on same file.
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_open(&repo, dir.string().c_str()) == 0);
+    std::ofstream(dir / "a.txt") << "first staged";
+    git_index *idx = nullptr;
+    REQUIRE(git_repository_index(&idx, repo) == 0);
+    REQUIRE(git_index_add_bypath(idx, "a.txt") == 0);
+    REQUIRE(git_index_write(idx) == 0);
+    git_index_free(idx);
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+    // Now modify worktree again (a.txt differs from both HEAD and index -> MM)
+    std::ofstream(dir / "a.txt") << "second worktree change";
+
+    auto h = mg::git::hybrid_status(dir.string());
+    auto g = mg::git::repo_status(dir.string());
+    REQUIRE(h.has_value());
+    REQUIRE(g.has_value());
+    CHECK(status_set(*h) == status_set(*g));
+    fs::remove_all(dir);
+}
+
+TEST_CASE("hybrid_status == repo_status with nested directories")
+{
+    auto dir = make_repo_with_commit("base");
+    set_test_config(dir);
+    fs::create_directories(dir / "sub" / "deep");
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_open(&repo, dir.string().c_str()) == 0);
+    std::ofstream(dir / "sub" / "s.txt") << "sub file";
+    std::ofstream(dir / "sub" / "deep" / "d.txt") << "deep file";
+    git_index *idx = nullptr;
+    REQUIRE(git_repository_index(&idx, repo) == 0);
+    REQUIRE(git_index_add_bypath(idx, "sub/s.txt") == 0);
+    REQUIRE(git_index_add_bypath(idx, "sub/deep/d.txt") == 0);
+    REQUIRE(git_index_write(idx) == 0);
+    git_index_free(idx);
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+    // Also add an untracked file in a nested dir
+    std::ofstream(dir / "sub" / "u.txt") << "untracked nested";
+
+    auto h = mg::git::hybrid_status(dir.string());
+    auto g = mg::git::repo_status(dir.string());
+    REQUIRE(h.has_value());
+    REQUIRE(g.has_value());
+    CHECK(status_set(*h) == status_set(*g));
+    fs::remove_all(dir);
+}
+
+TEST_CASE("hybrid_status == repo_status with only untracked files")
+{
+    auto dir = make_repo_with_commit("base");
+    std::ofstream(dir / "u1.txt") << "untracked 1";
+    std::ofstream(dir / "u2.txt") << "untracked 2";
+
+    auto h = mg::git::hybrid_status(dir.string());
+    auto g = mg::git::repo_status(dir.string());
+    REQUIRE(h.has_value());
+    REQUIRE(g.has_value());
+    CHECK(status_set(*h) == status_set(*g));
+    fs::remove_all(dir);
+}
+
+#endif // MG_ZIG_STATUS
