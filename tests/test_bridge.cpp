@@ -783,8 +783,10 @@ TEST_CASE("mg_magit_log_query_buffer -S finds the introducing commit")
 {
     auto dir = make_repo_with_commit("base");
     set_test_config(dir);
+    git_libgit2_init();
     commit_file(dir, "f.txt", "x\nNEEDLE_XYZ\ny\n", "introduce needle");
     commit_file(dir, "g.txt", "noise\n", "noise");
+    git_libgit2_shutdown();
 
     struct cap { std::vector<std::string> lines; int others = 0; } c;
     int n = mg_magit_log_query_buffer(
