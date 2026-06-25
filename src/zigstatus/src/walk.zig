@@ -63,6 +63,17 @@ fn classifyTracked(io: Io, gpa: std.mem.Allocator, dir: Dir, name: []const u8, p
     if (changed) emit(ctx, ' ', 'M', path);
 }
 
+// Suppress false-deletes: when a tracked dir can't be opened, mark its index
+// files as seen (they degrade to unmodified rather than "deleted").
+fn markSubtreeSeen(idx: *const index.Index, seen: *std.StringHashMapUnmanaged(void), gpa: std.mem.Allocator, dirpath: []const u8) void {
+    var it = idx.files.keyIterator();
+    while (it.next()) |k| {
+        const p = k.*;
+        if (p.len > dirpath.len and std.mem.startsWith(u8, p, dirpath) and p[dirpath.len] == '/')
+            seen.put(gpa, p, {}) catch {};
+    }
+}
+
 // Descend `dir`. `ctx.path[0..plen]` is its repo-relative path (no leading slash).
 fn walkDir(ctx: *Ctx, dir: Dir) void {
     var it = dir.iterate();
@@ -86,6 +97,10 @@ fn walkDir(ctx: *Ctx, dir: Dir) void {
             // Index-driven: only descend dirs that contain tracked files.
             if (ctx.walk_all or ctx.idx.dirs.contains(cur)) {
                 var sub = dir.openDir(ctx.io, ent.name, .{ .iterate = true }) catch {
+                    // Permission denied or other error: if this is a tracked dir,
+                    // mark its index files as seen so they aren't falsely reported deleted.
+                    if (ctx.idx.dirs.contains(cur))
+                        markSubtreeSeen(ctx.idx, ctx.seen, ctx.gpa, cur);
                     ctx.plen = save;
                     continue;
                 };
@@ -121,7 +136,13 @@ fn worker(job: *Job) void {
             // Top-level untracked dir — not descended (no tracked content).
             continue;
         }
-        var d = job.root.openDir(job.io, name, .{ .iterate = true }) catch continue;
+        var d = job.root.openDir(job.io, name, .{ .iterate = true }) catch {
+            // Permission denied or other error on a top-level tracked dir:
+            // mark its index files as seen so they aren't falsely reported deleted.
+            if (job.idx.dirs.contains(name))
+                markSubtreeSeen(job.idx, &job.seen, job.gpa, name);
+            continue;
+        };
         defer d.close(job.io);
         var ctx: Ctx = .{
             .io = job.io,
