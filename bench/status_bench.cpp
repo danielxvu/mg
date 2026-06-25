@@ -30,12 +30,7 @@ import mg.magit;
 namespace fs = std::filesystem;
 using clk = std::chrono::steady_clock;
 
-struct stat_ms {
-    double min;
-    double median;
-};
-
-template <class F> static stat_ms bench_ms(int iters, F &&f)
+template <class F> static std::vector<double> bench_ms(int iters, F &&f)
 {
     std::vector<double> ts;
     ts.reserve(static_cast<std::size_t>(iters));
@@ -45,21 +40,48 @@ template <class F> static stat_ms bench_ms(int iters, F &&f)
         const auto t1 = clk::now();
         ts.push_back(std::chrono::duration<double, std::milli>(t1 - t0).count());
     }
+    return ts;
+}
+
+// --raw mode (for bench/bench.py): one "metric<TAB>value_ms" line per sample, so
+// the harness aggregates every tool's stats uniformly. Else: human min/median.
+static bool g_raw = false;
+static void report(const char *metric, const char *human_label,
+                   std::vector<double> ts)
+{
+    if (g_raw) {
+        for (double v : ts)
+            std::printf("%s\t%.4f\n", metric, v);
+        return;
+    }
     std::sort(ts.begin(), ts.end());
-    return {ts.front(), ts[ts.size() / 2]};
+    std::printf("%-52s min %8.3f  median %8.3f ms\n", human_label, ts.front(),
+                ts[ts.size() / 2]);
 }
 
 int main(int argc, char **argv)
 {
-    if (argc < 2) {
-        std::fprintf(stderr, "usage: neomg_bench <repo> [scoped-subdir]\n");
+    std::vector<std::string> pos;
+    int runs = 9;
+    for (int i = 1; i < argc; ++i) {
+        std::string a = argv[i];
+        if (a == "--raw")
+            g_raw = true;
+        else if (a == "--runs" && i + 1 < argc)
+            runs = std::max(1, std::atoi(argv[++i]));
+        else
+            pos.push_back(a);
+    }
+    if (pos.empty()) {
+        std::fprintf(stderr,
+                     "usage: neomg_bench <repo> [scoped-subdir] [--runs N] [--raw]\n");
         return 2;
     }
-    const std::string repo = argv[1];
+    const std::string repo = pos[0];
 
     std::string sub;
-    if (argc >= 3) {
-        sub = argv[2];
+    if (pos.size() >= 2) {
+        sub = pos[1];
     } else {
         // Default scope: the first top-level subdirectory (the "incremental"
         // case of edits landing in one dir).
@@ -72,30 +94,31 @@ int main(int argc, char **argv)
         }
     }
 
-    const int N = 9;
+    const int N = runs;
 
-    if (auto st = mg::git::repo_status(repo); st)
-        std::printf("repo: %s  (%zu status entries)\n", repo.c_str(),
-                    st->size());
-    else {
+    if (auto st = mg::git::repo_status(repo); !st) {
         std::fprintf(stderr, "repo_status failed: %s\n", st.error().message.c_str());
         return 1;
-    }
-
-    const stat_ms cold = bench_ms(N, [&] { (void)mg::git::repo_status(repo); });
+    } else if (!g_raw)
+        std::printf("repo: %s  (%zu status entries, scope dir '%s')\n",
+                    repo.c_str(), st->size(), sub.c_str());
 
     // The *full* status-buffer build: the same work Magit's full refresh does --
     // gather every section (head/upstream, branches, tags, stashes, recent
-    // commits, conflicts, …) and compose all lines. This is the honest
-    // apples-to-apples vs `magit-refresh`, not just the libgit2 status list.
+    // commits, conflicts, …) and compose all lines. The honest apples-to-apples
+    // vs `magit-refresh`, not just the libgit2 status list.
     auto count_emit = [](void *ctx, const char *, int, const char *, int) {
         ++*static_cast<int *>(ctx);
     };
     int lines = 0;
-    const stat_ms full_buf = bench_ms(N, [&] {
-        lines = 0;
-        (void)mg_magit_status_buffer(repo.c_str(), nullptr, 0, count_emit, &lines);
-    });
+    report("full_buffer", "full status buffer build (all sections)",
+           bench_ms(N, [&] {
+               lines = 0;
+               (void)mg_magit_status_buffer(repo.c_str(), nullptr, 0, count_emit,
+                                            &lines);
+           }));
+    report("repo_status", "cold repo_status (libgit2 list only)",
+           bench_ms(N, [&] { (void)mg::git::repo_status(repo); }));
 
     auto s = mg::git::session::open(repo);
     if (!s) {
@@ -103,20 +126,12 @@ int main(int argc, char **argv)
         return 1;
     }
     (void)s->status(); // warm the held handle (first call reads the index)
-    const stat_ms warm_full = bench_ms(N, [&] { (void)s->status(); });
+    report("warm_full", "warm full status (reused session)",
+           bench_ms(N, [&] { (void)s->status(); }));
 
     const std::vector<std::string> spec{sub};
     (void)s->status_scoped(spec); // warm
-    const stat_ms warm_scoped = bench_ms(N, [&] { (void)s->status_scoped(spec); });
-
-    std::printf("                                              %8s  %8s\n", "min", "median");
-    std::printf("full status BUFFER build (cold; all sections, %d lines):"
-                " %8.2f  %8.2f ms\n", lines, full_buf.min, full_buf.median);
-    std::printf("cold full repo_status (libgit2 list only):    %8.2f  %8.2f ms\n",
-                cold.min, cold.median);
-    std::printf("warm full status (reused session):            %8.2f  %8.2f ms\n",
-                warm_full.min, warm_full.median);
-    std::printf("warm scoped status [%s] (reused session): %8.3f  %8.3f ms\n",
-                sub.c_str(), warm_scoped.min, warm_scoped.median);
+    report("warm_scoped", "warm scoped status (reused session)",
+           bench_ms(N, [&] { (void)s->status_scoped(spec); }));
     return 0;
 }

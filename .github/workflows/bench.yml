@@ -1,0 +1,49 @@
+name: bench
+
+# Reproduce the status-latency benchmark on x86_64 Linux, so the README's
+# numbers aren't a single-machine (Apple-silicon/macOS) artifact. Runs the
+# dependency-light, deterministic portion -- neomg's engine vs `git status` --
+# on the checked-out repo itself (a real repo with history). Magit / lazygit /
+# gitui need extra setup (and a tty / network), so they stay local-only;
+# bench/bench.py measures them when present.
+#
+# This is informational (the numbers print to the job log via bench/bench.py);
+# it is not a pass/fail gate -- latency varies with the runner.
+
+on:
+  push:
+    branches: [neomg]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bench:
+    name: status benchmark (x86_64 Linux / Arch)
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install toolchain + deps
+        run: |
+          pacman -Syu --noconfirm \
+            base-devel clang llvm cmake ninja git libgit2 libutf8proc pkgconf python
+          pacman -Scc --noconfirm
+      - uses: actions/checkout@v4
+      - name: Mark checkout safe (container runs as a different uid)
+        run: git config --global --add safe.directory '*'
+      - name: Build neomg_bench (cpp-linux preset, ENABLE_NATIVE_MAGIT=ON)
+        run: |
+          cmake --preset cpp-linux
+          cmake --build --preset cpp-linux --target neomg_bench
+      - name: Run benchmark (neomg engine vs git status) on this repo
+        run: |
+          python3 bench/bench.py "$PWD" --tools neomg,git --runs 9 --scope src \
+            --json bench-linux.json
+      - name: Upload raw results
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-linux-x86_64
+          path: bench-linux.json

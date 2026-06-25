@@ -91,78 +91,84 @@ changed directory**, off the UI thread.
 ### The same-basis comparison: neomg vs Emacs + Magit
 
 Magit is the porcelain neomg reimplements, so it's the fair fight — both *open a
-repo and build a full status view*. On **roll20-private-sheets (37,515 files)**:
+repo and build a full status view*. Measured across three repo sizes (median;
+n=7; min/stdev in the harness output):
 
-| | Full status view (all sections) | Incremental (edit in one dir) |
-|---|---|---|
-| **Emacs + Magit** | **≈ 555 ms** | — (no incremental path; rebuilds fully) |
-| **neomg** | **≈ 239 ms** (~2.3× faster) | **0.8 ms** (small dir) … **16 ms** (290-file dir) |
+| Repo (tracked files) | neomg full view | Emacs + Magit full refresh | neomg incremental (1-dir edit) |
+|---|---|---|---|
+| transmission (1.8k) | **16 ms** | 210 ms (~13×) | **0.2 ms** |
+| d20app (7.3k) | **85 ms** | 552 ms (~6.5×) | **0.4 ms** |
+| roll20 (37.5k) | **243 ms** | 558 ms (~2.3×) | **0.8 ms** |
 
-Both numbers are *measured the same way* — neomg's via `mg_magit_status_buffer`,
-the actual buffer build that emits every section (not just the libgit2 status
-list); Magit's via `magit-refresh`, corroborated three ways (below). Both are
-roughly **flat clean→dirty**, because the cost is section-gathering, not the
-diff. The ~2.3× on the full view is the honest headline.
+Both numbers are *measured the same way* — neomg's via `mg_magit_status_buffer`
+(the real buffer build emitting every section, not just the libgit2 status list);
+Magit's via `magit-refresh`, corroborated three independent ways (see Method).
 
-The **incremental** column is where the architecture pays off: Magit has no
-incremental path (every refresh is a full rebuild), while neomg rescans just the
-edited directory on its warm handle — **independent of the repo's 37k-file
-total**. That's not a like-for-like "2.3× → 700×" claim: it's a different, cheaper
-operation that one-shot tools simply can't do.
+Two honest takeaways the spread forces:
 
-Honest caveats, stated plainly:
+- **neomg's full-view lead over Magit shrinks as the repo grows** — ~13× at 1.8k
+  files, ~2.3× at 37k. Magit's ~550 ms is largely fixed subprocess overhead that
+  doesn't scale; neomg's full view is a libgit2 walk that *does* scale with file
+  count. On a giant monorepo, expect ~2×, not 13×. Anyone who quotes a single
+  multiplier is cherry-picking — including past versions of this README.
+- **The incremental refresh is the durable win**: 0.2–0.8 ms at *every* size,
+  because it rescans the edited directory, not the repo. Magit, lazygit, and
+  gitui have no equivalent — every refresh is a full rebuild. This is the
+  architectural point, and it's flat across repo size by construction.
+
+Caveats, stated plainly:
 
 - neomg's status buffer shows a **file list** (diffs expand on `TAB`); Magit
-  renders diffs **inline**. On a heavily-dirty tree Magit does more rendering —
-  so part of the full-view gap is a UX choice (lazy vs eager diffs), not pure
-  engine speed.
-- neomg's libgit2 walk is **not** faster than git's hand-tuned C; a bare
-  `repo_status` is ~146 ms here. The wins are the *incremental* path and that the
-  full build runs **off the UI thread**, so the editor never blocks.
+  renders diffs **inline**, so on a heavily-dirty tree part of the full-view gap
+  is a UX choice (lazy vs eager diffs), not pure engine speed.
+- neomg's libgit2 walk is **not** faster than git's hand-tuned C (see the `git
+  status` row below). The wins are the *incremental* path and that the full build
+  runs **off the UI thread**, so the editor never blocks.
 
-### Where the lighter tools sit (reference, not same-basis)
+### Reference: the lighter tools (different task / different metric)
 
-These do *less* than a full Magit/neomg view, so they're a reference point, not a
-head-to-head — and we report them by architecture, since none expose an internal
-status timer:
+`git status` computes a *change list* (less than a full view); lazygit/gitui are
+measured as **launch → first render** via a tmux pty — that includes process
+startup, so it's a rougher, *different* metric, not per-refresh latency. Shown
+for context, not as a head-to-head:
 
-- **`git status`** (the change list only, not a full view): ~40 ms default
-  config here, ~25 ms with the built-in `fsmonitor` warm, ~82 ms with the
-  untracked cache disabled.
-- **lazygit** (shells out to `git`) and **gitui** (libgit2) rebuild their view
-  **one-shot per refresh** with no persistent incremental session — each refresh
-  is bounded by a full status pass (≈ the `git status` and libgit2-walk figures
-  respectively). They don't get cheaper when little changed.
+| Repo | `git status` (default / fsmonitor) | lazygit launch→render | gitui launch→render |
+|---|---|---|---|
+| transmission (1.8k) | 15 / 11 ms | 150 ms | 38 ms |
+| d20app (7.3k) | 300 ms\* / 85 ms | 347 ms | 44 ms |
+| roll20 (37.5k) | 40 / 25 ms | 285 ms | 38 ms |
+
+\* d20app's `git status` is anomalously slow (slower than the 5× larger roll20) —
+almost certainly submodule recursion or a large untracked set. Flagged, not
+leaned on. lazygit shells out to `git` and gitui uses libgit2, so per-refresh
+each is bounded by a full status pass (no persistent incremental session).
 
 ### Method
 
-- Machine: Apple Silicon (arm64), macOS, `git` 2.50.1; **roll20-private-sheets,
-  37,515 tracked files**, measured clean and dirty (30 changes in one dir;
-  restored + verified clean after).
-- neomg: the committed [`bench/status_bench.cpp`](bench/status_bench.cpp)
-  (`neomg_bench <repo> [dir]`), min + median of 9 runs, calling the real engine
-  paths (`mg_magit_status_buffer` for the full view; `session::status_scoped`
-  for the incremental one).
-- Emacs + Magit: real Emacs 30.2 (Magit in an isolated package dir), **three
-  independent measurements that converge**: outer `float-time` (~555 ms), Magit's
-  own `magit-refresh-verbose` total (~560 ms), and a live-frame `benchmark-run`
-  via `emacs --daemon` + `emacsclient` (~549 ms). The per-section breakdown
-  confirms the cost is synchronous `git` subprocesses, not redraw.
+- One committed harness — [`bench/bench.py`](bench/bench.py) driving
+  [`bench/status_bench.cpp`](bench/status_bench.cpp) — runs every tool and reports
+  **min / median / stdev** over *n* runs. All measurements are **read-only**.
+  Run it on your own repos (see below); a CI job
+  ([`.github/workflows/bench.yml`](.github/workflows/bench.yml)) reruns the
+  neomg + `git` portion on **x86_64 Linux**, so the numbers aren't a
+  single-machine artifact.
+- These numbers: Apple Silicon (arm64), macOS, `git` 2.50.1, n=7. Repos measured
+  as-is (transmission/d20app carried a few local changes — negligible for these
+  walk-dominated full passes).
+- neomg via the real engine paths (`mg_magit_status_buffer`,
+  `session::status_scoped`). Magit via real Emacs 30.2 with Magit auto-installed
+  in an isolated package dir; `magit-refresh` corroborated three ways earlier
+  (outer `float-time`, Magit's own `magit-refresh-verbose`, and a live-frame
+  `benchmark-run`), all within ~2% — the cost is synchronous `git` subprocesses,
+  not redraw.
 
 ### Reproduce it
 
 ```sh
 cmake --build --preset cpp-linux --target neomg_bench   # or --preset cpp on macOS
-./build/tests/neomg_bench /path/to/repo              # cold full + warm scoped (first subdir)
-./build/tests/neomg_bench /path/to/repo some/subdir  # scope to a specific directory
-
-# git baseline:
-git -C /path/to/repo status --porcelain                          # default config
-git -C /path/to/repo -c core.fsmonitor=true status --porcelain   # fsmonitor warm (run twice)
-
-# Emacs + Magit (its own instrumentation):
-emacs -Q --batch --eval '(progn (require (quote magit)) (setq magit-refresh-verbose t) \
-  (let ((default-directory "/path/to/repo/")) (magit-status-setup-buffer default-directory)))'
+# Measure every tool it can find (neomg, git, Magit if emacs is present, and
+# lazygit/gitui via tmux) across one or more repos, with min/median/stdev:
+python3 bench/bench.py /path/to/repo [/path/to/another-repo ...]
 ```
 
 
