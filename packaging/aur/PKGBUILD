@@ -1,0 +1,64 @@
+# Maintainer: Daniel Vu <duongxvu@gmail.com>
+#
+# neomg -- a fork of mg (OpenBSD micro-emacs) refactored to C++23 with a native
+# Magit (git porcelain). Installs as `neomg`, so it coexists with the distro's
+# stock `mg` package. Builds via CMake (the cpp-linux preset, ENABLE_NATIVE_MAGIT
+# =ON) using the distro clang -- the same toolchain the Arch CI image uses.
+#
+# IMPORTANT: set _branch to the branch that contains the full fork. The fork's
+# work currently lives in a stacked-PR chain whose tip is the most complete
+# branch; once you merge that stack into a stable integration branch (e.g.
+# `neomg`), point _branch at it. Do NOT leave this on upstream `master`, which
+# is plain mg with none of the fork's features.
+_branch=neomg-rename
+
+pkgname=neomg-git
+_pkgname=neomg
+pkgver=0
+pkgrel=1
+pkgdesc="micro-emacs (mg) fork with native Magit, C++23 -- installs as neomg"
+arch=('x86_64' 'aarch64')
+url="https://github.com/danielxvu/mg"
+license=('custom:public-domain')   # mg is public domain (OpenBSD lineage)
+depends=('libgit2' 'libutf8proc' 'ncurses')
+makedepends=('git' 'cmake' 'ninja' 'clang' 'llvm' 'pkgconf')
+provides=('neomg')
+conflicts=('neomg')
+options=('!lto')   # C++23 named modules + LTO can mis-link on some clang builds
+source=("${_pkgname}::git+${url}.git#branch=${_branch}")
+sha256sums=('SKIP')
+
+pkgver() {
+	cd "${srcdir}/${_pkgname}"
+	printf 'r%s.%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+build() {
+	cd "${srcdir}/${_pkgname}"
+	# clang ships clang-scan-deps (CMake's C++20-module dependency scanner);
+	# the cpp-linux preset uses clang/clang++ from PATH and sets
+	# ENABLE_NATIVE_MAGIT=ON. Build dir is ./build (the preset's binaryDir).
+	cmake --preset cpp-linux
+	cmake --build --preset cpp-linux
+}
+
+check() {
+	cd "${srcdir}/${_pkgname}"
+	# A few tests exercise the real commit path (git_signature_default), which
+	# needs a git identity. Provide one in an isolated config so makepkg never
+	# touches the builder's ~/.gitconfig.
+	export GIT_CONFIG_GLOBAL="${srcdir}/gitconfig"
+	git config -f "${GIT_CONFIG_GLOBAL}" user.email "build@neomg.test"
+	git config -f "${GIT_CONFIG_GLOBAL}" user.name  "neomg build"
+	ctest --preset cpp-linux
+}
+
+package() {
+	cd "${srcdir}/${_pkgname}"
+	# Lays down ${pkgdir}/usr/bin/neomg and ${pkgdir}/usr/share/man/man1/neomg.1.
+	DESTDIR="${pkgdir}" cmake --install build --prefix /usr
+
+	# mg is public domain; ship the source's license note for makepkg's
+	# license=('custom') requirement.
+	install -Dm644 README.md "${pkgdir}/usr/share/licenses/${pkgname}/README.md"
+}
