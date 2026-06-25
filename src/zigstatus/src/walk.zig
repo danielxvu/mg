@@ -63,6 +63,16 @@ fn classifyTracked(io: Io, gpa: std.mem.Allocator, dir: Dir, name: []const u8, p
     if (changed) emit(ctx, ' ', 'M', path);
 }
 
+// Return true if the directory `name` under `parent` contains at least one entry.
+// Used to suppress empty untracked dirs (git -unormal omits them).
+fn dirNonEmpty(io: Io, parent: Dir, name: []const u8) bool {
+    var d = parent.openDir(io, name, .{ .iterate = true }) catch return false;
+    defer d.close(io);
+    var it = d.iterate();
+    const entry = it.next(io) catch return false;
+    return entry != null;
+}
+
 // Suppress false-deletes: when a tracked dir can't be opened, mark its index
 // files as seen (they degrade to unmodified rather than "deleted").
 fn markSubtreeSeen(idx: *const index.Index, seen: *std.StringHashMapUnmanaged(void), gpa: std.mem.Allocator, dirpath: []const u8) void {
@@ -106,8 +116,11 @@ fn walkDir(ctx: *Ctx, dir: Dir) void {
                 };
                 defer sub.close(ctx.io);
                 walkDir(ctx, sub);
+            } else if (dirNonEmpty(ctx.io, dir, ent.name)) {
+                // Untracked dir: emit `?? dir/` if non-empty (git -unormal collapses to top dir).
+                ctx.path[ctx.plen] = '/';
+                ctx.emit(ctx.emit_ctx, '?', '?', ctx.path[0 .. ctx.plen + 1]);
             }
-            // Untracked dirs: not descended (git status -unormal behaviour).
         } else {
             // Classify: not in index -> untracked.
             if (!ctx.idx.files.contains(cur)) {
@@ -133,7 +146,14 @@ fn worker(job: *Job) void {
     while (i < job.names.len) : (i += job.stride) {
         const name = job.names[i];
         if (!job.walk_all and !job.idx.dirs.contains(name)) {
-            // Top-level untracked dir — not descended (no tracked content).
+            // Top-level untracked dir: emit `?? name/` if non-empty, then skip descent.
+            if (dirNonEmpty(job.io, job.root, name)) {
+                // Build `name/` in a small stack buffer for the emit callback.
+                var buf: [4097]u8 = undefined;
+                @memcpy(buf[0..name.len], name);
+                buf[name.len] = '/';
+                job.emit(job.ctx, '?', '?', buf[0 .. name.len + 1]);
+            }
             continue;
         }
         var d = job.root.openDir(job.io, name, .{ .iterate = true }) catch {

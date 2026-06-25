@@ -52,6 +52,13 @@ def deleted(d):
     sh(d, "git", "add", "."); sh(d, "git", "commit", "-qm", "init")
     os.remove(os.path.join(d, "b.txt"))  # tracked, deleted from worktree
 
+@case
+def untracked_dir(d):
+    open(os.path.join(d, "x.txt"), "w").write("x\n")
+    sh(d, "git", "add", "x.txt"); sh(d, "git", "commit", "-qm", "init")
+    os.makedirs(os.path.join(d, "sub/deep"))
+    open(os.path.join(d, "sub/deep/f.txt"), "w").write("f\n")  # untracked tree
+
 def main():
     only = sys.argv[1] if len(sys.argv) > 1 else None
     fails = 0
