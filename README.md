@@ -77,15 +77,21 @@ number to watch.
 ### Method
 
 - Machine: Apple Silicon (arm64), macOS, `git` 2.50.1.
-- Repo: a real one — **roll20-private-sheets, 37,515 tracked files**, clean worktree.
+- Repo: a real one — **roll20-private-sheets, 37,515 tracked files**. Measured
+  both **clean** and **dirty** (30 changes — 25 modified + 5 untracked — in one
+  directory; the files were restored and the tree confirmed clean afterward).
 - neomg numbers: the committed [`bench/status_bench.cpp`](bench/status_bench.cpp)
-  (`neomg_bench <repo>`), median of 9 runs, calling the same engine path the
-  status buffer is built from.
-- `git status`: median of 7–9 CLI runs, OS cache warm, with and without the
-  built-in `fsmonitor`.
-- **Emacs + Magit** (the UI neomg reimplements): measured directly — real Emacs
-  30.2 with Magit installed in an isolated package dir, timing Magit's own
-  `magit-refresh` with `float-time`, median of warm runs.
+  (`neomg_bench <repo> [dir]`), median of 9 runs, calling the same engine path
+  the status buffer is built from.
+- `git status`: median of 7 CLI runs, OS cache warm. The headline figure is the
+  **default config** (~40 ms); it ranges from 25 ms (built-in `fsmonitor` warm)
+  to ~82 ms (untracked cache disabled).
+- **Emacs + Magit** (the UI neomg reimplements): measured directly and
+  **corroborated three ways** on real Emacs 30.2 (Magit in an isolated package
+  dir): an outer `float-time` (~555 ms), Magit's own `magit-refresh-verbose`
+  total (~560 ms), and a live-frame `benchmark-run` via `emacs --daemon` +
+  `emacsclient` (~549 ms) — all converge, and the per-section breakdown confirms
+  the cost is synchronous `git` subprocesses, not redraw.
 - lazygit/tig and gitui expose no internal status timer, so they're reported by
   the **cost of the status pass each is built on** — lazygit/tig → the
   `git status` figure, gitui → a libgit2 full status (the same library and walk
@@ -95,37 +101,48 @@ number to watch.
 
 ### Results (roll20-private-sheets, 37,515 files)
 
-| Tool | Status backend | Refresh model | Cold full status | Warm refresh (one-dir edit) |
-|------|----------------|---------------|------------------|------------------------------|
-| **stock `mg`** | — (no git UI) | — | n/a | n/a |
-| `git status` (reference) | git (C) | one-shot | **82 ms** (25 ms with `fsmonitor`) | — |
-| **lazygit** | git CLI porcelain | one-shot per refresh | ≈ 82 ms (`git status`) | ≈ 82 ms (re-walks) |
-| **gitui** | libgit2 | one-shot per refresh | ≈ 150 ms (libgit2 full) | ≈ 150 ms (re-walks) |
-| **Emacs + Magit** | git CLI (many subprocesses) | one-shot full refresh | **≈ 555 ms** | **≈ 555 ms** (re-runs every section) |
-| **neomg** | libgit2 + fs-watch | **persistent + incremental** | 146 ms (first open only) | **0.81 ms** |
+| Tool | Refresh model | Cold full | Warm refresh — clean | Warm refresh — 30 changes in one dir |
+|------|---------------|-----------|----------------------|--------------------------------------|
+| **stock `mg`** | no git UI | n/a | n/a | n/a |
+| `git status` (reference) | one-shot | 40 ms (25 ms `fsmonitor`) | — | 40 ms |
+| **lazygit** (git CLI) | one-shot, re-walks | ≈ 40 ms | ≈ 40 ms | ≈ 40 ms |
+| **gitui** (libgit2) | one-shot, re-walks | ≈ 146 ms | ≈ 146 ms | ≈ 148 ms |
+| **Emacs + Magit** | one-shot full refresh | ≈ 555 ms | **≈ 555 ms** | **≈ 560 ms** |
+| **neomg** | persistent + incremental | 146 ms (first open only) | **0.8 ms** (small dir) … **16 ms** (290-file dir) | **16 ms** (same dir) |
 
-The most relevant comparison is **Emacs + Magit** — the porcelain neomg
-reimplements. Magit shells out to *many* `git` subprocesses per refresh (status,
-diffs, stashes, unpushed/unpulled logs, …), so a full refresh on this repo is
-**~555 ms every time** — and it repays that on each refresh, with no incremental
-path. neomg gives the same UI but: its **cold** open (146 ms, one libgit2 walk)
-already beats a single Magit refresh ~4×, and its **warm** refresh is **~680×
-faster** (0.81 ms) because it watches the filesystem and rescans only the changed
-directory on a reused handle — off the UI thread, so the editor never blocks.
+Two things the dirty column makes clear:
 
-Against the lighter TUIs the story is the same shape: the cold numbers are all
-the same order (it's the same kind of full walk), but every one-shot tool
-re-pays it on each refresh, while neomg's warm path is ~100–200× faster.
+- **Everyone else is flat clean→dirty because they redo a fixed full pass.**
+  Magit (~555→560 ms) and the one-shot TUIs don't get cheaper when little has
+  changed — they recompute everything every refresh.
+- **neomg's incremental refresh scales with the *edited directory*, not the
+  repo or the diff.** Editing in a small dir → sub-millisecond; in a 290-file dir
+  → ~16 ms — and that's ~the same whether the files are clean or dirty (it's the
+  directory walk, not the changes). Either way it's independent of the repo's
+  37k-file total, which is the whole point.
+
+The headline comparison is **Emacs + Magit**, the porcelain neomg reimplements:
+same UI, but Magit runs *many* `git` subprocesses per refresh (status, diffs,
+stashes, unpushed/unpulled logs, …) for **~555 ms every time**, with no
+incremental path. neomg's **cold** open (146 ms) already beats one Magit refresh
+~4×; its **warm** refresh is **35–700× faster** (16 ms down to sub-ms) because it
+watches the filesystem and rescans only the changed directory on a reused
+handle, off the UI thread.
 
 ### Reproduce it
 
 ```sh
 cmake --build --preset cpp-linux --target neomg_bench   # or --preset cpp on macOS
-./build/tests/neomg_bench /path/to/a/large/repo
+./build/tests/neomg_bench /path/to/repo              # cold full + warm scoped (first subdir)
+./build/tests/neomg_bench /path/to/repo some/subdir  # scope to a specific directory
 
 # git baseline:
-git -C /path/to/repo -c core.fsmonitor=false status --porcelain   # cold
-git -C /path/to/repo -c core.fsmonitor=true  status --porcelain   # warm (run twice)
+git -C /path/to/repo status --porcelain                          # default config
+git -C /path/to/repo -c core.fsmonitor=true status --porcelain   # fsmonitor warm (run twice)
+
+# Emacs + Magit (its own instrumentation):
+emacs -Q --batch --eval '(progn (require (quote magit)) (setq magit-refresh-verbose t) \
+  (let ((default-directory "/path/to/repo/")) (magit-status-setup-buffer default-directory)))'
 ```
 
 
