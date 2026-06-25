@@ -1,0 +1,151 @@
+name: linux-status-spike
+
+# Run the Linux status-perf spike on real x86_64 Linux to validate whether
+# getdents64+statx (and optionally io_uring) beats naive per-file lstat,
+# and how both compare to `git status` on the same hardware.
+#
+# Results appear in the job log and are uploaded as an artifact.
+
+on:
+  push:
+    branches: [linux-status-spike]
+  workflow_dispatch:
+
+concurrency:
+  group: status-spike-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  spike:
+    name: status-perf spike (x86_64 Linux)
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── Checkout ──────────────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Install Zig 0.16.0 ───────────────────────────────────────────────────
+      - name: Install Zig 0.16.0
+        run: |
+          ZIG_URL="https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz"
+          curl -fsSL "$ZIG_URL" -o /tmp/zig.tar.xz
+          sudo tar -xJf /tmp/zig.tar.xz -C /usr/local
+          sudo ln -sf /usr/local/zig-x86_64-linux-0.16.0/zig /usr/local/bin/zig
+          zig version
+
+      # ── Build spike ──────────────────────────────────────────────────────────
+      - name: Build spike
+        run: |
+          zig build-exe bench/linux_status_spike.zig -OReleaseFast -femit-bin=bench/linux_status_spike
+          echo "Build OK: $(./bench/linux_status_spike 2>&1 | head -1 || true)"
+
+      # ── Generate benchmark repo ───────────────────────────────────────────────
+      - name: Generate ~37k-file benchmark repo
+        run: |
+          bash bench/gen_status_repo.sh /tmp/bench-repo-37k
+          echo "BENCH_REPO=/tmp/bench-repo-37k" >> "$GITHUB_ENV"
+
+      # ── Show system info ──────────────────────────────────────────────────────
+      - name: System info
+        run: |
+          echo "=== CPU ==="
+          lscpu | grep -E 'Model name|Socket|Core|Thread|CPU MHz'
+          echo "=== Memory ==="
+          free -h
+          echo "=== Kernel ==="
+          uname -r
+          echo "=== Git ==="
+          git --version
+          echo "=== Zig ==="
+          zig version
+
+      # ── Git status baselines ──────────────────────────────────────────────────
+      - name: Baseline — git status (default, primed cache)
+        run: |
+          echo "=== git status baseline ==="
+          REPO="$BENCH_REPO"
+          # Warm run (populates kernel dentry/inode cache)
+          git -C "$REPO" status --porcelain > /dev/null 2>&1 || true
+          echo "--- git status (default) x5 ---"
+          for i in 1 2 3 4 5; do
+            /usr/bin/time -f "%e real  %U user  %S sys" git -C "$REPO" status --porcelain > /dev/null 2>&1
+          done
+
+      - name: Baseline — git status (no untracked cache)
+        run: |
+          REPO="$BENCH_REPO"
+          echo "--- git status -c core.untrackedCache=false x5 ---"
+          for i in 1 2 3 4 5; do
+            /usr/bin/time -f "%e real  %U user  %S sys" \
+              git -C "$REPO" -c core.untrackedCache=false status --porcelain > /dev/null 2>&1
+          done
+
+      - name: Baseline — git status (no untracked cache, no fsmonitor)
+        run: |
+          REPO="$BENCH_REPO"
+          echo "--- git status -c core.untrackedCache=false -c core.fsmonitor=false x5 ---"
+          for i in 1 2 3 4 5; do
+            /usr/bin/time -f "%e real  %U user  %S sys" \
+              git -C "$REPO" -c core.untrackedCache=false -c core.fsmonitor=false \
+              status --porcelain > /dev/null 2>&1
+          done
+
+      # ── Run spike ─────────────────────────────────────────────────────────────
+      - name: Run spike
+        run: |
+          echo "=== linux_status_spike ==="
+          # Drop page cache if we have permission (likely not on GH runners, that's fine)
+          sync
+          echo 3 | sudo tee /proc/sys/vm/drop_caches > /dev/null 2>&1 || echo "(page cache drop skipped — no permission)"
+          # Warm run
+          ./bench/linux_status_spike "$BENCH_REPO" > /tmp/spike_warm.txt 2>&1 || true
+          echo "--- Warm run (page cache already warm from git baselines) ---"
+          cat /tmp/spike_warm.txt
+          echo ""
+          echo "--- Final timed run ---"
+          ./bench/linux_status_spike "$BENCH_REPO" 2>&1 | tee /tmp/spike_final.txt
+
+      # ── Collect results ───────────────────────────────────────────────────────
+      - name: Collect results into artifact
+        run: |
+          RESULTS_DIR=/tmp/spike-results
+          mkdir -p "$RESULTS_DIR"
+
+          # System info
+          {
+            echo "=== System ==="
+            lscpu | grep -E 'Model name|Core|Thread'
+            uname -r
+            git --version
+            zig version
+            echo ""
+          } > "$RESULTS_DIR/system.txt"
+
+          # Git baselines (re-run with timing captured to file)
+          REPO="$BENCH_REPO"
+          {
+            echo "=== git status baselines ==="
+            for i in 1 2 3 4 5; do
+              { /usr/bin/time -f "%e" git -C "$REPO" status --porcelain > /dev/null; } 2>&1
+            done
+          } > "$RESULTS_DIR/git_default.txt"
+
+          {
+            echo "=== git status (no UTC) ==="
+            for i in 1 2 3 4 5; do
+              { /usr/bin/time -f "%e" git -C "$REPO" -c core.untrackedCache=false status --porcelain > /dev/null; } 2>&1
+            done
+          } > "$RESULTS_DIR/git_no_utc.txt"
+
+          cp /tmp/spike_final.txt "$RESULTS_DIR/spike_final.txt"
+
+          echo "Files in results dir:"
+          ls -la "$RESULTS_DIR/"
+
+      - name: Upload results artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-status-spike-results
+          path: /tmp/spike-results/
+          retention-days: 14
