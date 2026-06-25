@@ -918,6 +918,41 @@ extern "C" int mg_magit_log_file_buffer(const char *repo_path, const char *file,
     return n;
 }
 
+extern "C" int mg_magit_log_query_buffer(const char *repo_path, int graph,
+                                         const char *range, const char *file,
+                                         int pickaxe_kind,
+                                         const char *pickaxe_term, int n,
+                                         mg_magit_emit_fn emit, void *ctx)
+{
+    if (repo_path == nullptr || emit == nullptr)
+        return 0;
+
+    mg::git::log_options opts;
+    opts.graph = graph != 0;
+    opts.max_count = n > 0 ? static_cast<std::size_t>(n) : 0;
+    if (range != nullptr)
+        opts.range = range;
+    if (file != nullptr)
+        opts.file = file;
+    if (pickaxe_kind == 'S' || pickaxe_kind == 'G') {
+        opts.pickaxe = static_cast<char>(pickaxe_kind);
+        opts.pickaxe_term = pickaxe_term ? pickaxe_term : "";
+    }
+
+    auto rows = mg::git::log_query(repo_path, std::move(opts));
+    if (!rows)
+        return 0;
+    int count = 0;
+    for (const auto &r : *rows) {
+        if (r.oid.empty())
+            emit(ctx, r.text.c_str(), MG_LINE_OTHER, nullptr, -1);
+        else
+            emit(ctx, r.text.c_str(), MG_LINE_COMMIT, r.oid.c_str(), -1);
+        ++count;
+    }
+    return count;
+}
+
 extern "C" int mg_magit_commit_diff(const char *repo_path, const char *rev,
                                     mg_magit_emit_fn emit, void *ctx)
 {

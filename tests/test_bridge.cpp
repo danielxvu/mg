@@ -235,6 +235,90 @@ fs::path make_repo_stash_branch()
     git_libgit2_shutdown();
     return dir;
 }
+
+// Commit `body` to `name` in `dir` (dir must be an initialized repo).
+void commit_file(const fs::path &dir, const char *name, const std::string &body,
+                 const char *message)
+{
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_open(&repo, dir.string().c_str()) == 0);
+    std::ofstream(dir / name) << body;
+    git_index *idx = nullptr;
+    REQUIRE(git_repository_index(&idx, repo) == 0);
+    REQUIRE(git_index_add_bypath(idx, name) == 0);
+    REQUIRE(git_index_write(idx) == 0);
+    git_oid tree_oid;
+    REQUIRE(git_index_write_tree(&tree_oid, idx) == 0);
+    git_tree *tree = nullptr;
+    REQUIRE(git_tree_lookup(&tree, repo, &tree_oid) == 0);
+    git_signature *sig = nullptr;
+    REQUIRE(git_signature_now(&sig, "Test", "t@example.com") == 0);
+    git_oid head_oid;
+    bool born = git_reference_name_to_id(&head_oid, repo, "HEAD") == 0;
+    git_commit *parent = nullptr;
+    if (born)
+        REQUIRE(git_commit_lookup(&parent, repo, &head_oid) == 0);
+    const git_commit *parents[1] = {parent};
+    git_oid commit_oid;
+    REQUIRE(git_commit_create(&commit_oid, repo, "HEAD", sig, sig, nullptr,
+                              message, tree, born ? 1 : 0,
+                              born ? parents : nullptr) == 0);
+    if (parent)
+        git_commit_free(parent);
+    git_signature_free(sig);
+    git_tree_free(tree);
+    git_index_free(idx);
+    git_repository_free(repo);
+}
+
+// Set user.name/user.email so git_signature_default works (amend/commit).
+void set_test_config(const fs::path &dir)
+{
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_open(&repo, dir.string().c_str()) == 0);
+    git_config *cfg = nullptr;
+    REQUIRE(git_repository_config(&cfg, repo) == 0);
+    git_config_set_string(cfg, "user.name", "Test");
+    git_config_set_string(cfg, "user.email", "t@example.com");
+    git_config_free(cfg);
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+}
+
+// A repo with a single commit on HEAD (built with libgit2).
+fs::path make_repo_with_commit(const char *message)
+{
+    auto dir = make_temp_dir();
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_init(&repo, dir.string().c_str(), 0) == 0);
+
+    std::ofstream(dir / "a.txt") << "content";
+    git_index *idx = nullptr;
+    REQUIRE(git_repository_index(&idx, repo) == 0);
+    REQUIRE(git_index_add_bypath(idx, "a.txt") == 0);
+    REQUIRE(git_index_write(idx) == 0);
+
+    git_oid tree_oid;
+    REQUIRE(git_index_write_tree(&tree_oid, idx) == 0);
+    git_tree *tree = nullptr;
+    REQUIRE(git_tree_lookup(&tree, repo, &tree_oid) == 0);
+
+    git_signature *sig = nullptr;
+    REQUIRE(git_signature_now(&sig, "Test", "t@example.com") == 0);
+
+    git_oid commit_oid;
+    REQUIRE(git_commit_create(&commit_oid, repo, "HEAD", sig, sig, nullptr,
+                              message, tree, 0, nullptr) == 0);
+
+    git_signature_free(sig);
+    git_tree_free(tree);
+    git_index_free(idx);
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+    return dir;
+}
 } // namespace
 
 TEST_CASE("mg_magit_commit_amend / reword / head_message through the bridge")
@@ -692,6 +776,29 @@ TEST_CASE("mg_magit_log_file_buffer emits only commits that touched the file")
     REQUIRE(lines.size() == 2);
     CHECK(lines[0].find("edit target") != std::string::npos); // newest first
     CHECK(lines[1].find("add target") != std::string::npos);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("mg_magit_log_query_buffer -S finds the introducing commit")
+{
+    auto dir = make_repo_with_commit("base");
+    set_test_config(dir);
+    commit_file(dir, "f.txt", "x\nNEEDLE_XYZ\ny\n", "introduce needle");
+    commit_file(dir, "g.txt", "noise\n", "noise");
+
+    struct cap { std::vector<std::string> lines; int others = 0; } c;
+    int n = mg_magit_log_query_buffer(
+        dir.string().c_str(), /*graph=*/0, /*range=*/nullptr, /*file=*/nullptr,
+        /*pickaxe_kind=*/'S', /*pickaxe_term=*/"NEEDLE_XYZ", /*n=*/0,
+        [](void *ctx, const char *line, int kind, const char *, int) {
+            auto *p = static_cast<cap *>(ctx);
+            p->lines.emplace_back(line);
+            if (kind == MG_LINE_OTHER)
+                p->others++;
+        },
+        &c);
+    REQUIRE(n == 1);
+    CHECK(c.lines[0].find("introduce needle") != std::string::npos);
     fs::remove_all(dir);
 }
 

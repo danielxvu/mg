@@ -86,6 +86,16 @@ int mg_magit_log_buffer(const char *repo_path, int n, mg_magit_emit_fn emit,
 int mg_magit_log_file_buffer(const char *repo_path, const char *file, int n,
                              mg_magit_emit_fn emit, void *ctx);
 
+/* FM-LP: CLI-backed log with graph / range / pickaxe. graph: 0/1. range: ""
+ * or NULL = HEAD; else "A..B". file: "" or NULL = repo-wide. pickaxe_kind:
+ * 0 none / 'S' / 'G' with pickaxe_term. n = -n limit (0 = none). Commit rows
+ * emit as MG_LINE_COMMIT (path = full oid); graph connector lines emit as
+ * MG_LINE_OTHER (path = NULL). Returns the line count, 0 on failure. */
+int mg_magit_log_query_buffer(const char *repo_path, int graph,
+        const char *range, const char *file, int pickaxe_kind,
+        const char *pickaxe_term, int n,
+        mg_magit_emit_fn emit, void *ctx);
+
 /* --- Async per-file builds (FM-ASYNC-BLAME) --------------------------------
  * blame / log-file are slow (0.3-1.2s / 150-360ms) and ran synchronously on the
  * UI thread. These run them on a worker thread: the UI requests, renders a
