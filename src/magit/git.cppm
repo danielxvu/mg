@@ -445,6 +445,30 @@ recent_commits(std::string path, std::size_t n);
 std::expected<std::vector<commit_brief>, error>
 log_file(std::string repo, std::string file, std::size_t n);
 
+// FM-LP: a row of `git log` output. A commit row carries its full oid; a pure
+// graph-connector line (--graph) has oid == "" and is non-actionable.
+struct log_row {
+    std::string text;   // <graph art> + short_oid + " " + summary, or a connector line
+    std::string oid;    // full 40-hex sha for a commit row; "" otherwise
+};
+
+// Options for log_query (the CLI-backed log reader used by l g / l r / l s / l G).
+struct log_options {
+    std::size_t max_count = 0;   // 0 = no -n limit
+    bool        graph     = false;
+    std::string range;           // "" = default (HEAD); else e.g. "main..HEAD"
+    std::string file;            // "" = repo-wide; else restrict to a path
+    char        pickaxe   = 0;   // 0 = none, 'S' = occurrence-count, 'G' = regex
+    std::string pickaxe_term;
+};
+
+// Run `git log` with the requested options and parse it into rows. graph +
+// pickaxe have no libgit2 equivalent, so this goes through the real git binary
+// (detail::run_git, argv array -- no shell). A non-zero git exit -> error
+// carrying git's output (e.g. a bad range).
+std::expected<std::vector<log_row>, error>
+log_query(std::string repo, log_options opts);
+
 // The repository's stash entries, most recent first.
 std::expected<std::vector<stash_entry>, error> stashes(std::string path);
 
@@ -1159,6 +1183,78 @@ log_file(std::string path, std::string file, std::size_t n)
         out.push_back(std::move(cb));
     }
     return out;
+}
+
+std::expected<std::vector<log_row>, error>
+log_query(std::string repo, log_options opts)
+{
+    std::vector<std::string> args{"log"};
+    if (opts.graph)
+        args.emplace_back("--graph");
+    if (opts.max_count > 0) {
+        args.emplace_back("-n");
+        args.emplace_back(std::to_string(opts.max_count));
+    }
+    if (opts.pickaxe == 'S')
+        args.emplace_back("-S" + opts.pickaxe_term);
+    else if (opts.pickaxe == 'G')
+        args.emplace_back("-G" + opts.pickaxe_term);
+    // Leading %x1f so --graph's art lands in field[0] and the same parser
+    // handles graph + non-graph lines uniformly.
+    args.emplace_back("--format=%x1f%H%x1f%h%x1f%s");
+    if (!opts.range.empty())
+        args.emplace_back(opts.range);
+    if (!opts.file.empty()) {
+        args.emplace_back("--");
+        args.emplace_back(opts.file);
+    }
+
+    auto run = detail::run_git(repo, args);
+    if (run.code != 0) {
+        std::string msg = run.output.empty() ? "git log failed" : run.output;
+        while (!msg.empty() && (msg.back() == '\n' || msg.back() == '\r'))
+            msg.pop_back();
+        return std::unexpected(error{0, std::move(msg)});
+    }
+
+    std::vector<log_row> rows;
+    const std::string &out = run.output;
+    std::size_t start = 0;
+    while (start <= out.size()) {
+        std::size_t nl = out.find('\n', start);
+        std::string line =
+            out.substr(start, nl == std::string::npos ? std::string::npos
+                                                      : nl - start);
+        if (nl == std::string::npos) {
+            if (line.empty())
+                break;
+        }
+        // Split on the US (0x1f) separator.
+        std::vector<std::string> f;
+        std::size_t p = 0;
+        for (;;) {
+            std::size_t s = line.find('\x1f', p);
+            if (s == std::string::npos) {
+                f.push_back(line.substr(p));
+                break;
+            }
+            f.push_back(line.substr(p, s - p));
+            p = s + 1;
+        }
+        if (f.size() >= 4) {
+            // f[0]=graph art, f[1]=full, f[2]=short, f[3]=summary
+            log_row row;
+            row.text = f[0] + f[2] + " " + f[3];
+            row.oid = f[1];
+            rows.push_back(std::move(row));
+        } else if (!line.empty()) {
+            rows.push_back(log_row{line, ""}); // connector-only line
+        }
+        if (nl == std::string::npos)
+            break;
+        start = nl + 1;
+    }
+    return rows;
 }
 
 std::expected<std::vector<stash_entry>, error> stashes(std::string path)

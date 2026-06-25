@@ -2077,6 +2077,115 @@ TEST_CASE("log_file returns only the commits that touched a given file")
     fs::remove_all(dir);
 }
 
+TEST_CASE("log_query range returns exactly the commits in A..B")
+{
+    auto dir = make_repo_for_interactive(); // feature: C1->C2->C3->C4, master=C1
+
+    mg::git::log_options opts;
+    opts.range = "master..HEAD"; // C2, C3, C4
+    auto rows = mg::git::log_query(dir.string(), opts);
+    REQUIRE(rows.has_value());
+
+    std::vector<std::string> summaries;
+    for (const auto &r : *rows)
+        if (!r.oid.empty())
+            summaries.push_back(r.text); // "<short> <summary>"
+    CHECK(summaries.size() == 3);
+    // Newest first: C4, C3, C2 -- every row carries a non-empty oid (no graph).
+    for (const auto &r : *rows)
+        CHECK_FALSE(r.oid.empty());
+    fs::remove_all(dir);
+}
+
+TEST_CASE("log_query -S finds the commits that add/remove a string")
+{
+    auto dir = make_repo_with_commit("base"); // a.txt = "content"
+    set_test_config(dir);
+    commit_file(dir, "f.txt", "alpha\nMAGIC_TOKEN_42\nbeta\n", "add token");
+    commit_file(dir, "f.txt", "alpha\nbeta\n", "remove token");
+    commit_file(dir, "g.txt", "unrelated\n", "noise");
+
+    mg::git::log_options opts;
+    opts.pickaxe = 'S';
+    opts.pickaxe_term = "MAGIC_TOKEN_42";
+    auto rows = mg::git::log_query(dir.string(), opts);
+    REQUIRE(rows.has_value());
+
+    std::vector<std::string> hits;
+    for (const auto &r : *rows)
+        hits.push_back(r.text);
+    REQUIRE(hits.size() == 2); // the add commit and the remove commit only
+    CHECK(hits[0].find("remove token") != std::string::npos); // newest first
+    CHECK(hits[1].find("add token") != std::string::npos);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("log_query -G matches a regex in the diff")
+{
+    auto dir = make_repo_with_commit("base");
+    set_test_config(dir);
+    commit_file(dir, "f.txt", "value = 123\n", "add numeric line");
+    commit_file(dir, "g.txt", "plain text\n", "add text");
+
+    mg::git::log_options opts;
+    opts.pickaxe = 'G';
+    opts.pickaxe_term = "value = [0-9]+";
+    auto rows = mg::git::log_query(dir.string(), opts);
+    REQUIRE(rows.has_value());
+
+    std::vector<std::string> hits;
+    for (const auto &r : *rows)
+        hits.push_back(r.text);
+    REQUIRE(hits.size() == 1);
+    CHECK(hits[0].find("add numeric line") != std::string::npos);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("log_query graph emits connector lines and tags commits")
+{
+    auto dir = make_repo_with_commit("C1"); // master @ C1, a.txt
+    set_test_config(dir);
+    // Branch 'side', diverge, then merge it back so HEAD has a merge commit.
+    {
+        git_libgit2_init();
+        git_repository *repo = nullptr;
+        REQUIRE(git_repository_open(&repo, dir.string().c_str()) == 0);
+        git_oid head;
+        REQUIRE(git_reference_name_to_id(&head, repo, "HEAD") == 0);
+        git_commit *tip = nullptr;
+        REQUIRE(git_commit_lookup(&tip, repo, &head) == 0);
+        git_reference *ref = nullptr;
+        REQUIRE(git_branch_create(&ref, repo, "side", tip, 0) == 0);
+        git_reference_free(ref);
+        git_commit_free(tip);
+        git_repository_free(repo);
+        git_libgit2_shutdown();
+    }
+    commit_file(dir, "a.txt", "content-main\n", "C2 on master");
+    // Switch to side, commit, switch back, merge.
+    REQUIRE(mg::git::checkout_branch(dir.string(), "side").has_value());
+    commit_file(dir, "b.txt", "content-side\n", "C2 on side");
+    REQUIRE(mg::git::checkout_branch(dir.string(), "master").has_value());
+    auto merged = mg::git::merge_branch(dir.string(), "side");
+    REQUIRE(merged.has_value()); // clean merge -> a merge commit on master
+
+    mg::git::log_options opts;
+    opts.graph = true;
+    auto rows = mg::git::log_query(dir.string(), opts);
+    REQUIRE(rows.has_value());
+
+    bool sawConnector = false, sawMerge = false;
+    for (const auto &r : *rows) {
+        if (r.oid.empty() && !r.text.empty())
+            sawConnector = true;             // a pure | / \ line
+        if (r.text.find("Merge branch 'side'") != std::string::npos)
+            sawMerge = true;
+    }
+    CHECK(sawMerge);
+    CHECK(sawConnector);
+    fs::remove_all(dir);
+}
+
 TEST_CASE("submodules lists each registered submodule's name and path")
 {
     auto parent = make_repo_with_commit("base");
