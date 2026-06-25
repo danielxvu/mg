@@ -84,4 +84,10 @@ if(ENABLE_NATIVE_MAGIT)
     add_executable(test_bridge test_bridge.cpp)
     target_link_libraries(test_bridge PRIVATE doctest::doctest mg_magit)
     doctest_discover_tests(test_bridge)
+
+    # Manual status micro-benchmark (NOT registered with CTest). Links the magit
+    # module so the README's numbers are reproducible:
+    #   ./build/tests/neomg_bench <repo> [scoped-subdir]
+    add_executable(neomg_bench ${CMAKE_SOURCE_DIR}/bench/status_bench.cpp)
+    target_link_libraries(neomg_bench PRIVATE mg_magit)
 endif()
