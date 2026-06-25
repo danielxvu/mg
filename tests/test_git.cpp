@@ -2874,11 +2874,16 @@ fs::path make_mixed_repo()
 TEST_CASE("hybrid_status == libgit2 repo_status on a mixed-state tree")
 {
     auto dir = make_mixed_repo();
+    // Fast-path witness: the counter must advance by exactly 1, proving the Zig
+    // path ran -- not the silent repo_status fallback.
+    unsigned before = mg::git::zig_fastpath_count();
     auto h = mg::git::hybrid_status(dir.string());
+    unsigned after = mg::git::zig_fastpath_count();
     auto g = mg::git::repo_status(dir.string());
     REQUIRE(h.has_value());
     REQUIRE(g.has_value());
     CHECK(status_set(*h) == status_set(*g));
+    CHECK(after - before == 1u); // Zig fast path was taken, not the fallback
     fs::remove_all(dir);
 }
 

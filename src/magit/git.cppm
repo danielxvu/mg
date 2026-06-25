@@ -6,6 +6,7 @@
 
 module;
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstddef>
 #include <cstdio>
@@ -234,6 +235,18 @@ export namespace mg::git {
 // the refcount never returns to 0 mid-flight.
 inline void global_init() noexcept { git_libgit2_init(); }
 inline void global_shutdown() noexcept { git_libgit2_shutdown(); }
+
+#ifdef MG_ZIG_STATUS
+// Observability counter: incremented exactly once each time hybrid_status
+// returns via the Zig fast path (i.e. the Zig worktree walk succeeded AND
+// staged_status succeeded). Never incremented on any fallback to repo_status.
+// Tests assert this advances to prove the fast path actually ran.
+inline std::atomic<unsigned> g_zig_fastpath_taken{0};
+inline unsigned zig_fastpath_count() noexcept
+{
+    return g_zig_fastpath_taken.load(std::memory_order_relaxed);
+}
+#endif // MG_ZIG_STATUS
 
 // Patch a running status set in place: drop every entry under one of `dirs`
 // (workdir-relative directories) and append `scoped` -- the authoritative
@@ -1023,17 +1036,24 @@ hybrid_status(std::string repo)
         return repo_status(repo); // staged_status failed -> full fallback
 
     for (auto &e : *st) {
-        bool existed = by_path.count(e.path) > 0;
-        auto &f = by_path[e.path];
-        f.path = e.path;
-        f.index = e.x;
-        // If this is a new entry (Zig didn't emit it — staged-only, worktree clean),
-        // initialise worktree to unmodified; otherwise keep whatever Zig set.
-        if (!existed)
-            f.worktree = mg::magit::status::unmodified;
+        // try_emplace: single lookup -- inserts only if path is absent, returns
+        // iterator + bool. bool=true means Zig didn't emit it (staged-only,
+        // worktree clean), so initialise worktree to unmodified; false means
+        // Zig already set worktree, keep it.
+        auto [it, inserted] = by_path.try_emplace(
+            e.path,
+            mg::magit::file_status{mg::magit::status::unmodified,
+                                   mg::magit::status::unmodified,
+                                   e.path, {}});
+        it->second.path = e.path;
+        it->second.index = e.x;
+        if (inserted)
+            it->second.worktree = mg::magit::status::unmodified;
+        // else: keep Zig-set worktree column
     }
 
-    // 3. Flatten map -> vector.
+    // 3. Flatten map -> vector. Zig fast path succeeded -- record it.
+    g_zig_fastpath_taken.fetch_add(1, std::memory_order_relaxed);
     std::vector<mg::magit::file_status> out;
     out.reserve(by_path.size());
     for (auto &[_, f] : by_path)
