@@ -11,7 +11,10 @@ In **Phase 2** this engine is compiled as a C-ABI static library
 libgit2 for the X (staged/index) column, then merges the two.  The cold
 `gather_status_view` in `bridge.cpp` calls `hybrid_status` unconditionally;
 when `ENABLE_ZIG_STATUS` is OFF at compile time `hybrid_status` falls back to
-the full libgit2 `repo_status` — the default build is byte-identical to before.
+the full libgit2 `repo_status` — a build without the flag is byte-identical to
+before.  The `cpp` / `cpp-linux` presets now enable the flag by default (the
+hybrid is the shipping cold-status path); the raw CMake option still defaults
+OFF, so a bare `cmake` build needs no Zig.
 
 Output format matches `git status --porcelain` (for the worktree column) exactly.
 
@@ -53,13 +56,17 @@ Usage: `zigstatus <repo-root>` — prints `XY path` lines to stdout, one per ent
 
 ### As the hybrid cold-status path (Phase 2)
 ```
-cmake --preset cpp -DENABLE_ZIG_STATUS=ON   # macOS (MacPorts zig + Apple-ld repack)
-cmake --build --preset cpp
-ctest --preset cpp                           # all tests pass, hybrid path active
+cmake --preset cpp        # macOS: enables ENABLE_ZIG_STATUS by default
+cmake --build --preset cpp #        (MacPorts zig + Apple-ld repack)
+ctest --preset cpp        # all tests pass, hybrid path active
 ```
+To build *without* the hybrid (libgit2-only, no Zig needed), pass
+`-DENABLE_ZIG_STATUS=OFF`.
 
-On Linux the `.a` links directly (no repack).  The `ENABLE_ZIG_STATUS` option
-is OFF by default; the default build is byte-identical and requires no Zig.
+On Linux the `.a` links directly (no repack).  The raw `ENABLE_ZIG_STATUS`
+CMake option defaults OFF (a bare `cmake` build is byte-identical and needs no
+Zig); the `cpp` / `cpp-linux` presets — and the `docker/` images — turn it ON,
+so the canonical build ships the hybrid and requires Zig 0.16.
 
 ## Validate
 

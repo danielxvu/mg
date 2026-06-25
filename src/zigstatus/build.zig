@@ -21,6 +21,10 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .link_libc = true,
+            // Emit PIC so the static .a links into the mg_magit PIE on musl
+            // targets (Alpine). Without it the non-PIC relocations into .rodata
+            // crash the musl loader at startup. Harmless on glibc/macOS.
+            .pic = true,
         }),
     });
     b.installArtifact(lib);

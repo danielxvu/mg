@@ -479,7 +479,14 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   --porcelain` on 8 cases: untracked, modified, modified_same_size, deleted,
   untracked_dir, ignored_file, mixed, nested_ignore). Branch: `fm-zig-read-engine`.
 
-  **Phase 2 done** (FM-ZIG-READ-ENGINE cold-path hybrid, default OFF).
+  **Phase 2 done** (FM-ZIG-READ-ENGINE cold-path hybrid, default ON in the
+  `cpp`/`cpp-linux` presets + `docker/` images; raw CMake option still OFF so a
+  bare `cmake` build needs no Zig). Cross-platform win confirmed in CI: full
+  status-buffer build ~37% faster on x86_64 Linux (260→164 ms median, 37.5k
+  files) and ~21% on macOS; conflicted/v4/submodule/sparse all fail closed to
+  libgit2. Default flip carried the `.pic=true` musl fix (`build.zig`) +
+  Zig-0.16 provisioning in both Dockerfiles + `bench.yml`; Alpine/musl build
+  verified locally.
   T1: Zig C-ABI static lib (`neomg_zig_worktree_status`). T2: CMake
   `ENABLE_ZIG_STATUS` gate (Zig .a linked into `mg_magit` on macOS via Apple-ld
   repack, directly on Linux). T3: `staged_status` (libgit2 X column). T4:

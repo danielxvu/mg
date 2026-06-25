@@ -1,6 +1,7 @@
 # macOS / local build trees and VCS metadata are not needed in the Linux build
-# context (the test suite drives libgit2 directly, not the host repo).
-build/
-build-c/
-build-tsan/
+# context (the test suite drives libgit2 directly, not the host repo). The glob
+# covers every local build dir (build, build-c, build-tsan, build-on/off, …);
+# macOS build trees carry extended attributes (e.g. libtool's __.SYMDEF) that
+# break Docker's context sender if they leak in.
+build*/
 .git/

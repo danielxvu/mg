@@ -22,6 +22,7 @@
       "cacheVariables": {
         "ENABLE_CPP_UPGRADES": "ON",
         "ENABLE_NATIVE_MAGIT": "ON",
+        "ENABLE_ZIG_STATUS": "ON",
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
         "CMAKE_C_COMPILER": "/opt/local/bin/clang-mp-21",
         "CMAKE_CXX_COMPILER": "/opt/local/bin/clang++-mp-21",
@@ -47,6 +48,7 @@
       "cacheVariables": {
         "ENABLE_CPP_UPGRADES": "ON",
         "ENABLE_NATIVE_MAGIT": "ON",
+        "ENABLE_ZIG_STATUS": "ON",
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
         "CMAKE_C_COMPILER": "clang",
         "CMAKE_CXX_COMPILER": "clang++",

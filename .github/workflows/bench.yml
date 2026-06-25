@@ -29,12 +29,25 @@ jobs:
       - name: Install toolchain + deps
         run: |
           pacman -Syu --noconfirm \
-            base-devel clang llvm cmake ninja git libgit2 libutf8proc pkgconf python
+            base-devel clang llvm cmake ninja git libgit2 libutf8proc pkgconf python \
+            curl tar xz
           pacman -Scc --noconfirm
       - uses: actions/checkout@v4
       - name: Mark checkout safe (container runs as a different uid)
         run: git config --global --add safe.directory '*'
-      - name: Build neomg_bench (cpp-linux preset, ENABLE_NATIVE_MAGIT=ON)
+      # The cpp-linux preset now enables ENABLE_ZIG_STATUS by default, so the
+      # bench measures the shipping hybrid cold-status path. Zig 0.16 is not in
+      # pacman yet -> fetch the official static x86_64 tarball (CI is x86_64).
+      - name: Install Zig 0.16.0
+        run: |
+          ZIG_VER=0.16.0
+          ZIG_TAR="zig-x86_64-linux-${ZIG_VER}.tar.xz"
+          curl -fsSL -o "/tmp/${ZIG_TAR}" "https://ziglang.org/download/${ZIG_VER}/${ZIG_TAR}"
+          echo "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  /tmp/${ZIG_TAR}" | sha256sum -c -
+          tar -xf "/tmp/${ZIG_TAR}" -C /usr/local
+          ln -s "/usr/local/zig-x86_64-linux-${ZIG_VER}/zig" /usr/local/bin/zig
+          zig version
+      - name: Build neomg_bench (cpp-linux preset, hybrid cold status default-on)
         run: |
           cmake --preset cpp-linux
           cmake --build --preset cpp-linux --target neomg_bench
