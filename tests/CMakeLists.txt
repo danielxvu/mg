@@ -90,4 +90,5 @@ if(ENABLE_NATIVE_MAGIT)
     #   ./build/tests/neomg_bench <repo> [scoped-subdir]
     add_executable(neomg_bench ${CMAKE_SOURCE_DIR}/bench/status_bench.cpp)
     target_link_libraries(neomg_bench PRIVATE mg_magit)
+    target_include_directories(neomg_bench PRIVATE ${CMAKE_SOURCE_DIR}/src/magit)
 endif()

@@ -57,7 +57,8 @@ package() {
 	# Lays down ${pkgdir}/usr/bin/neomg and ${pkgdir}/usr/share/man/man1/neomg.1.
 	DESTDIR="${pkgdir}" cmake --install build --prefix /usr
 
-	# mg is public domain; ship the source's license note for makepkg's
-	# license=('custom') requirement.
-	install -Dm644 README.md "${pkgdir}/usr/share/licenses/${pkgname}/README.md"
+	# neomg's own code is public domain; LICENSING.md documents that plus the
+	# linked deps (libgit2 GPLv2-w/-linking-exception, utf8proc, ncurses --
+	# separate packages here). Ship it for makepkg's license=('custom') rule.
+	install -Dm644 LICENSING.md "${pkgdir}/usr/share/licenses/${pkgname}/LICENSING.md"
 }

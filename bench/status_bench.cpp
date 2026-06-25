@@ -22,21 +22,20 @@
 #include <string>
 #include <vector>
 
+#include "bridge.h" // mg_magit_status_buffer: the *full* status-buffer build
+
 import mg.git;
 import mg.magit;
 
 namespace fs = std::filesystem;
 using clk = std::chrono::steady_clock;
 
-static double median(std::vector<double> v)
-{
-    if (v.empty())
-        return 0.0;
-    std::sort(v.begin(), v.end());
-    return v[v.size() / 2];
-}
+struct stat_ms {
+    double min;
+    double median;
+};
 
-template <class F> static double bench_ms(int iters, F &&f)
+template <class F> static stat_ms bench_ms(int iters, F &&f)
 {
     std::vector<double> ts;
     ts.reserve(static_cast<std::size_t>(iters));
@@ -46,7 +45,8 @@ template <class F> static double bench_ms(int iters, F &&f)
         const auto t1 = clk::now();
         ts.push_back(std::chrono::duration<double, std::milli>(t1 - t0).count());
     }
-    return median(std::move(ts));
+    std::sort(ts.begin(), ts.end());
+    return {ts.front(), ts[ts.size() / 2]};
 }
 
 int main(int argc, char **argv)
@@ -82,7 +82,20 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    const double cold = bench_ms(N, [&] { (void)mg::git::repo_status(repo); });
+    const stat_ms cold = bench_ms(N, [&] { (void)mg::git::repo_status(repo); });
+
+    // The *full* status-buffer build: the same work Magit's full refresh does --
+    // gather every section (head/upstream, branches, tags, stashes, recent
+    // commits, conflicts, …) and compose all lines. This is the honest
+    // apples-to-apples vs `magit-refresh`, not just the libgit2 status list.
+    auto count_emit = [](void *ctx, const char *, int, const char *, int) {
+        ++*static_cast<int *>(ctx);
+    };
+    int lines = 0;
+    const stat_ms full_buf = bench_ms(N, [&] {
+        lines = 0;
+        (void)mg_magit_status_buffer(repo.c_str(), nullptr, 0, count_emit, &lines);
+    });
 
     auto s = mg::git::session::open(repo);
     if (!s) {
@@ -90,15 +103,20 @@ int main(int argc, char **argv)
         return 1;
     }
     (void)s->status(); // warm the held handle (first call reads the index)
-    const double warm_full = bench_ms(N, [&] { (void)s->status(); });
+    const stat_ms warm_full = bench_ms(N, [&] { (void)s->status(); });
 
     const std::vector<std::string> spec{sub};
     (void)s->status_scoped(spec); // warm
-    const double warm_scoped = bench_ms(N, [&] { (void)s->status_scoped(spec); });
+    const stat_ms warm_scoped = bench_ms(N, [&] { (void)s->status_scoped(spec); });
 
-    std::printf("cold full  repo_status (fresh handle/call): %8.2f ms\n", cold);
-    std::printf("warm full  status      (reused session):    %8.2f ms\n", warm_full);
-    std::printf("warm scoped status [%s] (reused session): %8.3f ms\n",
-                sub.c_str(), warm_scoped);
+    std::printf("                                              %8s  %8s\n", "min", "median");
+    std::printf("full status BUFFER build (cold; all sections, %d lines):"
+                " %8.2f  %8.2f ms\n", lines, full_buf.min, full_buf.median);
+    std::printf("cold full repo_status (libgit2 list only):    %8.2f  %8.2f ms\n",
+                cold.min, cold.median);
+    std::printf("warm full status (reused session):            %8.2f  %8.2f ms\n",
+                warm_full.min, warm_full.median);
+    std::printf("warm scoped status [%s] (reused session): %8.3f  %8.3f ms\n",
+                sub.c_str(), warm_scoped.min, warm_scoped.median);
     return 0;
 }
