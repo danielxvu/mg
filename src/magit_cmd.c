@@ -125,6 +125,11 @@ static void	magit_plain_emit(void *, const char *, int, const char *, int);
 static int	magit_log(int, int);
 static int	magit_log_file(int, int);
 static int	magit_log_open(int, int);
+static int	magit_log_graph_cmd(int, int);
+static int	magit_log_range_cmd(int, int);
+static int	magit_log_pickaxe_s(int, int);
+static int	magit_log_pickaxe_g(int, int);
+static void	magit_log_query_reset(void);
 static int	magit_blame(int, int);
 static int	magit_cherrypick(int, int);
 static int	magit_log_visit(int, int);
@@ -187,6 +192,11 @@ static char	magit_log_file_path[PATH_MAX];
 
 /* Max commits shown in *magit-log* -- the `-n` transient infix (see below). */
 static int	magit_log_limit = 100;
+
+static int	magit_log_graph;		/* l g: --graph mode */
+static char	magit_log_range[256];		/* l r: "A..B" ("" = none) */
+static char	magit_log_pickaxe;		/* 0 / 'S' / 'G' */
+static char	magit_log_pickaxe_term[256];	/* the -S/-G term */
 
 /* FM-ASYNC-BLAME: the generation of the latest async blame / log-file request.
  * magit_async_apply() only fills a buffer if the ready result's generation
@@ -355,14 +365,22 @@ static struct KEYMAPE (2) magit_conflictmenu = {
 /* Log menu: l l whole-repo log, l f log of a file. Ascending. */
 static PF log_f[] = { magit_log_file };
 static PF log_l[] = { magit_log };
+static PF log_g[] = { magit_log_graph_cmd };
+static PF log_r[] = { magit_log_range_cmd };
+static PF log_s[] = { magit_log_pickaxe_s };
+static PF log_G[] = { magit_log_pickaxe_g };
 
-static struct KEYMAPE (2) magit_logmenu = {
-	2,
-	2,
+static struct KEYMAPE (6) magit_logmenu = {
+	6,
+	6,
 	rescan,
 	{
+		{ 'G', 'G', log_G, NULL },	/* l G: pickaxe -G (regex) */
 		{ 'f', 'f', log_f, NULL },	/* l f: log file */
-		{ 'l', 'l', log_l, NULL }	/* l l: log all */
+		{ 'g', 'g', log_g, NULL },	/* l g: graph log */
+		{ 'l', 'l', log_l, NULL },	/* l l: log all */
+		{ 'r', 'r', log_r, NULL },	/* l r: log range */
+		{ 's', 's', log_s, NULL }	/* l s: pickaxe -S (string) */
 	}
 };
 static PF magit_a[] = { magit_stash_apply };
@@ -1286,7 +1304,13 @@ magit_log_build(struct buffer *bp)
 	bp->b_flag |= BFREADONLY;
 
 	magit_log_count = 0;
-	if (magit_log_file_path[0] != '\0') {
+	if (magit_log_graph || magit_log_range[0] != '\0' ||
+	    magit_log_pickaxe != '\0') {
+		(void)mg_magit_log_query_buffer(cwd, magit_log_graph,
+		    magit_log_range[0] ? magit_log_range : NULL, NULL,
+		    magit_log_pickaxe, magit_log_pickaxe_term,
+		    magit_log_limit, magit_log_emit, bp);
+	} else if (magit_log_file_path[0] != '\0') {
 		/*
 		 * Per-file log is slow (150-360ms); run it on the worker thread
 		 * with a placeholder, applied on the wake. Whole-repo log is
@@ -1804,10 +1828,71 @@ magit_log_open(int f, int n)
 	return (TRUE);
 }
 
+/* Clear all CLI-log-query state so l l / l f revert to the plain libgit2 log. */
+static void
+magit_log_query_reset(void)
+{
+	magit_log_graph = 0;
+	magit_log_range[0] = '\0';
+	magit_log_pickaxe = '\0';
+	magit_log_pickaxe_term[0] = '\0';
+}
+
+/* l g: graph log of HEAD (CLI). */
+static int
+magit_log_graph_cmd(int f, int n)
+{
+	magit_log_query_reset();
+	magit_log_file_path[0] = '\0';
+	magit_log_graph = 1;
+	return (magit_log_open(f, n));
+}
+
+/* l r: log a commit range (prompted, e.g. main..HEAD). */
+static int
+magit_log_range_cmd(int f, int n)
+{
+	magit_log_query_reset();
+	magit_log_file_path[0] = '\0';
+	if (eread("Log range: ", magit_log_range, sizeof(magit_log_range),
+	    EFNEW | EFCR) == NULL || magit_log_range[0] == '\0')
+		return (ABORT);
+	return (magit_log_open(f, n));
+}
+
+/* l s: pickaxe -S (commits changing the occurrence count of a string). */
+static int
+magit_log_pickaxe_s(int f, int n)
+{
+	magit_log_query_reset();
+	magit_log_file_path[0] = '\0';
+	if (eread("Pickaxe -S (string): ", magit_log_pickaxe_term,
+	    sizeof(magit_log_pickaxe_term), EFNEW | EFCR) == NULL ||
+	    magit_log_pickaxe_term[0] == '\0')
+		return (ABORT);
+	magit_log_pickaxe = 'S';
+	return (magit_log_open(f, n));
+}
+
+/* l G: pickaxe -G (commits whose diff matches a regex). */
+static int
+magit_log_pickaxe_g(int f, int n)
+{
+	magit_log_query_reset();
+	magit_log_file_path[0] = '\0';
+	if (eread("Pickaxe -G (regex): ", magit_log_pickaxe_term,
+	    sizeof(magit_log_pickaxe_term), EFNEW | EFCR) == NULL ||
+	    magit_log_pickaxe_term[0] == '\0')
+		return (ABORT);
+	magit_log_pickaxe = 'G';
+	return (magit_log_open(f, n));
+}
+
 /* l l: open the *magit-log* buffer for the whole repo (newest first). */
 static int
 magit_log(int f, int n)
 {
+	magit_log_query_reset();
 	magit_log_file_path[0] = '\0';
 	return (magit_log_open(f, n));
 }
@@ -1822,6 +1907,7 @@ magit_log_file(int f, int n)
 	char	*path = NULL;
 	int	 kind, hunk;
 
+	magit_log_query_reset();
 	kind = magit_at_point(&path, &hunk);
 	if ((kind == MG_LINE_UNSTAGED || kind == MG_LINE_STAGED ||
 	    kind == MG_LINE_UNTRACKED) && path != NULL && path[0] != '\0')
