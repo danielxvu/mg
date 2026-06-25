@@ -14,8 +14,9 @@ name: linux
 
 on:
   push:
-    branches: [master, cpp-refactor]
+    branches: [master, cpp-refactor, fm-zig-hybrid]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: linux-${{ github.ref }}
@@ -92,3 +93,29 @@ jobs:
 
       - name: Run full test suite (hybrid cold path active)
         run: ctest --preset cpp-linux --output-on-failure
+
+      # Confirm the hybrid actually beats libgit2 on the REAL status-buffer build
+      # (gather_status_view), x86_64 Linux. Same runner/repo/job for both -> the
+      # ON-vs-OFF comparison is valid even though absolute ms are runner-noisy.
+      - name: Benchmark hybrid (ON) vs libgit2 (OFF) cold status
+        run: |
+          set -e
+          REPO=/tmp/bench-repo
+          mkdir -p "$REPO" && cd "$REPO" && git init -q
+          for d in $(seq 1 150); do
+            mkdir -p "dir$d"
+            for f in $(seq 1 250); do
+              printf 'alpha\nbeta %d\ngamma\n' "$f" > "dir$d/f$f.txt"
+            done
+          done
+          git -c user.email=b@b -c user.name=b add -A
+          git -c user.email=b@b -c user.name=b commit -qm gen
+          echo "repo: $(git ls-files | wc -l) files"
+          cd "$GITHUB_WORKSPACE"
+          echo "=== ON (hybrid: Zig statx worktree + libgit2 staged) ==="
+          ./build/tests/neomg_bench "$REPO" | grep -iE "full status buffer|repo_status"
+          echo "=== rebuilding neomg_bench with ENABLE_ZIG_STATUS=OFF ==="
+          cmake --preset cpp-linux -DENABLE_ZIG_STATUS=OFF -DZIG_EXE=/usr/local/bin/zig >/dev/null
+          cmake --build --preset cpp-linux --target neomg_bench >/dev/null
+          echo "=== OFF (libgit2 repo_status gather) ==="
+          ./build/tests/neomg_bench "$REPO" | grep -iE "full status buffer|repo_status"
