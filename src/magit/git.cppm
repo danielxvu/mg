@@ -999,31 +999,81 @@ staged_status(std::string repo_path)
     return out;
 }
 
+#ifdef MG_ZIG_STATUS
+// Repo features the Zig worktree walker cannot model, so hybrid_status must fall
+// back to libgit2 (which handles them, and matches the OFF build byte-for-byte):
+//   * submodule -- a gitlink index entry (GIT_FILEMODE_COMMIT). The Zig walker
+//     would descend into the submodule's own checkout and mis-report its files.
+//   * sparse-checkout -- a skip-worktree index entry: the file is intentionally
+//     absent from disk, which the Zig walker would report as worktree-deleted.
+// Cold-path only; opens + scans the index once (a later optimization could share
+// staged_status's index read). Any open/read failure => fall back (fail-safe).
+static bool zig_unsupported_repo(const std::string &repo)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return true;
+    detail::repo_ptr r(raw);
+    git_index *raw_idx = nullptr;
+    if (git_repository_index(&raw_idx, r.get()) != 0)
+        return true;
+    detail::index_ptr idx(raw_idx);
+    const std::size_t n = git_index_entrycount(idx.get());
+    for (std::size_t i = 0; i < n; ++i) {
+        const git_index_entry *e = git_index_get_byindex(idx.get(), i);
+        if (e == nullptr)
+            continue;
+        if (e->mode == GIT_FILEMODE_COMMIT) // submodule gitlink
+            return true;
+        if (e->flags_extended & GIT_INDEX_ENTRY_SKIP_WORKTREE) // sparse-checkout
+            return true;
+    }
+    return false;
+}
+#endif
+
 // hybrid_status: Zig Y + libgit2 X, merged. Falls back to repo_status on any
 // failure or when MG_ZIG_STATUS is not defined at compile time.
 std::expected<std::vector<mg::magit::file_status>, error>
 hybrid_status(std::string repo)
 {
 #ifdef MG_ZIG_STATUS
+    // Submodules / sparse-checkout: the Zig walker can't model these -> let
+    // libgit2 do the whole scan (matches the OFF build). zig_fastpath_count
+    // stays unincremented, so the differential tests witness the fallback.
+    if (zig_unsupported_repo(repo))
+        return repo_status(repo);
+
     // 1. Zig worktree dimension -> map path -> file_status{index=unmodified, worktree=y}
+    // The Zig walker fans out across `nthreads` workers that invoke this emit
+    // callback CONCURRENTLY, so the shared map must be guarded. The mutex lives
+    // in the capture struct; the lock covers only the map insertion (the costly
+    // lstat/hash work already happened on the Zig side, outside emit).
     std::map<std::string, mg::magit::file_status> by_path;
-    struct Cap { std::map<std::string, mg::magit::file_status> *m; };
-    Cap cap{&by_path};
+    struct Cap {
+        std::map<std::string, mg::magit::file_status> *m;
+        std::mutex mu;
+    };
+    Cap cap{&by_path, {}};
 
     int rc = neomg_zig_worktree_status(
         repo.c_str(), repo.size(),
         [](void *ctx, const char *p, std::size_t n, char /*x*/, char y) {
             auto *c = static_cast<Cap *>(ctx);
             std::string path(p, n);
-            auto &f = (*c->m)[path];
-            f.path = path;
-            f.index = mg::magit::status::unmodified; // set by staged_status below
+            mg::magit::status wt;
             switch (y) {
-            case 'M': f.worktree = mg::magit::status::modified;   break;
-            case 'D': f.worktree = mg::magit::status::deleted;     break;
-            case '?': f.worktree = mg::magit::status::untracked;   break;
-            default:  f.worktree = mg::magit::status::unmodified;  break;
+            case 'M': wt = mg::magit::status::modified;   break;
+            case 'D': wt = mg::magit::status::deleted;     break;
+            case '?': wt = mg::magit::status::untracked;   break;
+            default:  wt = mg::magit::status::unmodified;  break;
             }
+            std::lock_guard<std::mutex> lock(c->mu);
+            auto &f = (*c->m)[path];
+            f.path = std::move(path);
+            f.index = mg::magit::status::unmodified; // set by staged_status below
+            f.worktree = wt;
         },
         &cap);
 
