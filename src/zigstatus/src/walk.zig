@@ -108,6 +108,11 @@ fn walkDir(ctx: *Ctx, dir: Dir) void {
         if (!is_dir and ent.kind != .file and ent.kind != .sym_link) continue;
 
         const save = ctx.plen;
+        // Path too long for the buffer -> skip this entry (degrade gracefully rather
+        // than overflow). Also bounds recursion depth, since we can't descend past it.
+        if (ctx.plen + 1 + ent.name.len > ctx.path.len) {
+            continue;
+        }
         // Build repo-relative path: prepend existing prefix + "/" + name.
         // (At top-level, plen==0 so we don't insert a leading slash.)
         if (ctx.plen > 0) {
@@ -140,18 +145,14 @@ fn walkDir(ctx: *Ctx, dir: Dir) void {
             // Classify: not in index -> untracked.
             if (!ctx.idx.files.contains(cur)) {
                 if (!gitignore.ignored(ctx.rules.items, cur, ent.name, false)) {
-                    // Copy path to stack buffer for emit (cur slices into ctx.path which is stack-allocated
-                    // and valid for this call, but emit may be called from threads so we pass cur directly --
-                    // the walk is synchronous within each worker, so the slice is stable for the duration of emit).
                     ctx.emit(ctx.emit_ctx, '?', '?', cur);
                 }
             } else {
                 // Tracked file found on disk: record in the seen-set using the index key
                 // (stable slice into index bytes), then classify for modifications.
-                const idx_key = ctx.idx.files.getKey(cur).?;
-                ctx.seen.put(ctx.gpa, idx_key, {}) catch {};
-                const ie = ctx.idx.files.get(cur).?;
-                classifyTracked(ctx.io, ctx.gpa, dir, ent.name, cur, ie, ctx.emit, ctx.emit_ctx);
+                const entry = ctx.idx.files.getEntry(cur).?;
+                ctx.seen.put(ctx.gpa, entry.key_ptr.*, {}) catch {};
+                classifyTracked(ctx.io, ctx.gpa, dir, ent.name, cur, entry.value_ptr.*, ctx.emit, ctx.emit_ctx);
             }
         }
         ctx.plen = save;
