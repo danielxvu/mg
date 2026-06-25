@@ -97,6 +97,12 @@ endif()
 
 add_executable(mg ${MG_SOURCES} ${MG_LIBOBJ})
 
+# The fork ships as `neomg` so it installs side-by-side with a distro's stock
+# `mg`. Only the artifact is renamed -- the CMake target stays `mg` (so every
+# target_*(mg ...) reference and the COMMAND mg tests keep resolving). The
+# autotools build (build.yml) is left as the faithful upstream-parity `mg`.
+set_target_properties(mg PROPERTIES OUTPUT_NAME neomg)
+
 # config.h lives in the build tree; def.h's `#include "config.h"` finds it here.
 # src/ is also needed so the lib/ compat shims (MG_LIBOBJ: fparseln, strtonum,
 # … -- compiled only where libc lacks them, e.g. Linux/musl, never on macOS)
@@ -120,12 +126,13 @@ if(UTIL_LIB)
 endif()
 
 # --- Install: the editor binary + its man page (GNUInstallDirs layout) -------
-# `cmake --install <build> --prefix <p>` lays down <p>/bin/mg and
-# <p>/share/man/man1/mg.1. The startup file is read from SYSCONFDIR/mg at
-# runtime (STARTUPFILE in config.h); it is user/distro-provided, not shipped.
+# `cmake --install <build> --prefix <p>` lays down <p>/bin/neomg and
+# <p>/share/man/man1/neomg.1 (installed side-by-side with a distro's stock mg).
+# The startup file is read from SYSCONFDIR/mg at runtime (STARTUPFILE in
+# config.h); it is user/distro-provided, not shipped.
 install(TARGETS mg RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES ${CMAKE_SOURCE_DIR}/doc/mg.1
-        DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
+        DESTINATION ${CMAKE_INSTALL_MANDIR}/man1 RENAME neomg.1)
 
 # --- Smoke test (task F2): `mg -h` prints usage and exits 0, no tty needed ---
 if(BUILD_TESTING)
