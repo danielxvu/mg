@@ -475,6 +475,9 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   Spec: `docs/superpowers/specs/2026-06-25-fm-zig-read-engine.md`. (Contrast
   with FM-PARALLEL-STATUS below, which failed *inside* libgit2; this succeeds by
   replacing the read path entirely.)
+  **Phase 1a done** (worktree status validated byte-for-byte vs `git status
+  --porcelain` on 8 cases: untracked, modified, modified_same_size, deleted,
+  untracked_dir, ignored_file, mixed, nested_ignore). Branch: `fm-zig-read-engine`.
 
   **Not done (honest residual — each needs work outside the current model):**
     · FM-CV commit variants: instant fixup/squash (use `r i` for now),

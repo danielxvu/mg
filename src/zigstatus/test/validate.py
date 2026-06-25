@@ -68,6 +68,26 @@ def ignored_file(d):
     open(os.path.join(d, "real.txt"), "w").write("r\n")        # untracked -> ??
     os.makedirs(os.path.join(d, "build")); open(os.path.join(d, "build/o.o"), "w").write("x")  # ignored dir -> absent
 
+@case
+def mixed(d):  # modified + deleted + untracked + ignored together
+    for n in ("a.txt", "b.txt", "c.txt"): open(os.path.join(d, n), "w").write("x\n")
+    open(os.path.join(d, ".gitignore"), "w").write("*.tmp\n")
+    sh(d, "git", "add", "."); sh(d, "git", "commit", "-qm", "init")
+    open(os.path.join(d, "a.txt"), "w").write("x\nmod\n")     # _M
+    os.remove(os.path.join(d, "b.txt"))                        # _D
+    open(os.path.join(d, "u.txt"), "w").write("u\n")          # ??
+    open(os.path.join(d, "skip.tmp"), "w").write("i\n")       # ignored
+
+@case
+def nested_ignore(d):  # a nested .gitignore re-includes via negation
+    os.makedirs(os.path.join(d, "pkg"))
+    open(os.path.join(d, ".gitignore"), "w").write("*.gen\n")
+    open(os.path.join(d, "pkg/.gitignore"), "w").write("!keep.gen\n")
+    open(os.path.join(d, "pkg/x.txt"), "w").write("x\n")
+    sh(d, "git", "add", "."); sh(d, "git", "commit", "-qm", "init")
+    open(os.path.join(d, "a.gen"), "w").write("g\n")          # ignored by root *.gen
+    open(os.path.join(d, "pkg/keep.gen"), "w").write("k\n")   # re-included -> ??
+
 def main():
     only = sys.argv[1] if len(sys.argv) > 1 else None
     fails = 0
