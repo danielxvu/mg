@@ -6,6 +6,11 @@ name: linux
 # run ctest internally, so a green build IS a green suite (including the
 # recursive-inotify tests, which exercise real inotify here). The ubuntu-latest
 # runner is x86_64, so archlinux:latest builds natively (no emulation).
+#
+# Also: zig-hybrid job builds and tests the ENABLE_ZIG_STATUS=ON path on Arch
+# x86_64 (FM-ZIG-READ-ENGINE Phase 2).  Zig 0.16.0 is not in pacman yet; we
+# fetch the official tarball (same approach as the local /opt/local/bin/zig
+# install).  On Linux the Zig .a links directly -- no Apple-ld repack step.
 
 on:
   push:
@@ -39,3 +44,50 @@ jobs:
       - uses: actions/checkout@v4
       - name: docker build with the cpp-linux-tsan preset
         run: docker build -f docker/Dockerfile.arch --build-arg PRESET=cpp-linux-tsan -t mg-arch-tsan .
+
+  zig-hybrid:
+    name: Zig hybrid status (Arch x86_64, ENABLE_ZIG_STATUS=ON)
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    # FM-ZIG-READ-ENGINE Phase 2: build and test the hybrid cold-status path
+    # (Zig worktree walk + libgit2 staged column) on Linux.  Zig 0.16.0 is not
+    # in the Arch pacman repos yet, so we fetch the official tarball.  On Linux
+    # the Zig .a links directly into mg_magit with no repack step (macOS-only).
+    steps:
+      - name: Install toolchain + build deps
+        run: |
+          pacman -Syu --noconfirm \
+            base-devel clang llvm cmake ninja git libgit2 libutf8proc pkgconf \
+            curl tar xz
+          pacman -Scc --noconfirm
+
+      - uses: actions/checkout@v4
+
+      - name: Mark checkout safe (container uid differs from runner uid)
+        run: git config --global --add safe.directory '*'
+
+      - name: Install Zig 0.16.0
+        run: |
+          ZIG_VER=0.16.0
+          ZIG_TAR="zig-linux-x86_64-${ZIG_VER}.tar.xz"
+          ZIG_URL="https://ziglang.org/download/${ZIG_VER}/${ZIG_TAR}"
+          curl -fsSL -o "/tmp/${ZIG_TAR}" "${ZIG_URL}"
+          tar -xf "/tmp/${ZIG_TAR}" -C /usr/local
+          ln -s "/usr/local/zig-linux-x86_64-${ZIG_VER}/zig" /usr/local/bin/zig
+          zig version
+
+      - name: Configure with ENABLE_ZIG_STATUS=ON
+        run: |
+          cmake --preset cpp-linux -DENABLE_ZIG_STATUS=ON \
+            -DZIG_EXE=/usr/local/bin/zig
+
+      - name: Build
+        run: cmake --build --preset cpp-linux
+
+      - name: Set git identity (required by commit-path tests)
+        run: |
+          git config --global user.email "build@mg.test"
+          git config --global user.name "mg build"
+
+      - name: Run full test suite (hybrid cold path active)
+        run: ctest --preset cpp-linux --output-on-failure

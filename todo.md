@@ -479,6 +479,21 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   --porcelain` on 8 cases: untracked, modified, modified_same_size, deleted,
   untracked_dir, ignored_file, mixed, nested_ignore). Branch: `fm-zig-read-engine`.
 
+  **Phase 2 done** (FM-ZIG-READ-ENGINE cold-path hybrid, default OFF).
+  T1: Zig C-ABI static lib (`neomg_zig_worktree_status`). T2: CMake
+  `ENABLE_ZIG_STATUS` gate (Zig .a linked into `mg_magit` on macOS via Apple-ld
+  repack, directly on Linux). T3: `staged_status` (libgit2 X column). T4:
+  `hybrid_status` (Zig Y + libgit2 X merged, falls back to `repo_status` on any
+  failure or when OFF). T5 (this): cold path in `gather_status_view` routed
+  through `hybrid_status` unconditionally (OFF == `repo_status`); benchmarked
+  ~1.2× faster on full_buffer (roll20: 194ms ON vs 230ms OFF; d20app: 65ms ON
+  vs 82ms OFF); ON+OFF suites both 100% (214/214 ON, 207/207 OFF); OFF has 0
+  zig symbols; Linux CI job added (`zig-hybrid` in `.github/workflows/linux.yml`,
+  Arch x86_64, installs zig 0.16.0 tarball, builds+ctests ON path). Note:
+  `orig_path` (rename source path) is not populated by `hybrid_status` — the
+  status buffer renders renames using only `e->path` (destination), so there
+  is no visible gap in the status output; documented in bridge.cpp + README.
+
   **Not done (honest residual — each needs work outside the current model):**
     · FM-CV commit variants: instant fixup/squash (use `r i` for now),
       signoff/no-verify; **GPG sign** (needs an external signing key).

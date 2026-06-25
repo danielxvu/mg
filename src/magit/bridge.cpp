@@ -627,7 +627,18 @@ status_view gather_status_view(const char *repo)
         v.upstream = std::move(*u);
     v.rebasing = mg::git::rebase_in_progress(repo);
     v.bisecting = mg::git::bisect_active(repo);
-    if (auto s = mg::git::repo_status(repo))
+    // Cold-path status: hybrid_status uses the Zig worktree walk + libgit2
+    // staged column when compiled with MG_ZIG_STATUS (ENABLE_ZIG_STATUS=ON),
+    // and falls back to repo_status (full libgit2 scan) otherwise -- so this
+    // call is unconditional and byte-identical to the old repo_status call in
+    // the OFF build.
+    //
+    // orig_path (renames/copies): hybrid_status leaves orig_path empty for
+    // staged renames; compose_status_view renders renames using only e->path
+    // (the destination) so orig_path is not consulted here. Populating it is a
+    // documented Phase 2 gap -- it matters for external callers that inspect
+    // orig_path directly, but not for this status buffer.
+    if (auto s = mg::git::hybrid_status(repo))
         v.status = std::move(*s);
     if (auto c = mg::git::conflicts(repo))
         v.conflicts = std::move(*c);
