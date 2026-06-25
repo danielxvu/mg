@@ -999,52 +999,12 @@ staged_status(std::string repo_path)
     return out;
 }
 
-#ifdef MG_ZIG_STATUS
-// Repo features the Zig worktree walker cannot model, so hybrid_status must fall
-// back to libgit2 (which handles them, and matches the OFF build byte-for-byte):
-//   * submodule -- a gitlink index entry (GIT_FILEMODE_COMMIT). The Zig walker
-//     would descend into the submodule's own checkout and mis-report its files.
-//   * sparse-checkout -- a skip-worktree index entry: the file is intentionally
-//     absent from disk, which the Zig walker would report as worktree-deleted.
-// Cold-path only; opens + scans the index once (a later optimization could share
-// staged_status's index read). Any open/read failure => fall back (fail-safe).
-static bool zig_unsupported_repo(const std::string &repo)
-{
-    detail::init_guard guard;
-    git_repository *raw = nullptr;
-    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
-        return true;
-    detail::repo_ptr r(raw);
-    git_index *raw_idx = nullptr;
-    if (git_repository_index(&raw_idx, r.get()) != 0)
-        return true;
-    detail::index_ptr idx(raw_idx);
-    const std::size_t n = git_index_entrycount(idx.get());
-    for (std::size_t i = 0; i < n; ++i) {
-        const git_index_entry *e = git_index_get_byindex(idx.get(), i);
-        if (e == nullptr)
-            continue;
-        if (e->mode == GIT_FILEMODE_COMMIT) // submodule gitlink
-            return true;
-        if (e->flags_extended & GIT_INDEX_ENTRY_SKIP_WORKTREE) // sparse-checkout
-            return true;
-    }
-    return false;
-}
-#endif
-
 // hybrid_status: Zig Y + libgit2 X, merged. Falls back to repo_status on any
 // failure or when MG_ZIG_STATUS is not defined at compile time.
 std::expected<std::vector<mg::magit::file_status>, error>
 hybrid_status(std::string repo)
 {
 #ifdef MG_ZIG_STATUS
-    // Submodules / sparse-checkout: the Zig walker can't model these -> let
-    // libgit2 do the whole scan (matches the OFF build). zig_fastpath_count
-    // stays unincremented, so the differential tests witness the fallback.
-    if (zig_unsupported_repo(repo))
-        return repo_status(repo);
-
     // 1. Zig worktree dimension -> map path -> file_status{index=unmodified, worktree=y}
     // The Zig walker fans out across `nthreads` workers that invoke this emit
     // callback CONCURRENTLY, so the shared map must be guarded. The mutex lives
@@ -1076,6 +1036,15 @@ hybrid_status(std::string repo)
             f.worktree = wt;
         },
         &cap);
+
+    // Synchronization barrier: neomg_zig_worktree_status joins its worker threads
+    // before returning, but that join happens inside Zig's runtime via primitives
+    // ThreadSanitizer doesn't instrument -- so without an explicit edge TSAN (and,
+    // pedantically, the memory model) sees the reads below as unsynchronized with
+    // the workers' guarded writes. Re-acquiring the same mutex here can only
+    // succeed after the last worker released it, establishing happens-before for
+    // every map read that follows. Uncontended (all workers gone), so ~free.
+    { std::lock_guard<std::mutex> sync(cap.mu); }
 
     if (rc != 0)
         return repo_status(repo); // unsupported platform -> full libgit2 fallback
