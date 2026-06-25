@@ -83,12 +83,15 @@ number to watch.
   status buffer is built from.
 - `git status`: median of 7–9 CLI runs, OS cache warm, with and without the
   built-in `fsmonitor`.
-- Third-party TUIs are reported by the **cost of the status pass each is built
-  on** — lazygit/tig → the `git status` figure, gitui → a libgit2 full status
-  (the same library and walk as neomg's cold column). They expose no internal
-  status timer, so this is the architectural lower bound, not an instrumented
-  measurement of their event loop. Reproduce the neomg/git numbers yourself with
-  the commands below.
+- **Emacs + Magit** (the UI neomg reimplements): measured directly — real Emacs
+  30.2 with Magit installed in an isolated package dir, timing Magit's own
+  `magit-refresh` with `float-time`, median of warm runs.
+- lazygit/tig and gitui expose no internal status timer, so they're reported by
+  the **cost of the status pass each is built on** — lazygit/tig → the
+  `git status` figure, gitui → a libgit2 full status (the same library and walk
+  as neomg's cold column). That's the architectural lower bound, not an
+  instrumented measurement of their event loop. Reproduce the neomg/git/Magit
+  numbers yourself with the commands below.
 
 ### Results (roll20-private-sheets, 37,515 files)
 
@@ -98,13 +101,21 @@ number to watch.
 | `git status` (reference) | git (C) | one-shot | **82 ms** (25 ms with `fsmonitor`) | — |
 | **lazygit** | git CLI porcelain | one-shot per refresh | ≈ 82 ms (`git status`) | ≈ 82 ms (re-walks) |
 | **gitui** | libgit2 | one-shot per refresh | ≈ 150 ms (libgit2 full) | ≈ 150 ms (re-walks) |
+| **Emacs + Magit** | git CLI (many subprocesses) | one-shot full refresh | **≈ 555 ms** | **≈ 555 ms** (re-runs every section) |
 | **neomg** | libgit2 + fs-watch | **persistent + incremental** | 146 ms (first open only) | **0.81 ms** |
 
-The cold numbers are all the same order — it's the same kind of full walk. The
-warm column is the point: neomg's incremental refresh is **~100–200× faster**
-than a one-shot tool's because it rescans one directory on a warm handle instead
-of re-walking 37k files, and it does so on a background thread so the editor
-stays responsive even during the cold open.
+The most relevant comparison is **Emacs + Magit** — the porcelain neomg
+reimplements. Magit shells out to *many* `git` subprocesses per refresh (status,
+diffs, stashes, unpushed/unpulled logs, …), so a full refresh on this repo is
+**~555 ms every time** — and it repays that on each refresh, with no incremental
+path. neomg gives the same UI but: its **cold** open (146 ms, one libgit2 walk)
+already beats a single Magit refresh ~4×, and its **warm** refresh is **~680×
+faster** (0.81 ms) because it watches the filesystem and rescans only the changed
+directory on a reused handle — off the UI thread, so the editor never blocks.
+
+Against the lighter TUIs the story is the same shape: the cold numbers are all
+the same order (it's the same kind of full walk), but every one-shot tool
+re-pays it on each refresh, while neomg's warm path is ~100–200× faster.
 
 ### Reproduce it
 
