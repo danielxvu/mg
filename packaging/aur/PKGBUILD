@@ -5,12 +5,11 @@
 # stock `mg` package. Builds via CMake (the cpp-linux preset, ENABLE_NATIVE_MAGIT
 # =ON) using the distro clang -- the same toolchain the Arch CI image uses.
 #
-# IMPORTANT: set _branch to the branch that contains the full fork. The fork's
-# work currently lives in a stacked-PR chain whose tip is the most complete
-# branch; once you merge that stack into a stable integration branch (e.g.
-# `neomg`), point _branch at it. Do NOT leave this on upstream `master`, which
-# is plain mg with none of the fork's features.
-_branch=neomg-rename
+# `neomg` is the fork's stable integration branch: it tracks the tip of the
+# feature stack and always contains the full fork (native magit, the CLI write
+# path, log extras, the neomg branding). `master` deliberately mirrors upstream
+# mg, so do NOT build from it -- it has none of the fork's features.
+_branch=neomg
 
 pkgname=neomg-git
 _pkgname=neomg
