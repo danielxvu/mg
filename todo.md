@@ -451,9 +451,16 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   (`l f`). The earlier "out of scope" list was an overclaim — all the
   libgit2-feasible items above are now done (#54–#61).
 
+  🎉 **FM-LP log extras COMPLETE** (branch `fm-lp-log-extras`, stacked on
+  `fm-git-cli-writes`; spec `docs/superpowers/specs/2026-06-25-fm-lp-log-extras-design.md`):
+  `l g` graph, `l r` commit-range (A..B), `l s`/`l G` pickaxe (-S/-G). One
+  CLI-backed `mg::git::log_query` (reuses run_git; parses `git log [--graph]
+  [-S|-G] [<range>] --format=%x1f...` into MG_LINE_COMMIT rows, connector lines
+  as MG_LINE_OTHER) — graph + pickaxe have no libgit2 equivalent. `l l`/`l f` +
+  the status Recent-commits section stay on libgit2. 205/205 macOS+Alpine, OFF
+  0 magit symbols. tmux-verified.
+
   **Not done (honest residual — each needs work outside the current model):**
-    · FM-LP extras: `--graph` rendering, commit-range logs, `-S`/`-G` pickaxe
-      search. (File log + act-at-point RET/A/V done.)
     · FM-CV commit variants: instant fixup/squash (use `r i` for now),
       signoff/no-verify; **GPG sign** (needs an external signing key).
     · conflicting `squash`/`fixup` during interactive replay resolves as a

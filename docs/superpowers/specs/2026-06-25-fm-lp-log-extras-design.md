@@ -148,8 +148,13 @@ build (`c-legacy`) has 0 magit symbols.
 
 ## Phases
 
-1. **Engine `log_query`** + tests (graph / range / `-S` / `-G`). No UI yet.
-2. **Bridge `mg_magit_log_query_buffer`** + tests.
-3. **UI** `l g` / `l r` / `l s` / `l G` + the menu wiring; tmux smoke test.
+1. ✅ **DONE** — **Engine `log_query`** + tests (graph / range / `-S` / `-G`).
+2. ✅ **DONE** — **Bridge `mg_magit_log_query_buffer`** + tests.
+3. ✅ **DONE** — **UI** `l g` / `l r` / `l s` / `l G` + the menu wiring;
+   tmux-verified (graph art + merge commit for `l g`; `l s` finds the
+   introducing commit).
+
+🎉 **FM-LP COMPLETE.** macOS + Alpine 205/205, OFF build 0 magit symbols.
+Branch `fm-lp-log-extras`, stacked on `fm-git-cli-writes`.
 
 Each phase: macOS + Alpine + the OFF build green.
