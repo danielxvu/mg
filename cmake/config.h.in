@@ -8,12 +8,14 @@
 #ifndef MG_CONFIG_H
 #define MG_CONFIG_H
 
-/* Package metadata (configure.ac: AC_INIT([Mg],[3.8-pre],…,[mg])). */
+/* Package metadata. PACKAGE_NAME is what usage() prints; the fork brands as
+ * neomg (the autotools build keeps upstream "Mg" via its own config.h). PACKAGE
+ * / PACKAGE_TARNAME stay "mg" -- they are tar/identifier strings, not shown. */
 #define PACKAGE           "mg"
-#define PACKAGE_NAME      "Mg"
+#define PACKAGE_NAME      "neomg"
 #define PACKAGE_TARNAME   "mg"
 #define PACKAGE_VERSION   "@MG_VERSION@"
-#define PACKAGE_STRING    "Mg @MG_VERSION@"
+#define PACKAGE_STRING    "neomg @MG_VERSION@"
 #define PACKAGE_BUGREPORT "https://github.com/troglobit/mg/issues"
 #define PACKAGE_URL       ""
 #define VERSION           "@MG_VERSION@"
