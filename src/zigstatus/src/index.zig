@@ -67,7 +67,97 @@ pub fn parse(gpa: std.mem.Allocator, data: []const u8) ParseError!Index {
         const sig = data[ext..][0..4];
         if (std.mem.eql(u8, sig, "link")) return error.Unsupported;
         const ext_len = std.mem.readInt(u32, data[ext + 4 ..][0..4], .big);
-        ext += 8 + ext_len;
+        // Advance past this extension (8-byte header + body). Compute in usize:
+        // `8 + ext_len` in u32 overflows for ext_len > 0xFFFFFFF7, which wraps
+        // under ReleaseFast (the scan loses sync and can fail OPEN) or panics
+        // under ReleaseSafe/Debug. Widen, then fail closed if the declared
+        // length would run past the entries region (a malformed/hostile index)
+        // rather than trusting it. `end` excludes the 20-byte trailer hash, the
+        // same bound the loop condition uses.
+        const adv = 8 + @as(usize, ext_len);
+        const end = data.len -| 20;
+        if (ext + adv > end) return error.Unsupported;
+        ext += adv;
     }
     return idx;
+}
+
+const testing = std.testing;
+
+// Build a minimal valid DIRC v2 header for `count` entries (no entry bodies).
+fn dircHeader(buf: *[12]u8, count: u32) void {
+    @memcpy(buf[0..4], "DIRC");
+    std.mem.writeInt(u32, buf[4..8], 2, .big);
+    std.mem.writeInt(u32, buf[8..12], count, .big);
+}
+
+test "parse: empty v2 index is a valid empty repo (not unsupported)" {
+    var hdr: [12]u8 = undefined;
+    dircHeader(&hdr, 0);
+    // 12-byte header + 20-byte trailer hash, no entries, no extensions.
+    var data: [32]u8 = undefined;
+    @memcpy(data[0..12], &hdr);
+    @memset(data[12..32], 0);
+    var idx = try parse(testing.allocator, &data);
+    defer idx.deinit();
+    try testing.expectEqual(@as(usize, 0), idx.files.count());
+}
+
+test "parse: oversized extension length fails closed (no u32 overflow / fail-open)" {
+    // Regression: the extension-scan advance was `8 + ext_len` computed in u32,
+    // so an ext_len near 0xFFFFFFFF wraps (e.g. 0xFFFFFFFF -> +7) and the scan
+    // walks back *into* the buffer instead of past it -- losing sync with the
+    // real chain. A real `link` extension later in the chain is then read at the
+    // wrong offset and missed, so a SPLIT index is reported as success (fail
+    // OPEN); under ReleaseSafe/Debug the wrapping add is illegal -> panic/abort.
+    // Either way the contract is violated. A malformed extension whose declared
+    // length overruns the buffer MUST fail closed -> error.Unsupported.
+    //
+    // Layout forces the buggy advance line to execute (a benign `TREE` ext, not
+    // a leading `link` which would short-circuit before the advance): a `TREE`
+    // header declaring an oversized length, then a genuine `link` extension that
+    // a correct scan would reach. data.len -| 20 must exceed off(12)+8 so the
+    // loop body runs on the TREE header.
+    var hdr: [12]u8 = undefined;
+    dircHeader(&hdr, 0);
+    // header(12) + "TREE"(4)+len(4) + "link"(4)+len 0(4) + trailer(20) = 48.
+    var data: [48]u8 = undefined;
+    @memcpy(data[0..12], &hdr);
+    @memcpy(data[12..16], "TREE");
+    std.mem.writeInt(u32, data[16..20], 0xFFFFFFFF, .big); // oversized -> overflow
+    @memcpy(data[20..24], "link"); // a correct scan reaches and rejects this
+    std.mem.writeInt(u32, data[24..28], 0, .big);
+    @memset(data[28..48], 0);
+    try testing.expectError(error.Unsupported, parse(testing.allocator, &data));
+}
+
+test "parse: well-formed link extension is unsupported (split index -> fallback)" {
+    // A *valid* split-index `link` extension (sane, in-bounds length) must still
+    // be rejected: the bulk of the entries live in a shared file we don't read.
+    var hdr: [12]u8 = undefined;
+    dircHeader(&hdr, 0);
+    // header(12) + "link"(4) + len 4(4) + 4 payload bytes + trailer(20).
+    var data: [44]u8 = undefined;
+    @memcpy(data[0..12], &hdr);
+    @memcpy(data[12..16], "link");
+    std.mem.writeInt(u32, data[16..20], 4, .big);
+    @memset(data[20..44], 0);
+    try testing.expectError(error.Unsupported, parse(testing.allocator, &data));
+}
+
+test "parse: a benign extension before the trailer is skipped, not rejected" {
+    // A non-link extension with a sane length must be walked over (advanced past)
+    // and the index accepted -- confirms the bounds-checked advance still makes
+    // forward progress on valid input and doesn't over-reject.
+    var hdr: [12]u8 = undefined;
+    dircHeader(&hdr, 0);
+    // header(12) + "TREE"(4) + len 4(4) + 4 payload + trailer(20) = 44.
+    var data: [44]u8 = undefined;
+    @memcpy(data[0..12], &hdr);
+    @memcpy(data[12..16], "TREE");
+    std.mem.writeInt(u32, data[16..20], 4, .big);
+    @memset(data[20..44], 0);
+    var idx = try parse(testing.allocator, &data);
+    defer idx.deinit();
+    try testing.expectEqual(@as(usize, 0), idx.files.count());
 }
