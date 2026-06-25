@@ -99,9 +99,9 @@ fn worker(job: *Job) void {
 }
 
 // Also walk root-level files (not in any subdirectory).
-fn walkRootFiles(io: Io, root: Dir, idx: *const index.Index, emit: EmitFn, ctx: *anyopaque) void {
+fn walkRootFiles(io: Io, root: Dir, idx: *const index.Index, emit: EmitFn, ctx: *anyopaque) !void {
     var it = root.iterate();
-    while (it.next(io) catch null) |ent| {
+    while (try it.next(io)) |ent| {
         if (std.mem.eql(u8, ent.name, ".git")) continue;
         if (ent.kind != .file and ent.kind != .sym_link) continue;
         // Root-level file: path == name.
@@ -136,7 +136,7 @@ pub fn run(
     }
 
     // Handle root-level files first (single-threaded, no job needed).
-    walkRootFiles(io, root, idx, emit, ctx);
+    try walkRootFiles(io, root, idx, emit, ctx);
 
     if (names.items.len == 0) return;
 
