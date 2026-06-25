@@ -97,21 +97,50 @@ so the walker is portable macOS/Linux. Must verify on Linux (the inotify
 platform) and add it to the Linux CI bench. Windows is out of scope (neomg is
 POSIX).
 
-## Phases
+## Phases (revised 2026-06-25 — hybrid architecture)
 
 0. ✅ **Spike (gate): PASSED.** Index-driven parallel walk beats libgit2
    2.4–3.1×. (`bench/walk-spike/`.)
-1. **Correct, complete status in Zig**, flag-gated and **validated byte-for-byte
-   against `git status --porcelain=v2`** on a repo corpus (clean/dirty/conflicts/
-   submodules/sparse/v3-v4 index). Standalone (no FFI yet). The hard phase.
-2. **FFI + build**: C-ABI static lib, CMake `ENABLE_ZIG_STATUS` wiring, called
-   from the cold-status path with libgit2 fallback on any unsupported state.
-3. **Wire into the monitor's `full_refresh`**; TSan (the walker is worker-thread
-   -private like the libgit2 session); Linux verification + CI bench; benchmark
-   the real cold-refresh win end to end.
+1a. ✅ **DONE** — **Zig worktree-status dimension** (modified/deleted/untracked +
+   gitignore), validated byte-for-byte vs `git status --porcelain` on 8 cases.
+   Standalone Zig, no FFI. (`src/zigstatus/`, PR #88.)
+2. **Hybrid integration** (the path chosen over a full pure-Zig reimplementation —
+   see the revision note below): FFI the Zig **worktree** walk (the win) into
+   neomg's cold-status path, and compute the **staged (X) column** with libgit2's
+   `git_diff_tree_to_index` (cheap, mature). Merge into `file_status`; validate
+   the hybrid result byte-identical to libgit2's full `git_status_list`; libgit2
+   full-status fallback on any unsupported state. C-ABI static lib + CMake
+   `ENABLE_ZIG_STATUS` (default OFF).
+3. **Wire into the monitor's `full_refresh`**; TSan; Linux verification + CI;
+   benchmark the real cold-refresh win end to end.
 
 Each phase: the libgit2 path stays the fallback, so neomg is never less correct
 than today; the win is purely cold-path latency.
+
+## Revision (2026-06-25): hybrid over a full pure-Zig reimplementation
+
+The original Phase 1 imagined reimplementing **all** of status in Zig — including
+the staged (index-vs-HEAD) column. Scoping it revealed that the staged column
+needs git's **object database** (resolve HEAD → tree objects, which are usually
+**packed** → zlib + packfile + delta resolution): a multi-week subproject — and
+**not where Zig wins**. The spike's 2.4–3.1× came from the *parallel worktree
+lstat walk*; the staged column is a cheap, serial, in-memory diff once the tree
+is read, and reading packed trees is exactly what libgit2 already does fast.
+
+Measured (Apple Silicon): the staged-only column (`git diff-index --cached HEAD`,
+no worktree walk) is **~10 ms and ~constant** on both roll20 (37.5k) and d20app —
+vs libgit2's full cold status (146 ms / 52 ms). So:
+
+> **Hybrid** = Zig worktree walk (≈61 ms parallel, the win) **+** libgit2 staged
+> column (≈10 ms, independently runnable) ⇒ still **~2–2.4× faster than libgit2's
+> full status**, with **zero object-DB reimplementation**.
+
+Decision: **do not reimplement git's object DB in Zig.** Use Zig for the
+expensive worktree walk it wins, and libgit2 (already linked) for the cheap
+staged column + the long tail. This gets the cold-status win into the editor
+sooner and keeps the correctness tail on battle-tested libgit2. (A full pure-Zig
+engine remains possible later if a libgit2-free status is ever a goal in itself —
+but it buys no speed.)
 
 ## Risks + honest call
 

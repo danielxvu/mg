@@ -14,18 +14,42 @@
 # The build + ctest run during `docker build`, so a failure fails the image.
 #
 # Note: the official archlinux image is x86_64-only. On a native x86_64 Arch
-# host (the intended target) this just works. To build it on an arm64 host
-# (e.g. an Apple-silicon Mac) under emulation, pacman 7's download sandbox
-# fails to set up seccomp -- add `--build-arg` plumbing or append
-# `--disable-sandbox` to the pacman line; native x86_64 needs nothing. The code
-# itself is arch-independent (verified on arm64-native Arch + Alpine too).
+# host (the intended target -- and GitHub's CI runners) this just works with no
+# args. To build it on an arm64 host (e.g. an Apple-silicon Mac) under emulation
+# (`docker build --platform linux/amd64 ...`), pacman 7's download sandbox can't
+# set up seccomp (errno 22) and aborts. Pass `--build-arg PACMAN_EXTRA=--disable-sandbox`
+# to bypass it for local testing; CI leaves PACMAN_EXTRA empty so the sandbox
+# stays on. The code itself is arch-independent (verified on arm64 + Alpine too).
 FROM archlinux:latest
+
+# Empty by default (CI). Set to --disable-sandbox for local arm64 emulation.
+ARG PACMAN_EXTRA=
 
 # clang ships clang-scan-deps (CMake's C++20 module dependency scanner);
 # libgit2 provides its pkg-config .pc that src/magit/CMakeLists.txt consumes.
-RUN pacman -Syu --noconfirm \
-        base-devel clang llvm cmake ninja git libgit2 libutf8proc pkgconf \
+RUN pacman ${PACMAN_EXTRA} -Syu --noconfirm \
+        base-devel clang llvm cmake ninja git libgit2 libutf8proc pkgconf curl \
     && pacman -Scc --noconfirm
+
+# Zig 0.16.0 for the ENABLE_ZIG_STATUS hybrid cold-status path, which the
+# cpp-linux preset now enables by default. Zig 0.16 is not in the pacman repos
+# yet, so fetch the official static tarball (arch-matched, checksum-verified).
+# The zig binary is statically linked -- one tarball-per-arch runs on glibc and
+# musl. Installed before COPY so the layer caches across source changes.
+ARG ZIG_VER=0.16.0
+RUN set -eux; \
+    case "$(uname -m)" in \
+      x86_64)  zarch=x86_64;  zsum=70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00 ;; \
+      aarch64) zarch=aarch64; zsum=ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17 ;; \
+      *) echo "unsupported arch: $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    tarball="zig-${zarch}-linux-${ZIG_VER}.tar.xz"; \
+    curl -fsSL -o "/tmp/${tarball}" "https://ziglang.org/download/${ZIG_VER}/${tarball}"; \
+    echo "${zsum}  /tmp/${tarball}" | sha256sum -c -; \
+    tar -xf "/tmp/${tarball}" -C /usr/local; \
+    ln -s "/usr/local/zig-${zarch}-linux-${ZIG_VER}/zig" /usr/local/bin/zig; \
+    rm "/tmp/${tarball}"; \
+    zig version
 
 WORKDIR /src
 COPY . .

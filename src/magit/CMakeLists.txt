@@ -20,3 +20,23 @@ target_include_directories(mg_magit PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}) # bridge
 target_link_libraries(mg_magit PUBLIC PkgConfig::GIT2)
 find_package(Threads REQUIRED)
 target_link_libraries(mg_magit PUBLIC Threads::Threads)
+
+if(ENABLE_ZIG_STATUS)
+    # Build + link the Zig worktree-status walker via the shared helper, which
+    # handles the macOS Apple-ld repack uniformly (see cmake/AddZigLibrary.cmake).
+    include(${CMAKE_SOURCE_DIR}/cmake/AddZigLibrary.cmake)
+    set(ZIG_DIR ${CMAKE_SOURCE_DIR}/src/zigstatus)
+    neomg_add_zig_library(neomg_zig_lib
+        ZIG_DIR ${ZIG_DIR}
+        RAW_LIB ${ZIG_DIR}/zig-out/lib/libneomg_zig.a
+        OUTPUT  ZIG_LIB
+        DEPENDS ${ZIG_DIR}/src/lib.zig ${ZIG_DIR}/src/status.zig
+                ${ZIG_DIR}/src/walk.zig ${ZIG_DIR}/src/index.zig
+                ${ZIG_DIR}/src/gitignore.zig ${ZIG_DIR}/src/sha1.zig
+                ${ZIG_DIR}/build.zig)
+
+    add_dependencies(mg_magit neomg_zig_lib)
+    target_link_libraries(mg_magit PRIVATE ${ZIG_LIB})
+    target_include_directories(mg_magit PRIVATE ${ZIG_DIR}/include)
+    target_compile_definitions(mg_magit PUBLIC MG_ZIG_STATUS)
+endif()

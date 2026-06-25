@@ -22,6 +22,7 @@
       "cacheVariables": {
         "ENABLE_CPP_UPGRADES": "ON",
         "ENABLE_NATIVE_MAGIT": "ON",
+        "ENABLE_ZIG_STATUS": "ON",
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
         "CMAKE_C_COMPILER": "/opt/local/bin/clang-mp-21",
         "CMAKE_CXX_COMPILER": "/opt/local/bin/clang++-mp-21",
@@ -31,11 +32,12 @@
     {
       "name": "cpp-tsan",
       "displayName": "C++23 + modules under ThreadSanitizer",
-      "description": "Same toolchain as cpp, with ENABLE_TSAN=ON to gate the FM-ASYNC-STATUS monitor thread (snapshot/modeline races) and any other concurrency. The CMakeLists ENABLE_TSAN block instruments every target and, on macOS, links the clang-21 instrumentation against Apple's OS-matched runtime (path derived from xcrun) because the MacPorts runtime crashes at startup on macOS 26.5.",
+      "description": "Same toolchain as cpp, with ENABLE_TSAN=ON to gate the FM-ASYNC-STATUS monitor thread (snapshot/modeline races) and any other concurrency. ENABLE_ZIG_STATUS is forced OFF here: the Zig worktree walker is not TSan-instrumented (built by `zig build`, not -fsanitize=thread), so TSan can't see its internal thread joins and reports false 'data race in free' on its post-join allocations -- the same uninstrumented-dependency problem libgit2 has (tsan.supp). The hybrid path's correctness is covered by the non-TSan cpp/cpp-linux builds. The CMakeLists ENABLE_TSAN block instruments every target and, on macOS, links the clang-21 instrumentation against Apple's OS-matched runtime (path derived from xcrun) because the MacPorts runtime crashes at startup on macOS 26.5.",
       "inherits": "cpp",
       "binaryDir": "${sourceDir}/build-tsan",
       "cacheVariables": {
-        "ENABLE_TSAN": "ON"
+        "ENABLE_TSAN": "ON",
+        "ENABLE_ZIG_STATUS": "OFF"
       }
     },
     {
@@ -47,6 +49,7 @@
       "cacheVariables": {
         "ENABLE_CPP_UPGRADES": "ON",
         "ENABLE_NATIVE_MAGIT": "ON",
+        "ENABLE_ZIG_STATUS": "ON",
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
         "CMAKE_C_COMPILER": "clang",
         "CMAKE_CXX_COMPILER": "clang++",
@@ -56,11 +59,12 @@
     {
       "name": "cpp-linux-tsan",
       "displayName": "Linux: C++23 + modules under ThreadSanitizer",
-      "description": "cpp-linux with ENABLE_TSAN=ON. On Linux the toolchain's own TSan runtime works directly -- no Apple-runtime rpath dance needed (that path is macOS-only in the CMakeLists ENABLE_TSAN block).",
+      "description": "cpp-linux with ENABLE_TSAN=ON. On Linux the toolchain's own TSan runtime works directly -- no Apple-runtime rpath dance needed (that path is macOS-only in the CMakeLists ENABLE_TSAN block). ENABLE_ZIG_STATUS is forced OFF here: the uninstrumented Zig walker's internal threads produce TSan false positives ('data race in free') that TSan cannot resolve without seeing the Zig-side joins -- same as the libgit2 suppression. The hybrid path is correctness-checked by the non-TSan arch/alpine builds.",
       "inherits": "cpp-linux",
       "binaryDir": "${sourceDir}/build-tsan",
       "cacheVariables": {
-        "ENABLE_TSAN": "ON"
+        "ENABLE_TSAN": "ON",
+        "ENABLE_ZIG_STATUS": "OFF"
       }
     }
   ],

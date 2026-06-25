@@ -4,8 +4,9 @@
 //   neomg_bench <repo> [scoped-subdir]
 //
 // Measures, on <repo>, the engine path the *magit-status* buffer is built from:
-//   cold full   -- repo_status(repo): opens a fresh libgit2 handle per call and
-//                  walks the whole worktree (the first-open / .git-changed cost)
+//   cold full   -- full status-buffer build; when ENABLE_ZIG_STATUS=ON the cold
+//                  gather path uses hybrid_status (Zig worktree + libgit2 staged),
+//                  else repo_status (fresh libgit2 handle, full worktree walk)
 //   warm full   -- session.status(): whole-repo status on ONE reused handle
 //   warm scoped -- session.status_scoped({subdir}): status limited to one dir on
 //                  the reused handle -- the common incremental case (a worktree

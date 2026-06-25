@@ -88,6 +88,56 @@ def nested_ignore(d):  # a nested .gitignore re-includes via negation
     open(os.path.join(d, "a.gen"), "w").write("g\n")          # ignored by root *.gen
     open(os.path.join(d, "pkg/keep.gen"), "w").write("k\n")   # re-included -> ??
 
+# --- fail-closed cases ----------------------------------------------------
+# States the v2-only walker cannot model faithfully: it MUST exit non-zero (the
+# -1 sentinel) so the C++ caller falls back to libgit2, rather than print wrong
+# output. Asserted on the exit code, not on byte-equality with `git status`.
+FAILCLOSED = {}
+def failclosed(fn): FAILCLOSED[fn.__name__] = fn; return fn
+
+def zig_rc(repo):
+    return subprocess.run([os.path.abspath(BIN), repo],
+                          capture_output=True, text=True).returncode
+
+@failclosed
+def conflict(d):  # merge conflict -> stage 1/2/3 entries in the index
+    open(os.path.join(d, "a.txt"), "w").write("base\n")
+    sh(d, "git", "add", "."); sh(d, "git", "commit", "-qm", "init")
+    base = subprocess.run(["git", "-C", d, "rev-parse", "--abbrev-ref", "HEAD"],
+                          capture_output=True, text=True).stdout.strip()
+    sh(d, "git", "checkout", "-qb", "feature")
+    open(os.path.join(d, "a.txt"), "w").write("feature\n")
+    sh(d, "git", "commit", "-qam", "feature")
+    sh(d, "git", "checkout", "-q", base)
+    open(os.path.join(d, "a.txt"), "w").write("master\n")
+    sh(d, "git", "commit", "-qam", "master")
+    # merge conflicts; git returns nonzero, so don't use sh() (which checks).
+    subprocess.run(["git", "merge", "feature"], cwd=d, capture_output=True)
+
+@failclosed
+def index_v4(d):  # path-prefix-compressed index version 4
+    open(os.path.join(d, "a.txt"), "w").write("x\n")
+    sh(d, "git", "add", "."); sh(d, "git", "commit", "-qm", "init")
+    sh(d, "git", "update-index", "--index-version", "4")
+
+@failclosed
+def split_index(d):  # v2 header + "link" extension -> entries live in shared file
+    open(os.path.join(d, "a.txt"), "w").write("x\n")
+    sh(d, "git", "add", "."); sh(d, "git", "commit", "-qm", "init")
+    sh(d, "git", "update-index", "--split-index")
+
+@failclosed
+def submodule(d):  # gitlink entry (mode 0160000) -> nested repo, not worktree
+    # Build the submodule source as a sibling of d so it's cleaned with the tree.
+    up = os.path.join(os.path.dirname(d), os.path.basename(d) + "-sub")
+    os.makedirs(up)
+    sh(up, "git", "init", "-q"); sh(up, "git", "config", "user.email", "t@e"); sh(up, "git", "config", "user.name", "t")
+    open(os.path.join(up, "f.txt"), "w").write("x\n")
+    sh(up, "git", "add", "."); sh(up, "git", "commit", "-qm", "up")
+    open(os.path.join(d, "a.txt"), "w").write("base\n")
+    sh(d, "git", "add", "."); sh(d, "git", "commit", "-qm", "init")
+    sh(d, "git", "-c", "protocol.file.allow=always", "submodule", "add", up, "sub")
+
 def main():
     only = sys.argv[1] if len(sys.argv) > 1 else None
     fails = 0
@@ -100,6 +150,17 @@ def main():
             else:
                 fails += 1; print(f"FAIL {name}\n  git: {g}\n  zig: {z}")
         finally: shutil.rmtree(d, ignore_errors=True)
+    for name, setup in FAILCLOSED.items():
+        if only and name != only: continue
+        d = make_repo(setup)
+        try:
+            rc = zig_rc(d)
+            if rc != 0: print(f"ok   {name} (fail-closed rc={rc})")
+            else:
+                fails += 1; print(f"FAIL {name}: expected nonzero exit (fall back), got rc=0")
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+            shutil.rmtree(d + "-sub", ignore_errors=True) # submodule source, if any
     sys.exit(1 if fails else 0)
 
 if __name__ == "__main__": main()

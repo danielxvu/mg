@@ -11,6 +11,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -2778,3 +2779,424 @@ TEST_CASE("discard() reverts a modified tracked file to HEAD")
         CHECK(e.path != "a.txt"); // clean again
     fs::remove_all(dir);
 }
+
+TEST_CASE("staged_status reports index-vs-HEAD changes (X column)")
+{
+    auto dir = make_repo_with_commit("base"); // a.txt committed
+    set_test_config(dir);
+    // stage a modify + a new file
+    std::ofstream(dir / "a.txt") << "changed";
+    std::ofstream(dir / "b.txt") << "new";
+    REQUIRE(mg::git::stage(dir.string(), "a.txt").has_value());
+    REQUIRE(mg::git::stage(dir.string(), "b.txt").has_value());
+
+    auto s = mg::git::staged_status(dir.string());
+    REQUIRE(s.has_value());
+    std::map<std::string, mg::magit::status> x;
+    for (auto &e : *s) x[e.path] = e.x;
+    CHECK(x["a.txt"] == mg::magit::status::modified);
+    CHECK(x["b.txt"] == mg::magit::status::added);
+    fs::remove_all(dir);
+}
+
+// ---- hybrid_status equivalence tests (FM-ZIG-READ-ENGINE Phase 2) ----------
+//
+// Oracle: repo_status (full libgit2 scan). Assertion: hybrid_status produces
+// the SAME set of {path, index-char, worktree-char} on every corpus scenario.
+// All cases are guarded by MG_ZIG_STATUS so they compile + run only when the
+// Zig lib is linked.
+//
+// When MG_ZIG_STATUS is absent, hybrid_status delegates to repo_status and the
+// tests below are compiled out -- the OFF-build check in the task brief verifies
+// that the binary still links successfully without the guard.
+
+#ifdef MG_ZIG_STATUS
+
+namespace {
+// Convert a file_status vector to a set of tuples for order-independent equality.
+static std::set<std::tuple<std::string, char, char>>
+status_set(const std::vector<mg::magit::file_status> &v)
+{
+    std::set<std::tuple<std::string, char, char>> s;
+    for (auto &f : v)
+        s.insert({f.path, static_cast<char>(f.index),
+                  static_cast<char>(f.worktree)});
+    return s;
+}
+
+// Ordered (render-order) projection: same tuples as status_set but as a vector,
+// so == also asserts the entries appear in the SAME sequence.
+static std::vector<std::tuple<std::string, char, char>>
+status_vec(const std::vector<mg::magit::file_status> &v)
+{
+    std::vector<std::tuple<std::string, char, char>> out;
+    out.reserve(v.size());
+    for (auto &f : v)
+        out.push_back({f.path, static_cast<char>(f.index),
+                       static_cast<char>(f.worktree)});
+    return out;
+}
+
+// Run a git CLI command inside `dir` (for states libgit2 can't author, e.g.
+// rewriting the on-disk index version). Returns true on exit code 0.
+static bool run_git(const fs::path &dir, const std::string &args)
+{
+    std::string cmd = "git -C '" + dir.string() + "' " + args +
+                      " >/dev/null 2>&1";
+    return std::system(cmd.c_str()) == 0;
+}
+
+// Build a repo with a representative MIX of file states:
+//   a.txt: committed and then modified in the worktree (' M')
+//   b.txt: committed (via commit_file) and then deleted from the worktree (' D')
+//   c.txt: staged-new (index, never committed) ('A ')
+//   d.txt: staged-modified (committed, then staged change) ('M ')
+//   u.txt: untracked ('??')
+// Returns the directory; caller must remove_all it.
+fs::path make_mixed_repo()
+{
+    auto dir = make_repo_with_commit("base"); // a.txt committed as "content"
+    set_test_config(dir);
+
+    // Add b.txt and d.txt as committed files.
+    commit_file(dir, "b.txt", "bee\n", "add b");
+    commit_file(dir, "d.txt", "dee\n", "add d");
+
+    git_libgit2_init();
+
+    // a.txt: worktree modification (unstaged)
+    std::ofstream(dir / "a.txt") << "content modified in worktree";
+
+    // b.txt: delete from worktree (unstaged deletion)
+    fs::remove(dir / "b.txt");
+
+    // c.txt: stage a new file
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_open(&repo, dir.string().c_str()) == 0);
+    std::ofstream(dir / "c.txt") << "cee\n";
+    git_index *idx = nullptr;
+    REQUIRE(git_repository_index(&idx, repo) == 0);
+    REQUIRE(git_index_add_bypath(idx, "c.txt") == 0);
+
+    // d.txt: stage a modification
+    std::ofstream(dir / "d.txt") << "dee modified and staged";
+    REQUIRE(git_index_add_bypath(idx, "d.txt") == 0);
+    REQUIRE(git_index_write(idx) == 0);
+    git_index_free(idx);
+    git_repository_free(repo);
+
+    // u.txt: untracked (left on disk, not staged)
+    std::ofstream(dir / "u.txt") << "untracked content";
+
+    git_libgit2_shutdown();
+    return dir;
+}
+} // namespace
+
+TEST_CASE("hybrid_status == libgit2 repo_status on a mixed-state tree")
+{
+    auto dir = make_mixed_repo();
+    // Fast-path witness: the counter must advance by exactly 1, proving the Zig
+    // path ran -- not the silent repo_status fallback.
+    unsigned before = mg::git::zig_fastpath_count();
+    auto h = mg::git::hybrid_status(dir.string());
+    unsigned after = mg::git::zig_fastpath_count();
+    auto g = mg::git::repo_status(dir.string());
+    REQUIRE(h.has_value());
+    REQUIRE(g.has_value());
+    CHECK(status_set(*h) == status_set(*g));
+    CHECK(after - before == 1u); // Zig fast path was taken, not the fallback
+    fs::remove_all(dir);
+}
+
+TEST_CASE("hybrid_status == repo_status on a clean repo (no changes)")
+{
+    auto dir = make_repo_with_commit("clean");
+    auto h = mg::git::hybrid_status(dir.string());
+    auto g = mg::git::repo_status(dir.string());
+    REQUIRE(h.has_value());
+    REQUIRE(g.has_value());
+    CHECK(status_set(*h) == status_set(*g));
+    CHECK(h->empty()); // clean repos have no entries
+    fs::remove_all(dir);
+}
+
+TEST_CASE("hybrid_status == repo_status with only staged changes (X only)")
+{
+    auto dir = make_repo_with_commit("base");
+    set_test_config(dir);
+    // Stage a modification and a new file; nothing changed in the worktree.
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_open(&repo, dir.string().c_str()) == 0);
+    std::ofstream(dir / "a.txt") << "staged change";
+    std::ofstream(dir / "n.txt") << "new staged";
+    git_index *idx = nullptr;
+    REQUIRE(git_repository_index(&idx, repo) == 0);
+    REQUIRE(git_index_add_bypath(idx, "a.txt") == 0);
+    REQUIRE(git_index_add_bypath(idx, "n.txt") == 0);
+    REQUIRE(git_index_write(idx) == 0);
+    git_index_free(idx);
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+
+    auto h = mg::git::hybrid_status(dir.string());
+    auto g = mg::git::repo_status(dir.string());
+    REQUIRE(h.has_value());
+    REQUIRE(g.has_value());
+    CHECK(status_set(*h) == status_set(*g));
+    fs::remove_all(dir);
+}
+
+TEST_CASE("hybrid_status == repo_status with only worktree changes (Y only)")
+{
+    auto dir = make_repo_with_commit("base");
+    // Modify worktree but don't stage anything.
+    std::ofstream(dir / "a.txt") << "worktree only change";
+    std::ofstream(dir / "u.txt") << "untracked";
+
+    auto h = mg::git::hybrid_status(dir.string());
+    auto g = mg::git::repo_status(dir.string());
+    REQUIRE(h.has_value());
+    REQUIRE(g.has_value());
+    CHECK(status_set(*h) == status_set(*g));
+    fs::remove_all(dir);
+}
+
+TEST_CASE("hybrid_status == repo_status with same file staged AND worktree-modified (MM)")
+{
+    auto dir = make_repo_with_commit("base");
+    set_test_config(dir);
+    // Stage one change, then make another worktree change on same file.
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_open(&repo, dir.string().c_str()) == 0);
+    std::ofstream(dir / "a.txt") << "first staged";
+    git_index *idx = nullptr;
+    REQUIRE(git_repository_index(&idx, repo) == 0);
+    REQUIRE(git_index_add_bypath(idx, "a.txt") == 0);
+    REQUIRE(git_index_write(idx) == 0);
+    git_index_free(idx);
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+    // Now modify worktree again (a.txt differs from both HEAD and index -> MM)
+    std::ofstream(dir / "a.txt") << "second worktree change";
+
+    auto h = mg::git::hybrid_status(dir.string());
+    auto g = mg::git::repo_status(dir.string());
+    REQUIRE(h.has_value());
+    REQUIRE(g.has_value());
+    CHECK(status_set(*h) == status_set(*g));
+    fs::remove_all(dir);
+}
+
+TEST_CASE("hybrid_status == repo_status with nested directories")
+{
+    auto dir = make_repo_with_commit("base");
+    set_test_config(dir);
+    fs::create_directories(dir / "sub" / "deep");
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_open(&repo, dir.string().c_str()) == 0);
+    std::ofstream(dir / "sub" / "s.txt") << "sub file";
+    std::ofstream(dir / "sub" / "deep" / "d.txt") << "deep file";
+    git_index *idx = nullptr;
+    REQUIRE(git_repository_index(&idx, repo) == 0);
+    REQUIRE(git_index_add_bypath(idx, "sub/s.txt") == 0);
+    REQUIRE(git_index_add_bypath(idx, "sub/deep/d.txt") == 0);
+    REQUIRE(git_index_write(idx) == 0);
+    git_index_free(idx);
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+    // Also add an untracked file in a nested dir
+    std::ofstream(dir / "sub" / "u.txt") << "untracked nested";
+
+    auto h = mg::git::hybrid_status(dir.string());
+    auto g = mg::git::repo_status(dir.string());
+    REQUIRE(h.has_value());
+    REQUIRE(g.has_value());
+    CHECK(status_set(*h) == status_set(*g));
+    fs::remove_all(dir);
+}
+
+TEST_CASE("hybrid_status == repo_status with only untracked files")
+{
+    auto dir = make_repo_with_commit("base");
+    std::ofstream(dir / "u1.txt") << "untracked 1";
+    std::ofstream(dir / "u2.txt") << "untracked 2";
+
+    auto h = mg::git::hybrid_status(dir.string());
+    auto g = mg::git::repo_status(dir.string());
+    REQUIRE(h.has_value());
+    REQUIRE(g.has_value());
+    CHECK(status_set(*h) == status_set(*g));
+    fs::remove_all(dir);
+}
+
+// (a) Conflict repo: a real merge conflict leaves stage 1/2/3 entries in the
+// index. The Zig walker must FAIL CLOSED on any nonzero-stage entry (returning
+// the -1 sentinel) so hybrid_status falls back to libgit2; otherwise the file
+// is double-reported (modified in the worktree section AND in Conflicts).
+// Equivalence holds VIA FALLBACK, so the fast-path counter must NOT advance.
+TEST_CASE("hybrid_status == repo_status on a conflicted index (fail-closed)")
+{
+    auto dir = make_repo_rebase_conflict(); // HEAD feature, a.txt diverged
+    auto m = mg::git::merge_branch(dir.string(), "master");
+    REQUIRE(m.has_value());
+    REQUIRE(*m == mg::git::apply_result::conflicts); // a.txt now stage 1/2/3
+
+    unsigned before = mg::git::zig_fastpath_count();
+    auto h = mg::git::hybrid_status(dir.string());
+    unsigned after = mg::git::zig_fastpath_count();
+    auto g = mg::git::repo_status(dir.string());
+    REQUIRE(h.has_value());
+    REQUIRE(g.has_value());
+    CHECK(status_set(*h) == status_set(*g));
+    CHECK(after == before); // fell back to libgit2, Zig fast path NOT taken
+    fs::remove_all(dir);
+}
+
+// (b) Non-v2 index: v3/v4 (and split) indexes occur in the wild
+// (feature.manyFiles, core.untrackedCache, sparse checkout). The v2-only parser
+// must FAIL CLOSED on header version != 2 rather than treating it as an empty
+// index (which would report the whole clean worktree as untracked). Equivalence
+// holds via fallback, so the fast-path counter must NOT advance.
+TEST_CASE("hybrid_status == repo_status on a v4 index (fail-closed)")
+{
+    auto dir = make_repo_with_commit("base"); // a.txt committed (clean)
+    commit_file(dir, "b.txt", "bee\n", "add b");
+    // Rewrite the on-disk index as version 4 (libgit2 only writes v2).
+    REQUIRE(run_git(dir, "update-index --index-version 4"));
+
+    unsigned before = mg::git::zig_fastpath_count();
+    auto h = mg::git::hybrid_status(dir.string());
+    unsigned after = mg::git::zig_fastpath_count();
+    auto g = mg::git::repo_status(dir.string());
+    REQUIRE(h.has_value());
+    REQUIRE(g.has_value());
+    CHECK(status_set(*h) == status_set(*g)); // both: clean, empty
+    CHECK(h->empty());
+    CHECK(after == before); // fell back to libgit2, Zig fast path NOT taken
+    fs::remove_all(dir);
+}
+
+// (c) Multi-top-level-dir repo: several top-level dirs each with a
+// tracked+modified file forces nthreads > 1, so emit() is invoked concurrently
+// from multiple Zig workers. This exercises the FFI emit critical section
+// (Fix 1). Equivalence must hold AND the Zig fast path must run (counter +1) --
+// proving the concurrent path produces correct, complete results.
+TEST_CASE("hybrid_status == repo_status across many top-level dirs (concurrent emit)")
+{
+    auto dir = make_repo_with_commit("base");
+    set_test_config(dir);
+    // Commit a tracked file in each of several top-level directories.
+    constexpr int kDirs = 8;
+    for (int i = 0; i < kDirs; ++i) {
+        std::string sub = "d" + std::to_string(i);
+        fs::create_directory(dir / sub); // parent must exist for index_add_bypath
+        commit_file(dir, (sub + "/f.txt").c_str(), "orig\n", "add");
+    }
+    // Modify every one of them in the worktree (each becomes ' M').
+    for (int i = 0; i < kDirs; ++i)
+        std::ofstream(dir / ("d" + std::to_string(i)) / "f.txt")
+            << "modified in worktree";
+
+    unsigned before = mg::git::zig_fastpath_count();
+    auto h = mg::git::hybrid_status(dir.string());
+    unsigned after = mg::git::zig_fastpath_count();
+    auto g = mg::git::repo_status(dir.string());
+    REQUIRE(h.has_value());
+    REQUIRE(g.has_value());
+    CHECK(status_set(*h) == status_set(*g));
+    CHECK(after - before == 1u); // Zig fast path (concurrent emit) was taken
+    // Render order: hybrid must match repo_status's sequence, not just its set.
+    CHECK(status_vec(*h) == status_vec(*g));
+    fs::remove_all(dir);
+}
+
+// A submodule's gitlink + checked-out worktree are not in the superproject's
+// index as ordinary files; the Zig walker would mis-scan the submodule's
+// contents. hybrid_status must detect the submodule and fall back to libgit2
+// (which uses EXCLUDE_SUBMODULES and is what the OFF build produces).
+TEST_CASE("hybrid_status == repo_status with a submodule (fail-closed)")
+{
+    auto up = make_repo_with_commit("upstream"); // the submodule source
+    set_test_config(up);
+    auto dir = make_repo_with_commit("super"); // the superproject
+    set_test_config(dir);
+    // File-protocol submodules are blocked by default in recent git; allow it.
+    REQUIRE(run_git(dir, "-c protocol.file.allow=always submodule add '" +
+                             up.string() + "' sub")); // -> .gitmodules + gitlink
+
+    unsigned before = mg::git::zig_fastpath_count();
+    auto h = mg::git::hybrid_status(dir.string());
+    unsigned after = mg::git::zig_fastpath_count();
+    auto g = mg::git::repo_status(dir.string());
+    REQUIRE(h.has_value());
+    REQUIRE(g.has_value());
+    CHECK(status_set(*h) == status_set(*g));
+    CHECK(after == before); // submodule present -> fell back to libgit2
+    fs::remove_all(dir);
+    fs::remove_all(up);
+}
+
+// Sparse-checkout sets skip-worktree on excluded paths and removes them from
+// disk; the Zig walker would report them as worktree-deleted. hybrid_status must
+// detect sparse-checkout and fall back to libgit2 (which honours skip-worktree).
+TEST_CASE("hybrid_status == repo_status with sparse-checkout (fail-closed)")
+{
+    auto dir = make_repo_with_commit("base");
+    set_test_config(dir);
+    fs::create_directories(dir / "keep");
+    fs::create_directories(dir / "drop");
+    std::ofstream(dir / "keep" / "a.txt") << "a\n";
+    std::ofstream(dir / "drop" / "b.txt") << "b\n";
+    REQUIRE(run_git(dir, "add -A"));
+    REQUIRE(run_git(dir, "commit -m nested"));
+    REQUIRE(run_git(dir, "sparse-checkout init --cone"));
+    REQUIRE(run_git(dir, "sparse-checkout set keep")); // excludes drop/ (skip-worktree)
+
+    unsigned before = mg::git::zig_fastpath_count();
+    auto h = mg::git::hybrid_status(dir.string());
+    unsigned after = mg::git::zig_fastpath_count();
+    auto g = mg::git::repo_status(dir.string());
+    REQUIRE(h.has_value());
+    REQUIRE(g.has_value());
+    CHECK(status_set(*h) == status_set(*g));
+    CHECK(after == before); // sparse-checkout active -> fell back to libgit2
+    fs::remove_all(dir);
+}
+
+// Split index: `git update-index --split-index` keeps a v2 header but moves the
+// entries into a separate sharedindex.<hash> file, leaving a "link" extension.
+// The Zig parser only reads .git/index, so the entries it sees are incomplete;
+// it must detect the link extension and fail closed (a v2 header means the
+// version check alone wouldn't catch this -- the extension scan does).
+//
+// libgit2 1.9 ALSO rejects split indexes ("unsupported mandatory extension:
+// link"), so repo_status -- and thus the fallback -- ERRORS here. The point of
+// fail-closed is parity with the OFF build: hybrid_status must do exactly what
+// plain repo_status does, which is return the same error (NOT emit wrong data
+// from a half-read index). So we assert error-parity + that the fast path was
+// not taken, rather than value-equality.
+TEST_CASE("hybrid_status mirrors repo_status on a split index (fail-closed)")
+{
+    auto dir = make_repo_with_commit("base"); // a.txt committed (clean)
+    commit_file(dir, "b.txt", "bee\n", "add b");
+    REQUIRE(run_git(dir, "update-index --split-index")); // -> v2 + link extension
+
+    unsigned before = mg::git::zig_fastpath_count();
+    auto h = mg::git::hybrid_status(dir.string());
+    unsigned after = mg::git::zig_fastpath_count();
+    auto g = mg::git::repo_status(dir.string());
+    // Parity: hybrid succeeds iff repo_status succeeds. With libgit2 1.9 both
+    // fail; the assertion holds for either libgit2 behavior without pinning a
+    // version. The key guarantee is hybrid never diverges from repo_status.
+    CHECK(h.has_value() == g.has_value());
+    if (g.has_value())
+        CHECK(status_set(*h) == status_set(*g));
+    CHECK(after == before); // split index -> Zig failed closed, fast path NOT taken
+    fs::remove_all(dir);
+}
+
+#endif // MG_ZIG_STATUS
