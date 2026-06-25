@@ -8,7 +8,10 @@ pub fn run(io: std.Io, gpa: std.mem.Allocator, repo: []const u8, emit: walk.Emit
     defer root.close(io);
     const bytes = root.readFileAlloc(io, ".git/index", gpa, .unlimited) catch &[_]u8{};
     defer gpa.free(bytes);
-    var idx = index.parse(gpa, bytes);
+    // Fail closed: parse returns error.Unsupported for conflicted or non-v2
+    // indexes; propagate it so lib.zig's C-ABI export returns -1 and C++ falls
+    // back to libgit2. A valid empty index is NOT an error (genuine empty repo).
+    var idx = try index.parse(gpa, bytes);
     defer idx.deinit();
 
     // Parse root-level gitignore sources into a seed rules list.

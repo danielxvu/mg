@@ -1,6 +1,5 @@
 const std = @import("std");
 const status = @import("status.zig");
-const walk = @import("walk.zig");
 
 const CEmit = *const fn (ctx: ?*anyopaque, path: [*]const u8, path_len: usize, x: u8, y: u8) callconv(.c) void;
 const Bridge = struct { cemit: CEmit, cctx: ?*anyopaque };
