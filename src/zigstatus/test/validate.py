@@ -33,6 +33,18 @@ def untracked(d):
     open(os.path.join(d, "new1.txt"), "w").write("a\n")
     open(os.path.join(d, "new2.md"), "w").write("b\n")
 
+@case
+def modified(d):
+    open(os.path.join(d, "a.txt"), "w").write("one\n")
+    sh(d, "git", "add", "a.txt"); sh(d, "git", "commit", "-qm", "init")
+    open(os.path.join(d, "a.txt"), "w").write("one\ntwo\n")  # worktree change
+
+@case
+def modified_same_size(d):  # racy: same byte length, different content
+    open(os.path.join(d, "a.txt"), "w").write("aaaa\n")
+    sh(d, "git", "add", "a.txt"); sh(d, "git", "commit", "-qm", "init")
+    open(os.path.join(d, "a.txt"), "w").write("bbbb\n")
+
 def main():
     only = sys.argv[1] if len(sys.argv) > 1 else None
     fails = 0

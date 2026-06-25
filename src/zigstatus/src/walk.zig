@@ -6,11 +6,13 @@ const std = @import("std");
 const Io = std.Io;
 const Dir = std.Io.Dir;
 const index = @import("index.zig");
+const sha1 = @import("sha1.zig");
 
 pub const EmitFn = *const fn (ctx: *anyopaque, x: u8, y: u8, path: []const u8) void;
 
 const Job = struct {
     io: Io,
+    gpa: std.mem.Allocator,
     root: Dir,
     names: []const []const u8,
     idx: *const index.Index,
@@ -23,6 +25,7 @@ const Job = struct {
 
 const Ctx = struct {
     io: Io,
+    gpa: std.mem.Allocator,
     idx: *const index.Index,
     walk_all: bool,
     path: [4096]u8 = undefined,
@@ -30,6 +33,25 @@ const Ctx = struct {
     emit: EmitFn,
     emit_ctx: *anyopaque,
 };
+
+// Classify a tracked file: if worktree content differs from index, emit ` M`.
+// `dir` is the parent directory, `name` is the filename within `dir`,
+// `path` is the repo-relative path (for emit), `ie` is the index entry.
+fn classifyTracked(io: Io, gpa: std.mem.Allocator, dir: Dir, name: []const u8, path: []const u8, ie: index.Entry, emit: EmitFn, ctx: *anyopaque) void {
+    const st = dir.statFile(io, name, .{ .follow_symlinks = false }) catch return;
+    const mt_sec: i64 = @intCast(@divTrunc(st.mtime.nanoseconds, 1_000_000_000));
+    const mt_nsec: i64 = @intCast(@mod(st.mtime.nanoseconds, 1_000_000_000));
+    var changed = ie.size != @as(i64, @intCast(st.size));
+    if (!changed) {
+        // Size matches; only hash if mtime differs from index (racy-clean check).
+        if (ie.mtime_sec != mt_sec or ie.mtime_nsec != mt_nsec) {
+            const content = dir.readFileAlloc(io, name, gpa, .unlimited) catch return;
+            defer gpa.free(content);
+            changed = !std.mem.eql(u8, &ie.sha, &sha1.gitBlob(gpa, content));
+        }
+    }
+    if (changed) emit(ctx, ' ', 'M', path);
+}
 
 // Descend `dir`. `ctx.path[0..plen]` is its repo-relative path (no leading slash).
 fn walkDir(ctx: *Ctx, dir: Dir) void {
@@ -68,8 +90,11 @@ fn walkDir(ctx: *Ctx, dir: Dir) void {
                 // and valid for this call, but emit may be called from threads so we pass cur directly --
                 // the walk is synchronous within each worker, so the slice is stable for the duration of emit).
                 ctx.emit(ctx.emit_ctx, '?', '?', cur);
+            } else {
+                // Tracked: check for worktree modifications.
+                const ie = ctx.idx.files.get(cur).?;
+                classifyTracked(ctx.io, ctx.gpa, dir, ent.name, cur, ie, ctx.emit, ctx.emit_ctx);
             }
-            // Tracked and stat-unchanged -> emit nothing (Task 1 scope).
         }
         ctx.plen = save;
     }
@@ -87,6 +112,7 @@ fn worker(job: *Job) void {
         defer d.close(job.io);
         var ctx: Ctx = .{
             .io = job.io,
+            .gpa = job.gpa,
             .idx = job.idx,
             .walk_all = job.walk_all,
             .emit = job.emit,
@@ -99,7 +125,7 @@ fn worker(job: *Job) void {
 }
 
 // Also walk root-level files (not in any subdirectory).
-fn walkRootFiles(io: Io, root: Dir, idx: *const index.Index, emit: EmitFn, ctx: *anyopaque) !void {
+fn walkRootFiles(io: Io, gpa: std.mem.Allocator, root: Dir, idx: *const index.Index, emit: EmitFn, ctx: *anyopaque) !void {
     var it = root.iterate();
     while (try it.next(io)) |ent| {
         if (std.mem.eql(u8, ent.name, ".git")) continue;
@@ -107,6 +133,9 @@ fn walkRootFiles(io: Io, root: Dir, idx: *const index.Index, emit: EmitFn, ctx: 
         // Root-level file: path == name.
         if (!idx.files.contains(ent.name)) {
             emit(ctx, '?', '?', ent.name);
+        } else {
+            const ie = idx.files.get(ent.name).?;
+            classifyTracked(io, gpa, root, ent.name, ent.name, ie, emit, ctx);
         }
     }
 }
@@ -136,7 +165,7 @@ pub fn run(
     }
 
     // Handle root-level files first (single-threaded, no job needed).
-    try walkRootFiles(io, root, idx, emit, ctx);
+    try walkRootFiles(io, gpa, root, idx, emit, ctx);
 
     if (names.items.len == 0) return;
 
@@ -148,6 +177,7 @@ pub fn run(
     for (0..nthreads) |w|
         jobs[w] = .{
             .io = io,
+            .gpa = gpa,
             .root = root,
             .names = names.items,
             .idx = idx,
