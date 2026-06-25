@@ -1,0 +1,4 @@
+# Build artifacts of the throwaway spike (source + VERDICT.md are the record).
+walk_spike
+*.o
+.zig-cache/

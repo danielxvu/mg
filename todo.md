@@ -459,6 +459,25 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   as MG_LINE_OTHER) — graph + pickaxe have no libgit2 equivalent. `l l`/`l f` +
   the status Recent-commits section stay on libgit2. 205/205 macOS+Alpine, OFF
   0 magit symbols. tmux-verified.
+  🧪 **FM-ZIG-READ-ENGINE — spike PASSED (GO), candidate milestone.** A custom
+  index-driven parallel status walker in **Zig 0.16** beats libgit2's cold
+  full-status **2.4–3.1× on every repo measured** (roll20 61ms vs 146ms; d20app
+  16ms vs 52ms; transmission 3.9ms vs 12ms). The lesson took 3 iterations: v1
+  naive walk = 15× SLOWER (descended gitignored node_modules); v2 +gitignore
+  prune = still 9× slower on d20app (descended untracked-but-unignored trees);
+  **v3 index-driven** (parse `.git/index`, only descend dirs with tracked
+  content, like `git -unormal`) = beats everywhere. Wins by doing git's *same*
+  algorithm but parallel + lean. Throwaway spike + write-up in
+  `bench/walk-spike/` (`VERDICT.md`). Honest caveats: it's the walk (~90%), not
+  a full status engine (correctness tail: gitignore *labeling*, racy-clean
+  hashing, submodules/sparse/filters/renames/conflicts); and it's a COLD-path
+  win — the warm incremental path (0.8–16ms) already wins for steady editing.
+  Spec: `docs/superpowers/specs/2026-06-25-fm-zig-read-engine.md`. (Contrast
+  with FM-PARALLEL-STATUS below, which failed *inside* libgit2; this succeeds by
+  replacing the read path entirely.)
+  **Phase 1a done** (worktree status validated byte-for-byte vs `git status
+  --porcelain` on 8 cases: untracked, modified, modified_same_size, deleted,
+  untracked_dir, ignored_file, mixed, nested_ignore). Branch: `fm-zig-read-engine`.
 
   **Not done (honest residual — each needs work outside the current model):**
     · FM-CV commit variants: instant fixup/squash (use `r i` for now),
