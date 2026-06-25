@@ -45,6 +45,13 @@ def modified_same_size(d):  # racy: same byte length, different content
     sh(d, "git", "add", "a.txt"); sh(d, "git", "commit", "-qm", "init")
     open(os.path.join(d, "a.txt"), "w").write("bbbb\n")
 
+@case
+def deleted(d):
+    open(os.path.join(d, "a.txt"), "w").write("x\n")
+    open(os.path.join(d, "b.txt"), "w").write("y\n")
+    sh(d, "git", "add", "."); sh(d, "git", "commit", "-qm", "init")
+    os.remove(os.path.join(d, "b.txt"))  # tracked, deleted from worktree
+
 def main():
     only = sys.argv[1] if len(sys.argv) > 1 else None
     fails = 0

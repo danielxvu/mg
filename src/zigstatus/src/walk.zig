@@ -2,6 +2,11 @@
 // Adapted from bench/walk-spike/walk_spike.zig (Zig 0.16).
 // Only descends directories that contain tracked files (per the git index),
 // matching git status -unormal behaviour.  Per-file action: call emit(ctx, x, y, path).
+//
+// Returns a seen-set (StringHashMapUnmanaged(void)) of every tracked path that
+// was found on disk.  The caller (status.run) uses this to detect deleted files:
+// any tracked path absent from the seen-set was not present in the worktree.
+// Keys are stable slices into the index bytes; no copies needed.
 const std = @import("std");
 const Io = std.Io;
 const Dir = std.Io.Dir;
@@ -21,6 +26,9 @@ const Job = struct {
     stride: usize,
     emit: EmitFn,
     ctx: *anyopaque,
+    // Populated by worker after it finishes; merged into the global seen-set
+    // by run() after Io.Group.await (single-threaded at that point, no locking).
+    seen: std.StringHashMapUnmanaged(void) = .empty,
 };
 
 const Ctx = struct {
@@ -32,6 +40,8 @@ const Ctx = struct {
     plen: usize = 0,
     emit: EmitFn,
     emit_ctx: *anyopaque,
+    // Per-worker seen-set; keys slice into index bytes (stable for the run lifetime).
+    seen: *std.StringHashMapUnmanaged(void),
 };
 
 // Classify a tracked file: if worktree content differs from index, emit ` M`.
@@ -91,7 +101,10 @@ fn walkDir(ctx: *Ctx, dir: Dir) void {
                 // the walk is synchronous within each worker, so the slice is stable for the duration of emit).
                 ctx.emit(ctx.emit_ctx, '?', '?', cur);
             } else {
-                // Tracked: check for worktree modifications.
+                // Tracked file found on disk: record in the seen-set using the index key
+                // (stable slice into index bytes), then classify for modifications.
+                const idx_key = ctx.idx.files.getKey(cur).?;
+                ctx.seen.put(ctx.gpa, idx_key, {}) catch {};
                 const ie = ctx.idx.files.get(cur).?;
                 classifyTracked(ctx.io, ctx.gpa, dir, ent.name, cur, ie, ctx.emit, ctx.emit_ctx);
             }
@@ -117,6 +130,7 @@ fn worker(job: *Job) void {
             .walk_all = job.walk_all,
             .emit = job.emit,
             .emit_ctx = job.ctx,
+            .seen = &job.seen,
         };
         @memcpy(ctx.path[0..name.len], name);
         ctx.plen = name.len;
@@ -125,7 +139,8 @@ fn worker(job: *Job) void {
 }
 
 // Also walk root-level files (not in any subdirectory).
-fn walkRootFiles(io: Io, gpa: std.mem.Allocator, root: Dir, idx: *const index.Index, emit: EmitFn, ctx: *anyopaque) !void {
+// Tracked root-level files found on disk are recorded in `seen`.
+fn walkRootFiles(io: Io, gpa: std.mem.Allocator, root: Dir, idx: *const index.Index, emit: EmitFn, ctx: *anyopaque, seen: *std.StringHashMapUnmanaged(void)) !void {
     var it = root.iterate();
     while (try it.next(io)) |ent| {
         if (std.mem.eql(u8, ent.name, ".git")) continue;
@@ -134,12 +149,18 @@ fn walkRootFiles(io: Io, gpa: std.mem.Allocator, root: Dir, idx: *const index.In
         if (!idx.files.contains(ent.name)) {
             emit(ctx, '?', '?', ent.name);
         } else {
+            // Record tracked root file as seen (stable index key).
+            const idx_key = idx.files.getKey(ent.name).?;
+            seen.put(gpa, idx_key, {}) catch {};
             const ie = idx.files.get(ent.name).?;
             classifyTracked(io, gpa, root, ent.name, ent.name, ie, emit, ctx);
         }
     }
 }
 
+// Run the index-driven parallel walk.
+// Returns a StringHashMapUnmanaged(void) of every tracked path seen on disk.
+// The caller is responsible for calling .deinit(gpa) on the returned set.
 pub fn run(
     io: Io,
     gpa: std.mem.Allocator,
@@ -147,8 +168,11 @@ pub fn run(
     idx: *const index.Index,
     emit: EmitFn,
     ctx: *anyopaque,
-) !void {
+) !std.StringHashMapUnmanaged(void) {
     const walk_all = idx.files.count() == 0;
+
+    // seen accumulates all tracked paths found on disk; returned to caller.
+    var seen: std.StringHashMapUnmanaged(void) = .empty;
 
     // Collect top-level directory names (allocate copies so they outlive the iterator).
     var names: std.ArrayList([]const u8) = .empty;
@@ -165,9 +189,9 @@ pub fn run(
     }
 
     // Handle root-level files first (single-threaded, no job needed).
-    try walkRootFiles(io, gpa, root, idx, emit, ctx);
+    try walkRootFiles(io, gpa, root, idx, emit, ctx, &seen);
 
-    if (names.items.len == 0) return;
+    if (names.items.len == 0) return seen;
 
     const ncpu = std.Thread.getCpuCount() catch 4;
     const nthreads = @min(ncpu, @max(names.items.len, 1));
@@ -191,4 +215,13 @@ pub fn run(
     var group: Io.Group = .init;
     for (0..nthreads) |w| group.async(io, worker, .{&jobs[w]});
     group.await(io) catch {};
+
+    // Merge per-worker seen-sets into the global seen (single-threaded after await).
+    for (0..nthreads) |w| {
+        var kit = jobs[w].seen.keyIterator();
+        while (kit.next()) |k| seen.put(gpa, k.*, {}) catch {};
+        jobs[w].seen.deinit(gpa);
+    }
+
+    return seen;
 }

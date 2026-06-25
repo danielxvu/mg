@@ -9,5 +9,12 @@ pub fn run(io: std.Io, gpa: std.mem.Allocator, repo: []const u8, emit: walk.Emit
     defer gpa.free(bytes);
     var idx = index.parse(gpa, bytes);
     defer idx.deinit();
-    try walk.run(io, gpa, root, &idx, emit, ctx); // parallel index-driven walk
+    var seen = try walk.run(io, gpa, root, &idx, emit, ctx);
+    defer seen.deinit(gpa);
+    // Post-walk deleted sweep: any tracked file not seen on disk was deleted.
+    // This is single-threaded (after the parallel walk joined), no mutex needed.
+    var kit = idx.files.keyIterator();
+    while (kit.next()) |k| {
+        if (!seen.contains(k.*)) emit(ctx, ' ', 'D', k.*);
+    }
 }
