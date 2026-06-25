@@ -30,6 +30,12 @@ project(mg
 option(ENABLE_CPP_UPGRADES "Compile the modern C++23 modules instead of plain C" OFF)
 option(ENABLE_NATIVE_MAGIT "Link the native C++ Git DAG engine (src/magit/)"     OFF)
 option(ENABLE_TSAN         "Build every target with ThreadSanitizer (gate)"     OFF)
+option(ENABLE_ZIG_STATUS   "Use the Zig worktree-status walker for cold status (needs zig 0.16)" OFF)
+
+if(ENABLE_ZIG_STATUS)
+  find_program(ZIG_EXE zig HINTS /opt/local/bin /opt/homebrew/bin /usr/local/bin REQUIRED)
+  message(STATUS "ENABLE_ZIG_STATUS: building the Zig status lib with ${ZIG_EXE}")
+endif()
 
 # --- Language standards ------------------------------------------------------
 # The C core stays C11 to match upstream's expectations; the new engine targets
@@ -85,6 +91,11 @@ add_subdirectory(src)
 if(ENABLE_NATIVE_MAGIT AND NOT ENABLE_CPP_UPGRADES)
     message(FATAL_ERROR
         "ENABLE_NATIVE_MAGIT requires ENABLE_CPP_UPGRADES=ON (it is a C++ engine).")
+endif()
+
+if(ENABLE_ZIG_STATUS AND NOT ENABLE_NATIVE_MAGIT)
+    message(FATAL_ERROR
+        "ENABLE_ZIG_STATUS requires ENABLE_NATIVE_MAGIT=ON (the Zig lib links into mg_magit).")
 endif()
 
 # Core C++23 modules (task C-series). Built whenever the upgrades are on --
