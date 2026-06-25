@@ -2141,6 +2141,21 @@ TEST_CASE("log_query -G matches a regex in the diff")
     fs::remove_all(dir);
 }
 
+TEST_CASE("log_query -S with no match returns an empty result, not an error")
+{
+    auto dir = make_repo_with_commit("base"); // a.txt = "content"
+    set_test_config(dir);
+    commit_file(dir, "f.txt", "ordinary line\n", "ordinary");
+
+    mg::git::log_options opts;
+    opts.pickaxe = 'S';
+    opts.pickaxe_term = "STRING_THAT_APPEARS_NOWHERE";
+    auto rows = mg::git::log_query(dir.string(), opts);
+    REQUIRE(rows.has_value()); // a 0-match pickaxe is success, not failure
+    CHECK(rows->empty());      // the common real-world outcome the UI relies on
+    fs::remove_all(dir);
+}
+
 TEST_CASE("log_query graph emits connector lines and tags commits")
 {
     auto dir = make_repo_with_commit("C1"); // master @ C1, a.txt
