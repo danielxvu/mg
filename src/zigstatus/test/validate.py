@@ -59,6 +59,15 @@ def untracked_dir(d):
     os.makedirs(os.path.join(d, "sub/deep"))
     open(os.path.join(d, "sub/deep/f.txt"), "w").write("f\n")  # untracked tree
 
+@case
+def ignored_file(d):
+    open(os.path.join(d, ".gitignore"), "w").write("*.log\nbuild/\n")
+    open(os.path.join(d, "keep.txt"), "w").write("k\n")
+    sh(d, "git", "add", "."); sh(d, "git", "commit", "-qm", "init")
+    open(os.path.join(d, "debug.log"), "w").write("noise\n")   # ignored -> absent
+    open(os.path.join(d, "real.txt"), "w").write("r\n")        # untracked -> ??
+    os.makedirs(os.path.join(d, "build")); open(os.path.join(d, "build/o.o"), "w").write("x")  # ignored dir -> absent
+
 def main():
     only = sys.argv[1] if len(sys.argv) > 1 else None
     fails = 0

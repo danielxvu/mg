@@ -12,6 +12,7 @@ const Io = std.Io;
 const Dir = std.Io.Dir;
 const index = @import("index.zig");
 const sha1 = @import("sha1.zig");
+const gitignore = @import("gitignore.zig");
 
 pub const EmitFn = *const fn (ctx: *anyopaque, x: u8, y: u8, path: []const u8) void;
 
@@ -26,6 +27,8 @@ const Job = struct {
     stride: usize,
     emit: EmitFn,
     ctx: *anyopaque,
+    // Seed rules parsed from root .gitignore + .git/info/exclude (read-only, shared).
+    seed_rules: []const gitignore.Rule,
     // Populated by worker after it finishes; merged into the global seen-set
     // by run() after Io.Group.await (single-threaded at that point, no locking).
     seen: std.StringHashMapUnmanaged(void) = .empty,
@@ -42,6 +45,10 @@ const Ctx = struct {
     emit_ctx: *anyopaque,
     // Per-worker seen-set; keys slice into index bytes (stable for the run lifetime).
     seen: *std.StringHashMapUnmanaged(void),
+    // Per-worker gitignore rules (starts seeded from root rules, grows per-dir).
+    rules: *std.ArrayListUnmanaged(gitignore.Rule),
+    // Arena for per-directory .gitignore file bytes (pattern slices point here).
+    arena: std.mem.Allocator,
 };
 
 // Classify a tracked file: if worktree content differs from index, emit ` M`.
@@ -86,6 +93,14 @@ fn markSubtreeSeen(idx: *const index.Index, seen: *std.StringHashMapUnmanaged(vo
 
 // Descend `dir`. `ctx.path[0..plen]` is its repo-relative path (no leading slash).
 fn walkDir(ctx: *Ctx, dir: Dir) void {
+    // Load .gitignore for this directory; record the rule count before so we can rewind.
+    const rules_before = ctx.rules.items.len;
+    const cur_path = ctx.path[0..ctx.plen];
+    if (dir.readFileAlloc(ctx.io, ".gitignore", ctx.arena, .unlimited) catch null) |gi_bytes| {
+        gitignore.parseInto(ctx.rules, ctx.gpa, gi_bytes, cur_path);
+    }
+    defer ctx.rules.shrinkRetainingCapacity(rules_before);
+
     var it = dir.iterate();
     while (it.next(ctx.io) catch null) |ent| {
         if (std.mem.eql(u8, ent.name, ".git")) continue;
@@ -116,7 +131,7 @@ fn walkDir(ctx: *Ctx, dir: Dir) void {
                 };
                 defer sub.close(ctx.io);
                 walkDir(ctx, sub);
-            } else if (dirNonEmpty(ctx.io, dir, ent.name)) {
+            } else if (!gitignore.ignored(ctx.rules.items, cur, ent.name, true) and dirNonEmpty(ctx.io, dir, ent.name)) {
                 // Untracked dir: emit `?? dir/` if non-empty (git -unormal collapses to top dir).
                 ctx.path[ctx.plen] = '/';
                 ctx.emit(ctx.emit_ctx, '?', '?', ctx.path[0 .. ctx.plen + 1]);
@@ -124,10 +139,12 @@ fn walkDir(ctx: *Ctx, dir: Dir) void {
         } else {
             // Classify: not in index -> untracked.
             if (!ctx.idx.files.contains(cur)) {
-                // Copy path to stack buffer for emit (cur slices into ctx.path which is stack-allocated
-                // and valid for this call, but emit may be called from threads so we pass cur directly --
-                // the walk is synchronous within each worker, so the slice is stable for the duration of emit).
-                ctx.emit(ctx.emit_ctx, '?', '?', cur);
+                if (!gitignore.ignored(ctx.rules.items, cur, ent.name, false)) {
+                    // Copy path to stack buffer for emit (cur slices into ctx.path which is stack-allocated
+                    // and valid for this call, but emit may be called from threads so we pass cur directly --
+                    // the walk is synchronous within each worker, so the slice is stable for the duration of emit).
+                    ctx.emit(ctx.emit_ctx, '?', '?', cur);
+                }
             } else {
                 // Tracked file found on disk: record in the seen-set using the index key
                 // (stable slice into index bytes), then classify for modifications.
@@ -142,12 +159,22 @@ fn walkDir(ctx: *Ctx, dir: Dir) void {
 }
 
 fn worker(job: *Job) void {
+    // Per-worker arena for .gitignore file bytes (pattern slices point into arena memory).
+    var arena_state = std.heap.ArenaAllocator.init(job.gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Per-worker rules list: start with a copy of the seed rules.
+    var rules: std.ArrayListUnmanaged(gitignore.Rule) = .empty;
+    defer rules.deinit(job.gpa);
+    rules.appendSlice(job.gpa, job.seed_rules) catch {};
+
     var i = job.start;
     while (i < job.names.len) : (i += job.stride) {
         const name = job.names[i];
         if (!job.walk_all and !job.idx.dirs.contains(name)) {
             // Top-level untracked dir: emit `?? name/` if non-empty, then skip descent.
-            if (dirNonEmpty(job.io, job.root, name)) {
+            if (!gitignore.ignored(rules.items, name, name, true) and dirNonEmpty(job.io, job.root, name)) {
                 // Build `name/` in a small stack buffer for the emit callback.
                 var buf: [4097]u8 = undefined;
                 @memcpy(buf[0..name.len], name);
@@ -172,6 +199,8 @@ fn worker(job: *Job) void {
             .emit = job.emit,
             .emit_ctx = job.ctx,
             .seen = &job.seen,
+            .rules = &rules,
+            .arena = arena,
         };
         @memcpy(ctx.path[0..name.len], name);
         ctx.plen = name.len;
@@ -181,14 +210,16 @@ fn worker(job: *Job) void {
 
 // Also walk root-level files (not in any subdirectory).
 // Tracked root-level files found on disk are recorded in `seen`.
-fn walkRootFiles(io: Io, gpa: std.mem.Allocator, root: Dir, idx: *const index.Index, emit: EmitFn, ctx: *anyopaque, seen: *std.StringHashMapUnmanaged(void)) !void {
+fn walkRootFiles(io: Io, gpa: std.mem.Allocator, root: Dir, idx: *const index.Index, seed_rules: []const gitignore.Rule, emit: EmitFn, ctx: *anyopaque, seen: *std.StringHashMapUnmanaged(void)) !void {
     var it = root.iterate();
     while (try it.next(io)) |ent| {
         if (std.mem.eql(u8, ent.name, ".git")) continue;
         if (ent.kind != .file and ent.kind != .sym_link) continue;
         // Root-level file: path == name.
         if (!idx.files.contains(ent.name)) {
-            emit(ctx, '?', '?', ent.name);
+            if (!gitignore.ignored(seed_rules, ent.name, ent.name, false)) {
+                emit(ctx, '?', '?', ent.name);
+            }
         } else {
             // Record tracked root file as seen (stable index key).
             const idx_key = idx.files.getKey(ent.name).?;
@@ -207,6 +238,7 @@ pub fn run(
     gpa: std.mem.Allocator,
     root: Dir,
     idx: *const index.Index,
+    seed_rules: []const gitignore.Rule,
     emit: EmitFn,
     ctx: *anyopaque,
 ) !std.StringHashMapUnmanaged(void) {
@@ -230,7 +262,7 @@ pub fn run(
     }
 
     // Handle root-level files first (single-threaded, no job needed).
-    try walkRootFiles(io, gpa, root, idx, emit, ctx, &seen);
+    try walkRootFiles(io, gpa, root, idx, seed_rules, emit, ctx, &seen);
 
     if (names.items.len == 0) return seen;
 
@@ -251,6 +283,7 @@ pub fn run(
             .stride = nthreads,
             .emit = emit,
             .ctx = ctx,
+            .seed_rules = seed_rules,
         };
 
     var group: Io.Group = .init;
