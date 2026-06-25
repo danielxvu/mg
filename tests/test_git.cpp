@@ -3167,4 +3167,36 @@ TEST_CASE("hybrid_status == repo_status with sparse-checkout (fail-closed)")
     fs::remove_all(dir);
 }
 
+// Split index: `git update-index --split-index` keeps a v2 header but moves the
+// entries into a separate sharedindex.<hash> file, leaving a "link" extension.
+// The Zig parser only reads .git/index, so the entries it sees are incomplete;
+// it must detect the link extension and fail closed (a v2 header means the
+// version check alone wouldn't catch this -- the extension scan does).
+//
+// libgit2 1.9 ALSO rejects split indexes ("unsupported mandatory extension:
+// link"), so repo_status -- and thus the fallback -- ERRORS here. The point of
+// fail-closed is parity with the OFF build: hybrid_status must do exactly what
+// plain repo_status does, which is return the same error (NOT emit wrong data
+// from a half-read index). So we assert error-parity + that the fast path was
+// not taken, rather than value-equality.
+TEST_CASE("hybrid_status mirrors repo_status on a split index (fail-closed)")
+{
+    auto dir = make_repo_with_commit("base"); // a.txt committed (clean)
+    commit_file(dir, "b.txt", "bee\n", "add b");
+    REQUIRE(run_git(dir, "update-index --split-index")); // -> v2 + link extension
+
+    unsigned before = mg::git::zig_fastpath_count();
+    auto h = mg::git::hybrid_status(dir.string());
+    unsigned after = mg::git::zig_fastpath_count();
+    auto g = mg::git::repo_status(dir.string());
+    // Parity: hybrid succeeds iff repo_status succeeds. With libgit2 1.9 both
+    // fail; the assertion holds for either libgit2 behavior without pinning a
+    // version. The key guarantee is hybrid never diverges from repo_status.
+    CHECK(h.has_value() == g.has_value());
+    if (g.has_value())
+        CHECK(status_set(*h) == status_set(*g));
+    CHECK(after == before); // split index -> Zig failed closed, fast path NOT taken
+    fs::remove_all(dir);
+}
+
 #endif // MG_ZIG_STATUS
