@@ -11,6 +11,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -2776,5 +2777,24 @@ TEST_CASE("discard() reverts a modified tracked file to HEAD")
     REQUIRE(st.has_value());
     for (const auto &e : *st)
         CHECK(e.path != "a.txt"); // clean again
+    fs::remove_all(dir);
+}
+
+TEST_CASE("staged_status reports index-vs-HEAD changes (X column)")
+{
+    auto dir = make_repo_with_commit("base"); // a.txt committed
+    set_test_config(dir);
+    // stage a modify + a new file
+    std::ofstream(dir / "a.txt") << "changed";
+    std::ofstream(dir / "b.txt") << "new";
+    REQUIRE(mg::git::stage(dir.string(), "a.txt").has_value());
+    REQUIRE(mg::git::stage(dir.string(), "b.txt").has_value());
+
+    auto s = mg::git::staged_status(dir.string());
+    REQUIRE(s.has_value());
+    std::map<std::string, mg::magit::status> x;
+    for (auto &e : *s) x[e.path] = e.x;
+    CHECK(x["a.txt"] == mg::magit::status::modified);
+    CHECK(x["b.txt"] == mg::magit::status::added);
     fs::remove_all(dir);
 }

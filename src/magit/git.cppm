@@ -382,6 +382,18 @@ struct hunk {
 std::expected<std::vector<mg::magit::file_status>, error>
 repo_status(std::string path);
 
+// One staged entry: a path changed between HEAD and the index (X column).
+struct staged_entry {
+    std::string path;
+    mg::magit::status x;
+};
+
+// Index-vs-HEAD diff (staged changes, the "X" column). On an unborn HEAD (no
+// commits yet), every index entry is staged-added. Only paths that actually
+// differ are returned (UNMODIFIED paths are excluded).
+std::expected<std::vector<staged_entry>, error>
+staged_status(std::string repo);
+
 // Like repo_status, but limited to entries matching `pathspecs` (workdir-
 // relative dirs and/or files; git pathspec matching, so "src" covers src/**).
 // Empty `pathspecs` == the whole repo (repo_status delegates here). Opens its
@@ -875,6 +887,91 @@ std::expected<std::vector<mg::magit::file_status>, error>
 repo_status(std::string path)
 {
     return repo_status_scoped(std::move(path), {});
+}
+
+std::expected<std::vector<staged_entry>, error>
+staged_status(std::string repo_path)
+{
+    detail::init_guard guard;
+    git_repository *raw_repo = nullptr;
+    if (git_repository_open_ext(&raw_repo, repo_path.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr repo(raw_repo);
+
+    // Resolve HEAD to a tree; NULL tree if HEAD is unborn (no commits yet).
+    git_tree *raw_tree = nullptr;
+    git_reference *raw_head = nullptr;
+    int head_rc = git_repository_head(&raw_head, repo.get());
+    if (head_rc != GIT_EUNBORNBRANCH && head_rc != GIT_ENOTFOUND) {
+        if (head_rc != 0)
+            return std::unexpected(last_error());
+        detail::ref_ptr head(raw_head);
+        const git_oid *head_oid = git_reference_target(head.get());
+        if (head_oid != nullptr) {
+            git_commit *raw_commit = nullptr;
+            if (git_commit_lookup(&raw_commit, repo.get(), head_oid) != 0)
+                return std::unexpected(last_error());
+            detail::commit_ptr commit(raw_commit);
+            if (git_commit_tree(&raw_tree, commit.get()) != 0)
+                return std::unexpected(last_error());
+        }
+    }
+    detail::tree_ptr head_tree(raw_tree); // may be null for unborn HEAD
+
+    // Get the repo index (read from disk).
+    git_index *raw_index = nullptr;
+    if (git_repository_index(&raw_index, repo.get()) != 0)
+        return std::unexpected(last_error());
+    detail::index_ptr index(raw_index);
+
+    // Diff HEAD tree (or NULL for unborn) vs index.
+    git_diff_options diff_opts;
+    git_diff_options_init(&diff_opts, GIT_DIFF_OPTIONS_VERSION);
+
+    git_diff *raw_diff = nullptr;
+    if (git_diff_tree_to_index(&raw_diff, repo.get(), head_tree.get(),
+                               index.get(), &diff_opts) != 0)
+        return std::unexpected(last_error());
+    detail::diff_ptr diff(raw_diff);
+
+    using mg::magit::status;
+    std::vector<staged_entry> out;
+    const std::size_t n = git_diff_num_deltas(diff.get());
+    out.reserve(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        const git_diff_delta *delta = git_diff_get_delta(diff.get(), i);
+        if (delta == nullptr)
+            continue;
+        staged_entry e;
+        switch (delta->status) {
+        case GIT_DELTA_ADDED:
+            e.x = status::added;
+            e.path = delta->new_file.path ? delta->new_file.path : "";
+            break;
+        case GIT_DELTA_DELETED:
+            e.x = status::deleted;
+            e.path = delta->old_file.path ? delta->old_file.path : "";
+            break;
+        case GIT_DELTA_MODIFIED:
+        case GIT_DELTA_TYPECHANGE:
+            e.x = status::modified;
+            e.path = delta->new_file.path ? delta->new_file.path : "";
+            break;
+        case GIT_DELTA_RENAMED:
+            e.x = status::renamed;
+            e.path = delta->new_file.path ? delta->new_file.path : "";
+            break;
+        case GIT_DELTA_COPIED:
+            e.x = status::copied;
+            e.path = delta->new_file.path ? delta->new_file.path : "";
+            break;
+        default:
+            continue; // skip UNMODIFIED, IGNORED, UNTRACKED, etc.
+        }
+        if (!e.path.empty())
+            out.push_back(std::move(e));
+    }
+    return out;
 }
 
 std::expected<head_info, error> read_head(std::string path)
