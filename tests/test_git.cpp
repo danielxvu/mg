@@ -3300,6 +3300,8 @@ TEST_CASE("reflog reports HEAD reflog entries newest-first with selectors")
     CHECK(rl->front().oid.size() == 40);          // full hex oid
     CHECK(rl->front().short_oid.size() == 8);
     CHECK_FALSE(rl->front().message.empty());     // e.g. "commit: second"
+    // Newest entry's message is the second commit (and the trailing-\n trim ran).
+    CHECK(rl->front().message.find("second") != std::string::npos);
     // The newest entry's oid is the current HEAD commit.
     auto head = mg::git::read_head(dir.string());
     REQUIRE(head.has_value());
@@ -3308,12 +3310,34 @@ TEST_CASE("reflog reports HEAD reflog entries newest-first with selectors")
     fs::remove_all(dir);
 }
 
-TEST_CASE("reflog caps at max and tolerates a brand-new repo")
+TEST_CASE("reflog on a brand-new repo (no commits) yields an empty vector, not an error")
 {
-    auto dir = make_repo_with_commit("only");
+    // An init-only repo: HEAD is unborn, so it has no reflog. This exercises the
+    // GIT_ENOTFOUND -> empty-vector path (returning success, not an error).
+    auto dir = make_temp_dir();
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_init(&repo, dir.string().c_str(), 0) == 0);
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+
+    auto rl = mg::git::reflog(dir.string(), 100);
+    REQUIRE(rl.has_value());   // not an error
+    CHECK(rl->empty());        // no HEAD reflog yet
+    fs::remove_all(dir);
+}
+
+TEST_CASE("reflog caps at max")
+{
+    auto dir = make_repo_with_commit("only"); // exactly one HEAD reflog entry
     auto capped = mg::git::reflog(dir.string(), 1);
     REQUIRE(capped.has_value());
-    CHECK(capped->size() <= 1);
+    CHECK(capped->size() == 1); // one commit -> capping to 1 yields exactly 1
+
+    // max <= 0 means no cap: all entries are returned.
+    auto uncapped = mg::git::reflog(dir.string(), 0);
+    REQUIRE(uncapped.has_value());
+    CHECK(uncapped->size() >= 1);
     fs::remove_all(dir);
 }
 
