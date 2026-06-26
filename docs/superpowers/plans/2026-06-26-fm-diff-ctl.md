@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- The view config is read on the main thread (status build + staging are synchronous editor commands); a plain module global is sufficient (the background monitor never calls `file_diff`).
+- The view config is read on the UI thread (status build + staging are synchronous editor commands) AND on the monitor thread (to compose the `Diff:` header in `compose_status_view`). Therefore both globals must be `std::atomic<int>` / `std::atomic<bool>` (relaxed load/store). The background monitor never calls `file_diff`, but it does read the view config for the header — the atomics eliminate the UI-write / monitor-read data race.
 - **Context is applied at every hunk-numbering site** — `file_diff` (display) AND `path_scoped_diff_opts` (the shared helper for all 5 staging ops: `stage_hunk`/`unstage_hunk`/`stage_region`/`unstage_region`/`discard_region`) — so a context change never desyncs displayed hunk indices from staging. `staged_status` (the status-SET computation) is NOT touched.
 - `-w` (`GIT_DIFF_IGNORE_WHITESPACE`) is set **only** for display (`file_diff`); staging ops never ignore whitespace. While `-w` is on, hunk/region staging is disabled (the displayed ws-ignored hunks aren't applyable / don't match the exact-diff staging numbering).
 - Context clamp: `[0, 32]`. Default view: context 3, ws significant.

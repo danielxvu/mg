@@ -41,9 +41,13 @@ void set_diff_view(int context, bool ignore_ws);   // setter (clamps context >= 
   `opts.flags |= GIT_DIFF_IGNORE_WHITESPACE` when `g_diff_ignore_ws`. The staging
   ops pass `for_display=false` — they set context (to stay index-aligned) but
   NEVER ignore whitespace (a patch must apply exactly).
-- The config is read on the main thread (status build + staging are synchronous
-  editor commands); a plain global is sufficient (no concurrency with the
-  background monitor, which does not call `file_diff`).
+- The config is read on the UI thread (status build + staging are synchronous
+  editor commands) AND on the monitor thread (to compose the `Diff:` header in
+  `compose_status_view` → `publish_view`). Therefore both globals must be
+  `std::atomic<int>` / `std::atomic<bool>` (relaxed load/store — single scalars,
+  no ordering dependency). The background monitor never calls `file_diff`
+  directly, but it does read the view config for the header — the atomics
+  eliminate the UI-write / monitor-read data race.
 
 ### Whitespace ↔ staging guard (the key behavioral decision)
 When `g_diff_ignore_ws` is **on**, the displayed hunks are whitespace-collapsed:
