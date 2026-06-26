@@ -143,6 +143,10 @@ static int	magit_log_note(int, int);
 static int	magit_reflog(int, int);
 static int	magit_reflog_refresh(int, int);
 static int	magit_reflog_build(struct buffer *);
+static int	magit_reflog_reset_soft(int, int);
+static int	magit_reflog_reset_mixed(int, int);
+static int	magit_reflog_reset_hard(int, int);
+static int	magit_reflog_reset_menu(int, int);
 static int	magit_merge(int, int);
 static int	magit_revert(int, int);
 static int	magit_reset_soft(int, int);
@@ -565,16 +569,42 @@ static PF reflog_esc[] = { NULL };			/* ESC: meta prefix */
 static PF reflog_g[]   = { magit_reflog_refresh };	/* g: refresh */
 static PF reflog_q[]   = { delwind };			/* q: close */
 
-static struct KEYMAPE (4) magit_reflogmap = {
-	4,
-	4,
+/* Reset submenu for *magit-reflog*: x h/m/s. Entries ascending. */
+static PF reflog_reset_h[] = { magit_reflog_reset_hard };
+static PF reflog_reset_m[] = { magit_reflog_reset_mixed };
+static PF reflog_reset_s[] = { magit_reflog_reset_soft };
+
+/* Entries MUST stay ascending: 'h'=104, 'm'=109, 's'=115. */
+static struct KEYMAPE (3) magit_reflogresetmenu = {
+	3,
+	3,
+	rescan,
+	{
+		{ 'h', 'h', reflog_reset_h, NULL },	/* x h: hard (confirms) */
+		{ 'm', 'm', reflog_reset_m, NULL },	/* x m: mixed */
+		{ 's', 's', reflog_reset_s, NULL }	/* x s: soft */
+	}
+};
+
+static PF reflog_x[] = { magit_reflog_reset_menu };	/* x: reset prefix */
+
+/*
+ * *magit-reflog* keymap: RET shows the entry's diff (reuses magit_log_visit),
+ * g refreshes, q closes, x opens the reset transient. ESC prefix forwards to
+ * magit_metamap (M-n/M-p).
+ * Entries MUST be ascending: CCHR('M')=13, CCHR('[')=27, 'g'=103, 'q'=113, 'x'=120.
+ */
+static struct KEYMAPE (5) magit_reflogmap = {
+	5,
+	5,
 	rescan,
 	{
 		{ CCHR('M'), CCHR('M'), reflog_ret, NULL },	/* RET: show entry */
 		{ CCHR('['), CCHR('['), reflog_esc,		/* ESC: meta prefix */
 		    (KEYMAP *)&magit_metamap },
 		{ 'g', 'g', reflog_g, NULL },			/* g: refresh */
-		{ 'q', 'q', reflog_q, NULL }			/* q: close */
+		{ 'q', 'q', reflog_q, NULL },			/* q: close */
+		{ 'x', 'x', reflog_x, NULL }			/* x: reset transient */
 	}
 };
 
@@ -775,6 +805,11 @@ static const struct magit_menu_item stash_items[] = {
 static const struct magit_menu_item conflict_items[] = {
 	{ 'o', "keep ours" }, { 't', "keep theirs" }
 };
+static const struct magit_menu_item reflog_reset_items[] = {
+	{ 's', "soft (move HEAD only)" },
+	{ 'm', "mixed (reset index)" },
+	{ 'h', "hard (reset working tree)" }
+};
 
 #define MENU_N(a) ((int)(sizeof(a) / sizeof((a)[0])))
 static struct magit_menu pull_menu = { "Pull", (KEYMAP *)&magit_pullmenu,
@@ -803,6 +838,9 @@ static struct magit_menu stash_menu = { "Stash", (KEYMAP *)&magit_stashmenu,
 static struct magit_menu conflict_menu = { "Conflict (file at point)",
 	(KEYMAP *)&magit_conflictmenu, conflict_items, MENU_N(conflict_items),
 	NULL, 0 };
+static struct magit_menu reflog_reset_menu = { "Reset to entry",
+	(KEYMAP *)&magit_reflogresetmenu, reflog_reset_items,
+	MENU_N(reflog_reset_items), NULL, 0 };
 
 /* Render menu `m` into `bp`: title, infixes (with state), then action keys. */
 static void
@@ -912,6 +950,7 @@ static int magit_menu_log(int f, int n)    { return (magit_transient(&log_menu, 
 static int magit_menu_rebase(int f, int n) { return (magit_transient(&rebase_menu, f, n)); }
 static int magit_menu_tag(int f, int n)    { return (magit_transient(&tag_menu, f, n)); }
 static int magit_menu_stash(int f, int n)  { return (magit_transient(&stash_menu, f, n)); }
+static int magit_reflog_reset_menu(int f, int n) { return (magit_transient(&reflog_reset_menu, f, n)); }
 
 /* e: resolve the conflict at point -- only meaningful on a Conflicts line. */
 static int
@@ -3191,6 +3230,33 @@ magit_reset_hard(int f, int n)
 {
 	return (magit_do_reset(2, f, n));
 }
+
+/* Reset HEAD to the reflog entry at point. mode: 0 soft, 1 mixed, 2 hard. */
+static int
+magit_reflog_do_reset(int mode, int f, int n)
+{
+	const char	*oid;
+	char		 cwd[PATH_MAX];
+
+	if ((oid = magit_log_oid_at_point()) == NULL) {
+		ewprintf("Not on a reflog entry");
+		return (FALSE);
+	}
+	if (mode == 2 &&
+	    eyesno("Hard reset discards working-tree changes") != TRUE)
+		return (FALSE);
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
+		return (FALSE);
+	if (mg_magit_reset(cwd, oid, mode) != 1) {
+		ewprintf("Reset failed");
+		return (FALSE);
+	}
+	return (magit_reflog_refresh(f, n));
+}
+
+static int magit_reflog_reset_soft(int f, int n)  { return magit_reflog_do_reset(0, f, n); }
+static int magit_reflog_reset_mixed(int f, int n) { return magit_reflog_do_reset(1, f, n); }
+static int magit_reflog_reset_hard(int f, int n)  { return magit_reflog_do_reset(2, f, n); }
 
 /*
  * Read a line into `buf` (size `n`) WITHOUT echoing -- for passwords (git's

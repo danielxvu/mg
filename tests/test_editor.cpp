@@ -201,3 +201,39 @@ TEST_CASE("$ opens the *magit-process* buffer from magit-status")
     fs::remove_all(repo);
     CHECK(ok);
 }
+
+TEST_CASE("x m in *magit-reflog* resets HEAD to the entry at point")
+{
+    auto repo = make_repo();
+    sh(repo.string(), "git commit --allow-empty -m second");
+    const std::string repofile = (repo / "tracked.txt").string();
+
+    winsize ws{}; ws.ws_row = 40; ws.ws_col = 100;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) {
+        ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", repofile.c_str(), (char *)nullptr);
+        _exit(127);
+    }
+    bool ok = false;
+    if (wait_for(master, "tracked.txt", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x1bxmagit-status\r", 15);
+        if (wait_for(master, "On branch", std::chrono::seconds(8))) {
+            (void)!::write(master, "lh", 2);                 // open reflog
+            if (wait_for(master, "HEAD@{1}", std::chrono::seconds(8))) {
+                (void)!::write(master, "\x0e", 1);           // C-n: down to HEAD@{1}
+                (void)!::write(master, "xm", 2);             // x m: mixed reset
+                // after reset, the newest entry is a reset: line
+                ok = wait_for(master, "reset:", std::chrono::seconds(8));
+            }
+        }
+    }
+    const char quit[] = "\x18\x03";
+    (void)!::write(master, quit, sizeof quit - 1);
+    for (int i = 0; i < 20; ++i) { int st = 0; if (::waitpid(pid, &st, WNOHANG) == pid) break; usleep(100000); }
+    ::kill(pid, SIGKILL); ::waitpid(pid, nullptr, 0); ::close(master);
+    fs::remove_all(repo);
+    CHECK(ok);
+}
