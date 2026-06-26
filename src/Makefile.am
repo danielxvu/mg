@@ -13,6 +13,12 @@ mg_SOURCES       = basic.c bell.c buffer.c cinfo.c dir.c display.c echo.c 	\
 		   chrdef.h def.h funmap.h kbd.h key.h macro.h pathnames.h
 mg_SOURCES      += queue.h tree.h
 mg_SOURCES      += extensions.c
+# Several C-core sources (kbd.c, display.c, main.c, ttyio.c) include the
+# native-magit extern "C" bridge header unconditionally; it is a no-op when
+# ENABLE_NATIVE_MAGIT is undefined (the autotools build). Ship it so the
+# `make distcheck` tarball is self-contained. The C++ engine itself
+# (src/magit/*.cppm, magit_cmd.c) is CMake-only and not part of this build.
+mg_SOURCES      += magit/bridge.h
 
 mg_CFLAGS        = -W -Wall -Wextra -Wno-unused-parameter
 mg_CFLAGS       += -D_GNU_SOURCE -DDATADIR=\"$(pkgdatadir)\" -DDOCDIR=\"$(docdir)\"
