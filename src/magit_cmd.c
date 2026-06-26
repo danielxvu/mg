@@ -124,6 +124,7 @@ static int	magit_at_point(char **, int *);
 static void	magit_log_emit(void *, const char *, int, const char *, int);
 static void	magit_plain_emit(void *, const char *, int, const char *, int);
 static void	magit_diff_emit(void *, const char *, int, const char *, int);
+static int	magit_process(int, int);
 void		magit_cell_color_reset(void);	/* invalidate the per-line memo */
 static int	magit_log(int, int);
 static int	magit_log_file(int, int);
@@ -517,6 +518,20 @@ static struct KEYMAPE (1) magcommitmap = {
 		{ 'q', 'q', magcommit_q, NULL }			/* q: close */
 	}
 };
+
+/* *magit-process* view keymap: q closes (read-only process log). */
+static PF magprocess_q[] = { delwind };
+
+static struct KEYMAPE (1) magprocessmap = {
+	1,
+	1,
+	rescan,
+	{
+		{ 'q', 'q', magprocess_q, NULL }		/* q: close */
+	}
+};
+
+static PF magit_dollar[] = { magit_process };
 
 /*
  * ESC submap: M-n / M-p jump between section headers. map_default is rescan, so
@@ -920,15 +935,16 @@ magit_conflict_theirs(int f, int n)
 }
 
 /* Entries MUST stay in ascending key order -- doscan() relies on it. */
-static struct KEYMAPE (31) magitmap = {
-	31,
-	31,
+static struct KEYMAPE (32) magitmap = {
+	32,
+	32,
 	rescan,
 	{
 		{ CCHR('I'), CCHR('I'), magit_tab, NULL },	/* TAB: expand/collapse */
 		{ CCHR('M'), CCHR('M'), magit_ret, NULL },	/* RET: visit file */
 		{ CCHR('['), CCHR('['), magit_esc,		/* ESC: meta prefix */
 		    (KEYMAP *)&magit_metamap },
+		{ '$', '$', magit_dollar, NULL },		/* $: process log */
 		{ '?', '?', magit_qmark, NULL },		/* ?: key help */
 		{ 'A', 'A', magit_A, NULL },			/* A: cherry-pick */
 		{ 'B', 'B', magit_B, NULL },			/* B: blame file at point */
@@ -1178,6 +1194,7 @@ magit_status(int f, int n)
 		 * the commit-view buffer without ever going through `l`. */
 		maps_add((KEYMAP *)&maglogmap, "magit-log-mode");
 		maps_add((KEYMAP *)&magcommitmap, "magit-commit-view-mode");
+		maps_add((KEYMAP *)&magprocessmap, "magit-process-mode");
 		maps_add((KEYMAP *)&magit_todomap, "magit-rebase-todo-mode");
 		maps_add((KEYMAP *)&magediffmap, "magit-ediff-mode");
 		mg_magit_set_cred_prompt(magit_cred_prompt); /* HTTPS user/pass auth */
@@ -1329,6 +1346,44 @@ magit_plain_emit(void *ctx, const char *line, int kind, const char *path,
     int hunk)
 {
 	(void)addlinef((struct buffer *)ctx, "%s", (char *)line);
+}
+
+/* emit callback for *magit-process*: text only (kind/path/hunk not used). */
+static void
+magit_process_emit(void *ctx, const char *line, int kind, const char *path,
+    int hunk)
+{
+	(void)kind; (void)path; (void)hunk;
+	(void)addlinef((struct buffer *)ctx, "%s", (char *)line);
+}
+
+/*
+ * magit-process: show the process log in a read-only *magit-process* buffer.
+ * Bound to `$` in magit-status-mode (mirrors magit's `$` binding).
+ */
+static int
+magit_process(int f, int n)
+{
+	struct buffer	*bp;
+	struct mgwin	*wp;
+
+	if ((bp = bfind("*magit-process*", TRUE)) == NULL)
+		return (FALSE);
+	bp->b_flag |= BFIGNDIRTY;
+	if (bclear(bp) != TRUE)
+		return (FALSE);
+	(void)mg_magit_process_log(magit_process_emit, bp);
+	bp->b_flag |= BFREADONLY;
+	if ((wp = popbuf(bp, WNONE)) == NULL)
+		return (FALSE);
+	curwp = wp;
+	curbp = bp;
+	wp->w_dotp = bp->b_dotp;
+	wp->w_doto = bp->b_doto;
+	bp->b_modes[1] = name_mode("magit-process-mode");
+	bp->b_nmodes = 1;
+	(void)gotobob(f, n);		/* top: newest entry first */
+	return (TRUE);
 }
 
 /* emit callback for *magit-commit*: record kind/path per line for syntax coloring. */
