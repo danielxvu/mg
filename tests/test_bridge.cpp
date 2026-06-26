@@ -1004,6 +1004,39 @@ TEST_CASE("mg_magit_tag_create/delete and the Tags section through the bridge")
     fs::remove_all(dir);
 }
 
+// Regression: a tag-heavy repo (d20app has ~2900 tags) must not emit one line
+// per tag -- that bloated the status buffer to thousands of lines, which was
+// slow to build + render and showed as a hanging/blank *magit-status*. The
+// Tags section is capped; the full count stays in the header.
+TEST_CASE("the Tags section is capped on a tag-heavy repo")
+{
+    auto dir = make_repo_one_hunk(); // a committed repo
+    auto repo = dir.string();
+    for (int i = 0; i < 30; ++i) {
+        std::string name = "v" + std::to_string(i);
+        REQUIRE(mg_magit_tag_create(repo.c_str(), name.c_str(), "HEAD", NULL) == 1);
+    }
+
+    struct Ctx {
+        int tag_lines = 0;
+        std::string text;
+    } c;
+    mg_magit_status_buffer(
+        repo.c_str(), nullptr, 0,
+        [](void *p, const char *line, int kind, const char *, int) {
+            auto *cc = static_cast<Ctx *>(p);
+            if (kind == MG_LINE_TAG)
+                ++cc->tag_lines;
+            cc->text.append(line).append("\n");
+        },
+        &c);
+
+    CHECK(c.text.find("Tags (30)") != std::string::npos); // header: true count
+    CHECK(c.tag_lines <= 20);                             // but the list is bounded
+    CHECK(c.text.find("more") != std::string::npos);      // "... and N more"
+    fs::remove_all(dir);
+}
+
 TEST_CASE("the Submodules section lists registered submodules through the bridge")
 {
     auto parent = make_repo_one_hunk();

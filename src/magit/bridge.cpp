@@ -812,20 +812,42 @@ int compose_status_view(const status_view &v, const char *repo_path,
             out("  " + c.short_oid + " " + c.summary);
     }
 
+    // Branches/tags are an overview, not an exhaustive ref dump: a big repo can
+    // have thousands of tags (d20app: ~2900), and emitting them all bloats the
+    // status buffer into tens of thousands of lines -- slow to build and slow to
+    // render (the buffer appears to "hang"). Show a bounded head and a "+N more"
+    // line; the full count stays in the section header. (Magit shows all refs in
+    // a dedicated refs view, never inline in status.)
+    constexpr std::size_t kMaxRefsShown = 20;
+
     if (!v.branches.empty()) {
         out("");
         out("Branches (" + std::to_string(v.branches.size()) + ")",
             MG_LINE_SECTION);
-        for (const auto &b : v.branches)
+        std::size_t shown = 0;
+        for (const auto &b : v.branches) {
+            if (shown++ >= kMaxRefsShown)
+                break;
             out(std::string(b.is_head ? "* " : "  ") + b.name, MG_LINE_BRANCH,
                 b.name.c_str());
+        }
+        if (v.branches.size() > kMaxRefsShown)
+            out("  ... and " + std::to_string(v.branches.size() - kMaxRefsShown) +
+                " more", MG_LINE_OTHER);
     }
 
     if (!v.tags.empty()) {
         out("");
         out("Tags (" + std::to_string(v.tags.size()) + ")", MG_LINE_SECTION);
-        for (const auto &t : v.tags)
+        std::size_t shown = 0;
+        for (const auto &t : v.tags) {
+            if (shown++ >= kMaxRefsShown)
+                break;
             out("  " + t, MG_LINE_TAG, t.c_str());
+        }
+        if (v.tags.size() > kMaxRefsShown)
+            out("  ... and " + std::to_string(v.tags.size() - kMaxRefsShown) +
+                " more", MG_LINE_OTHER);
     }
 
     if (!v.worktrees.empty()) {
