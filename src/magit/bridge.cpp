@@ -1020,28 +1020,35 @@ extern "C" int mg_magit_commit_diff(const char *repo_path, const char *rev,
         return 0;
 
     int n = 0;
-    auto out = [&](const std::string &line, int kind, int hunk) {
-        emit(ctx, line.c_str(), kind, nullptr, hunk);
-        ++n;
-    };
     auto chomp = [](std::string s) {
         if (!s.empty() && s.back() == '\n')
             s.pop_back();
         return s;
     };
+    auto out_no_path = [&](const std::string &line, int kind, int hunk) {
+        emit(ctx, line.c_str(), kind, nullptr, hunk);
+        ++n;
+    };
 
-    out(std::string("commit ") + rev, MG_LINE_SECTION, -1);
+    out_no_path(std::string("commit ") + rev, MG_LINE_SECTION, -1);
     if (auto note = mg::git::read_note(repo_path, rev); note && !note->empty()) {
         std::string nb = *note;
         if (!nb.empty() && nb.back() == '\n')
             nb.pop_back();
-        out("Note:", MG_LINE_OTHER, -1);
-        out("  " + nb, MG_LINE_OTHER, -1);
+        out_no_path("Note:", MG_LINE_OTHER, -1);
+        out_no_path("  " + nb, MG_LINE_OTHER, -1);
     }
     for (int hi = 0; hi < static_cast<int>(hunks->size()); ++hi) {
-        out(chomp((*hunks)[hi].header), MG_LINE_HUNK, hi);
-        for (const auto &l : (*hunks)[hi].lines)
-            out(std::string(1, l.origin) + chomp(l.content), MG_LINE_DIFF, hi);
+        const auto &h = (*hunks)[hi];
+        const char *path = h.path.empty() ? nullptr : h.path.c_str();
+        emit(ctx, chomp(h.header).c_str(), MG_LINE_HUNK, path, hi);
+        ++n;
+        for (const auto &l : h.lines) {
+            emit(ctx,
+                 (std::string(1, l.origin) + chomp(l.content)).c_str(),
+                 MG_LINE_DIFF, path, hi);
+            ++n;
+        }
     }
     return n;
 }

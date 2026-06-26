@@ -25,6 +25,7 @@
 #ifdef ENABLE_NATIVE_MAGIT
 
 #define MAGIT_MAX_LINES 1024
+#include "../syntax/neomg_syntax.h"
 
 #define MAGIT_MAX_EXPANDED 64
 
@@ -122,6 +123,8 @@ static const char *magit_log_oid_at_point(void);
 static int	magit_at_point(char **, int *);
 static void	magit_log_emit(void *, const char *, int, const char *, int);
 static void	magit_plain_emit(void *, const char *, int, const char *, int);
+static void	magit_diff_emit(void *, const char *, int, const char *, int);
+void		magit_cell_color_reset(void);	/* invalidate the per-line memo */
 static int	magit_log(int, int);
 static int	magit_log_file(int, int);
 static int	magit_log_open(int, int);
@@ -177,6 +180,22 @@ static struct {
 } magit_meta[MAGIT_MAX_LINES];
 static int	magit_meta_count;
 
+/* Per-line kind/path for the most recent *magit-commit* render. */
+static struct {
+	int	kind;
+	char	path[PATH_MAX];
+} magit_commit_meta[MAGIT_MAX_LINES];
+static int	magit_commit_meta_count;
+
+/*
+ * The two syntax-colored buffers, cached so display.c's per-cell hook can gate
+ * on a pointer compare instead of a bfind() linked-list walk per cell. Set when
+ * each buffer is (re)built (status build path / magit_show_rev); a NULL means
+ * "not built yet" and never matches a real buffer.
+ */
+static struct buffer	*magit_status_bp;
+static struct buffer	*magit_commit_bp;
+
 /* Paths whose diffs are currently expanded inline. */
 static char	magit_expanded[MAGIT_MAX_EXPANDED][PATH_MAX];
 static int	magit_expanded_count;
@@ -212,6 +231,8 @@ static unsigned	magit_logfile_gen;
 static char		magit_ediff_path[PATH_MAX];
 static int		magit_ediff_region;	/* current conflict region */
 static struct buffer	*magit_ediff_merged_bp;	/* the highlighted pane */
+static struct buffer	*magit_ediff_ours_bp;	/* ours side pane (syntax color) */
+static struct buffer	*magit_ediff_theirs_bp;	/* theirs side pane (syntax color) */
 #define MAGIT_EDIFF_HL_MAX 1024
 static struct line	*magit_ediff_hl[MAGIT_EDIFF_HL_MAX];
 static int		magit_ediff_hl_n;
@@ -1102,6 +1123,8 @@ magit_build(struct buffer *bp)
 		return (FALSE);
 	bp->b_flag |= BFREADONLY;
 
+	magit_status_bp = bp;		/* gate display.c's color hook on this */
+	magit_cell_color_reset();	/* freed lines may be reused; drop memo */
 	magit_meta_count = 0;
 	magit_skip = 0;
 	{
@@ -1308,6 +1331,23 @@ magit_plain_emit(void *ctx, const char *line, int kind, const char *path,
 	(void)addlinef((struct buffer *)ctx, "%s", (char *)line);
 }
 
+/* emit callback for *magit-commit*: record kind/path per line for syntax coloring. */
+static void
+magit_diff_emit(void *ctx, const char *line, int kind, const char *path, int hunk)
+{
+	(void)hunk;
+	if (magit_commit_meta_count < MAGIT_MAX_LINES) {
+		magit_commit_meta[magit_commit_meta_count].kind = kind;
+		if (path != NULL)
+			(void)strlcpy(magit_commit_meta[magit_commit_meta_count].path,
+			    path, sizeof(magit_commit_meta[magit_commit_meta_count].path));
+		else
+			magit_commit_meta[magit_commit_meta_count].path[0] = '\0';
+		magit_commit_meta_count++;
+	}
+	(void)addlinef((struct buffer *)ctx, "%s", (char *)line);
+}
+
 /* (Re)build the *magit-log* buffer + its per-line oid map. */
 static int
 magit_log_build(struct buffer *bp)
@@ -1391,6 +1431,158 @@ magit_cell_highlighted(struct buffer *bp, struct line *lp, int col)
 		    col < magit_ediff_ref[i].end)
 			return (1);
 	return (0);
+}
+
+/* The per-line memo cache for magit_cell_color; module-scope so a buffer
+ * rebuild can invalidate it (a freed line address can be reused). */
+static struct line	*magit_color_cached_lp;
+static uint8_t		 magit_color_kindcol[1024];
+/* Cached per-line resolved state — valid only when magit_color_cached_lp != NULL. */
+static const char	*magit_color_cached_path;	/* points into static meta arrays */
+static int		 magit_color_cached_is_diff;
+
+/* Invalidate the per-line color memo. Called after bclear() in each colored
+ * buffer's build path, before any new lines are allocated. */
+void
+magit_cell_color_reset(void)
+{
+	magit_color_cached_lp = NULL;
+	magit_color_cached_path = NULL;
+	magit_color_cached_is_diff = 0;
+}
+
+/* True for the syntax-colored buffers (status / commit / ediff panes). Lets
+ * display.c's per-cell hook gate on pointer compares instead of bfind(). */
+int
+magit_is_color_buffer(struct buffer *bp)
+{
+	return (bp != NULL && (bp == magit_status_bp || bp == magit_commit_bp ||
+	    bp == magit_ediff_merged_bp || bp == magit_ediff_ours_bp ||
+	    bp == magit_ediff_theirs_bp));
+}
+
+/*
+ * Returns the syntax token kind (0-7) for character index `ci` of a magit
+ * diff line in `bp`, or 0 if not a diff content line. The caller (display.c)
+ * has already gated on magit_is_color_buffer(), so `bp` is the status, commit,
+ * or one of the three ediff panes. Uses the Zig tokenizer via the C ABI;
+ * memoizes all per-line state (list walk, path resolution, kindcol) so the
+ * non-first-cell path does no list traversal — O(1) per cell after the first.
+ */
+int
+magit_cell_color(struct buffer *bp, struct line *lp, int ci)
+{
+	static NeomgSpan	 spans[256];
+	static size_t		 nspans;
+	const char		*path;
+	const char		*text;
+	uint8_t			 lang;
+	int			 len, off, idx, is_diff;
+	size_t			 k;
+
+	if (lp != magit_color_cached_lp) {
+		/*
+		 * First cell of a new line: resolve path/is_diff and fill kindcol.
+		 * All per-line work (including any list walk) lives inside this block;
+		 * subsequent cells return directly from kindcol without entering here.
+		 */
+		path = NULL;
+		is_diff = 0;
+
+		if (bp == magit_status_bp) {
+			/* Walk the line list once per line to find the meta index. */
+			struct line *lp2 = bfirstlp(bp);
+			for (idx = 0; idx < magit_meta_count && lp2 != bp->b_headp;
+			    idx++) {
+				if (lp2 == lp) {
+					if (magit_meta[idx].kind == MG_LINE_DIFF &&
+					    magit_meta[idx].path[0] != '\0') {
+						path = magit_meta[idx].path;
+						is_diff = 1;
+					}
+					break;
+				}
+				lp2 = lforw(lp2);
+			}
+		} else if (bp == magit_commit_bp) {
+			struct line *lp2 = bfirstlp(bp);
+			for (idx = 0; idx < magit_commit_meta_count &&
+			    lp2 != bp->b_headp; idx++) {
+				if (lp2 == lp) {
+					if (magit_commit_meta[idx].kind == MG_LINE_DIFF &&
+					    magit_commit_meta[idx].path[0] != '\0') {
+						path = magit_commit_meta[idx].path;
+						is_diff = 1;
+					}
+					break;
+				}
+				lp2 = lforw(lp2);
+			}
+		} else if ((bp == magit_ediff_merged_bp ||
+		    bp == magit_ediff_ours_bp ||
+		    bp == magit_ediff_theirs_bp) &&
+		    magit_ediff_path[0] != '\0') {
+			/* ediff panes: all lines are raw source (no +/-/space prefix).
+			 * For the merged pane, skip conflict-marker lines (<<<, |||,
+			 * ===, >>>) so they don't get spurious syntax color. */
+			text = ltext(lp);
+			len = llength(lp);
+			/* ltext() is not NUL-terminated and is exactly llength() bytes;
+			 * require >= 7 bytes before reading the 7-char marker prefix. */
+			if (bp == magit_ediff_merged_bp && len >= 7 &&
+			    (strncmp(text, "<<<<<<<", 7) == 0 ||
+			     strncmp(text, "|||||||", 7) == 0 ||
+			     strncmp(text, "=======", 7) == 0 ||
+			     strncmp(text, ">>>>>>>", 7) == 0)) {
+				/*
+				 * Conflict-marker line: cache lp with is_diff=0 so
+				 * later cells of this line return 0 immediately (no
+				 * re-walk), then return 0 for this cell.
+				 */
+				magit_color_cached_lp = lp;
+				magit_color_cached_path = NULL;
+				magit_color_cached_is_diff = 0;
+				return (0);
+			}
+			path = magit_ediff_path;
+			is_diff = 1;
+		}
+
+		/* Cache resolved metadata before potentially returning early. */
+		magit_color_cached_lp = lp;
+		magit_color_cached_path = path;
+		magit_color_cached_is_diff = is_diff;
+
+		if (!is_diff) {
+			memset(magit_color_kindcol, 0, sizeof(magit_color_kindcol));
+			return (0);
+		}
+
+		/* Tokenize and fill kindcol for this line. */
+		text = ltext(lp);
+		len = llength(lp);
+		/* diff buffers: skip +/-/space origin char; ediff panes: no prefix */
+		off = (bp != magit_ediff_merged_bp && bp != magit_ediff_ours_bp &&
+		    bp != magit_ediff_theirs_bp &&
+		    len > 0 && (text[0] == '+' || text[0] == '-' ||
+		    text[0] == ' ')) ? 1 : 0;
+		lang = neomg_lang_from_path(path);
+		nspans = neomg_highlight_line(lang, text + off, (size_t)(len - off),
+		    spans, 256);
+		memset(magit_color_kindcol, 0, sizeof(magit_color_kindcol));
+		for (k = 0; k < nspans; k++) {
+			int j;
+			for (j = 0; j < spans[k].len &&
+			    (spans[k].start + off + j) < 1024; j++)
+				magit_color_kindcol[spans[k].start + off + j] =
+				    spans[k].kind;
+		}
+		/* magit_color_cached_lp already set above */
+	}
+	/* Non-first-cell path: no list walk, return from cached kindcol in O(1). */
+	if (!magit_color_cached_is_diff)
+		return (0);
+	return (ci >= 0 && ci < 1024) ? magit_color_kindcol[ci] : 0;
 }
 
 /* Point the window showing `bp` at `dot` and force a redraw. */
@@ -1491,6 +1683,9 @@ magit_ediff_build_all(struct buffer *m, struct buffer *o, struct buffer *t)
 	t->b_flag |= BFIGNDIRTY; (void)bclear(t); t->b_flag |= BFREADONLY;
 	magit_ediff_hl_n = magit_ediff_oreg_n = magit_ediff_treg_n = 0;
 	magit_ediff_merged_bp = m;
+	magit_ediff_ours_bp = o;
+	magit_ediff_theirs_bp = t;
+	magit_cell_color_reset();	/* freed lines may be reused; drop memo */
 
 	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (0);
@@ -1659,6 +1854,9 @@ magit_ediff_quit(int f, int n)
 
 	magit_ediff_active = 0;
 	magit_ediff_merged_bp = NULL;
+	magit_ediff_ours_bp = NULL;
+	magit_ediff_theirs_bp = NULL;
+	magit_cell_color_reset();
 	magit_ediff_hl_n = 0;
 	magit_ediff_ref_n = 0;
 	(void)onlywind(f, n);
@@ -2036,7 +2234,10 @@ magit_show_rev(const char *rev)
 	if (bclear(bp) != TRUE)
 		return (FALSE);
 	bp->b_flag |= BFREADONLY;
-	if (mg_magit_commit_diff(cwd, rev, magit_plain_emit, bp) == 0) {
+	magit_commit_bp = bp;		/* gate display.c's color hook on this */
+	magit_cell_color_reset();	/* freed lines may be reused; drop memo */
+	magit_commit_meta_count = 0;
+	if (mg_magit_commit_diff(cwd, rev, magit_diff_emit, bp) == 0) {
 		ewprintf("No diff for %s", rev);
 		return (FALSE);
 	}

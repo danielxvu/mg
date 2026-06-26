@@ -106,4 +106,9 @@ if(ENABLE_NATIVE_MAGIT)
     add_executable(neomg_bench ${CMAKE_SOURCE_DIR}/bench/status_bench.cpp)
     target_link_libraries(neomg_bench PRIVATE mg_magit)
     target_include_directories(neomg_bench PRIVATE ${CMAKE_SOURCE_DIR}/src/magit)
+
+    # FM-SYNTAX-HIGHLIGHT: C++ smoke test calling the Zig tokenizer C ABI.
+    add_executable(test_syntax_bridge test_syntax_bridge.cpp)
+    target_link_libraries(test_syntax_bridge PRIVATE doctest::doctest mg_magit)
+    doctest_discover_tests(test_syntax_bridge)
 endif()

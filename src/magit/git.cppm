@@ -395,6 +395,7 @@ struct diff_line {
 struct hunk {
     std::string header;            // e.g. "@@ -1,3 +1,4 @@"
     std::vector<diff_line> lines;
+    std::string path;              // file path (new_file.path from the delta)
 };
 
 std::expected<std::vector<mg::magit::file_status>, error>
@@ -3490,6 +3491,14 @@ static std::vector<hunk> diff_to_hunks(git_diff *diff)
             continue;
         detail::patch_ptr patch(raw_patch);
 
+        /* Capture the file path from the delta (prefer new_file for renames). */
+        const git_diff_delta *delta = git_patch_get_delta(patch.get());
+        std::string file_path;
+        if (delta && delta->new_file.path)
+            file_path = delta->new_file.path;
+        else if (delta && delta->old_file.path)
+            file_path = delta->old_file.path;
+
         const size_t nhunks = git_patch_num_hunks(patch.get());
         for (size_t hi = 0; hi < nhunks; ++hi) {
             const git_diff_hunk *gh = nullptr;
@@ -3498,6 +3507,7 @@ static std::vector<hunk> diff_to_hunks(git_diff *diff)
                 continue;
             hunk h;
             h.header.assign(gh->header, gh->header_len);
+            h.path = file_path;
             for (size_t li = 0; li < nlines; ++li) {
                 const git_diff_line *gl = nullptr;
                 if (git_patch_get_line_in_hunk(&gl, patch.get(), hi, li) != 0)

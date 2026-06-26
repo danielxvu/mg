@@ -4,4 +4,9 @@
 # macOS build trees carry extended attributes (e.g. libtool's __.SYMDEF) that
 # break Docker's context sender if they leak in.
 build*/
+# Zig build outputs/caches are host-arch (built locally on macOS/arm64); never
+# leak them into a Linux container build -- ninja could then skip rebuilding the
+# .a and link the wrong architecture. The container builds zig fresh.
+**/zig-out/
+**/.zig-cache/
 .git/

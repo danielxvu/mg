@@ -21,3 +21,8 @@ build/
 build-*/
 cmake-build-*/
 src/config.h
+
+# Zig build artifacts (FM-SYNTAX-HIGHLIGHT)
+syntax/zig-out/
+syntax/.zig-cache/
+.superpowers/
