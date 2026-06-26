@@ -19,6 +19,7 @@
 
 #include "bridge.h"
 
+import mg.git;
 import mg.magit.proclog;
 
 namespace fs = std::filesystem;
@@ -2250,5 +2251,62 @@ TEST_CASE("tag creation logs a ≈ git tag entry")
             found = true;
         }
     CHECK(found);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("mg_magit_reflog_buffer emits MG_LINE_COMMIT lines with oids + HEAD@{N}")
+{
+    auto dir = make_repo_full(); // one commit (HEAD) + staged + untracked
+    struct row { std::string line; int kind; std::string path; };
+    std::vector<row> rows;
+    int n = mg_magit_reflog_buffer(
+        dir.string().c_str(), 100,
+        [](void *ctx, const char *line, int kind, const char *path, int) {
+            static_cast<std::vector<row> *>(ctx)->push_back(
+                {line, kind, path ? path : ""});
+        },
+        &rows);
+
+    REQUIRE(n == static_cast<int>(rows.size()));
+    REQUIRE(!rows.empty());
+    // Newest entry: HEAD@{0}, MG_LINE_COMMIT, full oid carried in path.
+    CHECK(rows[0].kind == MG_LINE_COMMIT);
+    CHECK(rows[0].line.find("HEAD@{0}") != std::string::npos);
+    CHECK(rows[0].path.size() == 40);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("resetting HEAD to a reflog oid moves HEAD there (reset-at-point path)")
+{
+    // make_repo_full has one commit; add a second so HEAD@{1} != HEAD@{0}.
+    auto dir = make_repo_full();
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_open(&repo, dir.string().c_str()) == 0);
+    std::ofstream(dir / "c.txt") << "cee";
+    git_index *idx = nullptr; REQUIRE(git_repository_index(&idx, repo) == 0);
+    REQUIRE(git_index_add_bypath(idx, "c.txt") == 0);
+    REQUIRE(git_index_write(idx) == 0);
+    git_oid toid; REQUIRE(git_index_write_tree(&toid, idx) == 0);
+    git_tree *tree = nullptr; REQUIRE(git_tree_lookup(&tree, repo, &toid) == 0);
+    git_signature *sig = nullptr; REQUIRE(git_signature_now(&sig, "T", "t@t") == 0);
+    git_oid head; REQUIRE(git_reference_name_to_id(&head, repo, "HEAD") == 0);
+    git_commit *parent = nullptr; REQUIRE(git_commit_lookup(&parent, repo, &head) == 0);
+    const git_commit *parents[1] = {parent};
+    git_oid c2; REQUIRE(git_commit_create(&c2, repo, "HEAD", sig, sig, nullptr,
+                                          "second", tree, 1, parents) == 0);
+    git_signature_free(sig); git_tree_free(tree); git_commit_free(parent);
+    git_index_free(idx); git_repository_free(repo); git_libgit2_shutdown();
+
+    auto rl = mg::git::reflog(dir.string(), 100);
+    REQUIRE(rl.has_value()); REQUIRE(rl->size() >= 2);
+    const std::string prev = rl->at(1).oid; // HEAD@{1} = the first commit
+
+    // mixed reset (mode 1) to that oid — the editor's x m path.
+    CHECK(mg_magit_reset(dir.string().c_str(), prev.c_str(), 1) == 1);
+
+    auto head2 = mg::git::read_head(dir.string());
+    REQUIRE(head2.has_value());
+    CHECK(prev.rfind(head2->short_oid, 0) == 0); // HEAD now at the older commit
     fs::remove_all(dir);
 }

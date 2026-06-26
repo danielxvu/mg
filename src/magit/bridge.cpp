@@ -971,6 +971,21 @@ extern "C" int mg_magit_log_buffer(const char *repo_path, int n_commits,
     return n;
 }
 
+extern "C" int mg_magit_reflog_buffer(const char *repo, int n,
+                                      mg_magit_emit_fn emit, void *ctx)
+{
+    auto rl = mg::git::reflog(repo ? repo : ".", n);
+    if (!rl)
+        return 0;
+    int count = 0;
+    for (const auto &e : *rl) {
+        std::string text = e.short_oid + " " + e.selector + " " + e.message;
+        emit(ctx, text.c_str(), MG_LINE_COMMIT, e.oid.c_str(), 0);
+        ++count;
+    }
+    return count;
+}
+
 extern "C" int mg_magit_process_log(mg_magit_emit_fn emit, void *ctx)
 {
     auto entries = mg::magit::proclog::snapshot();

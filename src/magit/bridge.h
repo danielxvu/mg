@@ -88,6 +88,11 @@ int mg_magit_log_buffer(const char *repo_path, int n, mg_magit_emit_fn emit,
 int mg_magit_log_file_buffer(const char *repo_path, const char *file, int n,
                              mg_magit_emit_fn emit, void *ctx);
 
+/* Stream HEAD's reflog newest-first as MG_LINE_COMMIT lines:
+ * "<short_oid> HEAD@{i} <message>", full oid in `path`. Returns the line count. */
+int mg_magit_reflog_buffer(const char *repo, int n, mg_magit_emit_fn emit,
+                           void *ctx);
+
 /* FM-LP: CLI-backed log with graph / range / pickaxe. graph: 0/1. range: ""
  * or NULL = HEAD; else "A..B". file: "" or NULL = repo-wide. pickaxe_kind:
  * 0 none / 'S' / 'G' with pickaxe_term. n = -n limit (0 = none). Commit rows
