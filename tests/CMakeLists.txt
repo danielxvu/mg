@@ -81,6 +81,11 @@ if(ENABLE_NATIVE_MAGIT)
     target_link_libraries(test_git PRIVATE doctest::doctest mg_magit)
     doctest_discover_tests(test_git)
 
+    add_executable(test_proclog test_proclog.cpp)
+    target_link_libraries(test_proclog PRIVATE doctest::doctest mg_magit)
+    target_include_directories(test_proclog PRIVATE ${CMAKE_SOURCE_DIR}/src/magit)
+    doctest_discover_tests(test_proclog)
+
     add_executable(test_bridge test_bridge.cpp)
     target_link_libraries(test_bridge PRIVATE doctest::doctest mg_magit)
     doctest_discover_tests(test_bridge)

@@ -10,6 +10,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <cstdio>
 #include <cstring>
 #include <deque>
 #include <expected>
@@ -28,6 +29,7 @@ import mg.coro;
 import mg.fswatch;
 import mg.git;
 import mg.magit;
+import mg.magit.proclog;
 
 // Map a rebase outcome to the bridge code: 1 done, 2 paused on conflicts,
 // 0 failure. (Defined here so every rebase-style bridge fn can use it.)
@@ -959,6 +961,51 @@ extern "C" int mg_magit_log_buffer(const char *repo_path, int n_commits,
         emit(ctx, (c.short_oid + " " + c.summary).c_str(), MG_LINE_COMMIT,
              c.oid.c_str(), -1);
         ++n;
+    }
+    return n;
+}
+
+extern "C" int mg_magit_process_log(mg_magit_emit_fn emit, void *ctx)
+{
+    auto entries = mg::magit::proclog::snapshot();
+    if (entries.empty()) {
+        emit(ctx, "No git operations recorded this session.", MG_LINE_OTHER,
+             nullptr, 0);
+        return 1;
+    }
+    int n = 0;
+    // newest first
+    for (auto it = entries.rbegin(); it != entries.rend(); ++it) {
+        const auto &e = *it;
+        std::string head;
+        if (e.kind == '$') {
+            head = "$ " + e.command + "  (";
+            // duration as seconds with one decimal, then ok/fail
+            char buf[32];
+            std::snprintf(buf, sizeof buf, "%.1fs", e.duration_ms / 1000.0);
+            head += buf;
+            head += e.ok ? ", ok)" : ", failed)";
+        } else { // '~' -> libgit2
+            head = "\xE2\x89\x88 " + e.command + "  (via libgit2"; // ≈ = U+2248
+            head += e.ok ? ")" : ", failed)";
+        }
+        emit(ctx, head.c_str(), MG_LINE_PROCESS_CMD, nullptr, 0);
+        ++n;
+        // output lines, indented two spaces
+        const std::string &out = e.output;
+        std::size_t start = 0;
+        while (start < out.size()) {
+            std::size_t nl = out.find('\n', start);
+            std::string line = out.substr(
+                start, nl == std::string::npos ? std::string::npos : nl - start);
+            if (!line.empty() || nl != std::string::npos) {
+                emit(ctx, ("  " + line).c_str(), MG_LINE_PROCESS_OUT, nullptr, 0);
+                ++n;
+            }
+            if (nl == std::string::npos)
+                break;
+            start = nl + 1;
+        }
     }
     return n;
 }

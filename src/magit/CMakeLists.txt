@@ -12,7 +12,7 @@ pkg_check_modules(GIT2 REQUIRED IMPORTED_TARGET libgit2)
 
 add_library(mg_magit)
 target_sources(mg_magit
-    PUBLIC FILE_SET CXX_MODULES FILES coro.cppm magit.cppm fswatch.cppm git.cppm)
+    PUBLIC FILE_SET CXX_MODULES FILES coro.cppm magit.cppm fswatch.cppm git.cppm proclog.cppm)
 # bridge.cpp is a regular TU (imports the modules above) exposing the extern "C"
 # API in bridge.h to the legacy C core.
 target_sources(mg_magit PRIVATE bridge.cpp)

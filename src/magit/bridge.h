@@ -58,6 +58,8 @@ int mg_magit_modeline(char *buf, size_t buflen);
 #define MG_LINE_SUBMODULE 12  /* a submodule entry (path = submodule path) */
 #define MG_LINE_CONFLICT  13  /* an unmerged path (path = file path) */
 #define MG_LINE_CONFLICT_HUNK 14 /* a *magit-ediff* line; hunk = region index */
+#define MG_LINE_PROCESS_CMD   15  /* a process-log command line ($ or ≈) */
+#define MG_LINE_PROCESS_OUT   16  /* an output line under a process-log command */
 
 /* Compose the *magit-status* buffer for the repo at `repo_path`, calling
  * `emit(ctx, line, kind, path, hunk)` once per line. Files whose path is in
@@ -307,6 +309,13 @@ int mg_magit_resolve_conflict_hunk(const char *repo_path, const char *path,
  * the line count, 0 on error. (Seeds the *magit-blame* buffer.) */
 int mg_magit_blame_file(const char *repo_path, const char *path,
                         mg_magit_emit_fn emit, void *ctx);
+
+/* Stream the session's git-operation log, newest entry first. Each entry emits
+ * one MG_LINE_PROCESS_CMD header ("$ <cmd>  (1.2s, ok)" for real subprocesses,
+ * "≈ <cmd>  (via libgit2)" for in-process ops) followed by its output as
+ * MG_LINE_PROCESS_OUT lines (indented). Emits a single MG_LINE_OTHER
+ * empty-state line when nothing has been logged. Returns the line count. */
+int mg_magit_process_log(mg_magit_emit_fn emit, void *ctx);
 
 /* Set / remove the git note on commit `rev`. 1 ok, 0 fail. (The note, if any,
  * is shown in the *magit-commit* view.) */
