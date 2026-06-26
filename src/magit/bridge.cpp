@@ -656,11 +656,13 @@ status_view gather_status_view(const char *repo)
     // call is unconditional and byte-identical to the old repo_status call in
     // the OFF build.
     //
-    // orig_path (renames/copies): hybrid_status leaves orig_path empty for
-    // staged renames; compose_status_view renders renames using only e->path
-    // (the destination) so orig_path is not consulted here. Populating it is a
-    // documented Phase 2 gap -- it matters for external callers that inspect
-    // orig_path directly, but not for this status buffer.
+    // orig_path (renames/copies): staged renames are detected (libgit2
+    // HEAD->index rename detection in the oracle; git_diff_find_similar in the
+    // hybrid's X column) and carry their source path, which compose_status_view
+    // renders Magit-style as "old -> new". Worktree (unstaged) renames are still
+    // shown as a delete+add pair: the hybrid's Y column is the Zig walker, which
+    // has no content-similarity detector, so enabling INDEX_TO_WORKDIR rename
+    // detection in the oracle alone would desync it from the hybrid.
     if (auto s = mg::git::hybrid_status(repo))
         v.status = std::move(*s);
     if (auto c = mg::git::conflicts(repo))
@@ -761,11 +763,18 @@ int compose_status_view(const status_view &v, const char *repo_path,
             out(std::string(title) + " (" + std::to_string(vec.size()) + ")",
                 MG_LINE_SECTION);
             for (const auto *e : vec) {
+                // Renames/copies show both endpoints Magit-style ("old -> new");
+                // the row's path stays the destination so staging/visiting still
+                // target the file. The arrow is earned by whichever column this
+                // section renders (index for staged, worktree for unstaged).
+                S code = use_index ? e->index : e->worktree;
+                std::string name =
+                    (code == S::renamed || code == S::copied) && e->orig_path
+                        ? *e->orig_path + " -> " + e->path
+                        : e->path;
                 std::string text =
-                    labeled ? "  " + std::string(state_word(use_index ? e->index
-                                                                      : e->worktree)) +
-                                  "  " + e->path
-                            : "  " + e->path;
+                    labeled ? "  " + std::string(state_word(code)) + "  " + name
+                            : "  " + name;
                 out(text, kind, e->path.c_str());
                 if (diffable && is_expanded(e->path))
                     emit_diff(e->path, use_index);

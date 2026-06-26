@@ -29,14 +29,18 @@ two-character `XY` status code:
 | ` M path` | Worktree-modified (content differs from the index) |
 | ` D path` | Worktree-deleted (tracked file absent from the worktree) |
 
-**Phase 2 gap — `orig_path` (renames/copies):** `hybrid_status` leaves
-`file_status.orig_path` empty for staged renames.  The `mg_magit_status_buffer`
-renderer in `bridge.cpp` does not read `orig_path` — it renders renames using
-only `e->path` (the destination path) — so there is no visible gap in the
-status buffer output.  External callers that inspect `orig_path` directly will
-see an empty optional for staged renames in the hybrid path.  Populating it
-requires `staged_status` to return the old path, and `hybrid_status` to set it;
-this is deferred to a future phase.
+**`orig_path` (renames/copies):** staged renames are detected and carry their
+source path.  `staged_status` runs `git_diff_find_similar` (explicit
+`GIT_DIFF_FIND_RENAMES`, so detection is deterministic regardless of the repo's
+`diff.renames` config) and `hybrid_status` propagates `orig_path` onto the X
+column; the oracle (`repo_status`) mirrors this via
+`GIT_STATUS_OPT_RENAMES_HEAD_TO_INDEX`.  `mg_magit_status_buffer` renders the
+pair Magit-style as `renamed  old -> new` while keeping the row's path on the
+destination (so staging/visiting still target the file).  **Worktree (unstaged)
+renames are intentionally still shown as a delete+add pair:** the hybrid's Y
+column is the Zig walker, which has no content-similarity detector, so enabling
+`GIT_STATUS_OPT_RENAMES_INDEX_TO_WORKDIR` in the oracle alone would desync it
+from the hybrid (the equivalence tests would fail).
 
 **Still deferred:** conflicts (`UU`/`AA`/`DD`), index v3/v4 extended flags,
 submodule/sparse-checkout graceful fallback.
@@ -104,9 +108,10 @@ staged/index-vs-HEAD logic is therefore in C++, not Zig.
 
 **Remaining deferred items (pure-Zig implementation):**
 - **Conflicts** (`UU`, `AA`, `DD`, etc.) from the index conflict-flag bits.
+  The hybrid fail-closes a conflicted index to a full libgit2 `repo_status`
+  scan, so conflicts render correctly — they're just not handled in Zig.
 - Index v3/v4 extended flags and submodule/sparse-checkout graceful fallback.
-- **`orig_path` for staged renames:** the hybrid path leaves `orig_path` empty.
-  The status buffer in `bridge.cpp` does not use `orig_path` (renders renames
-  by destination path only), so this is a Phase 2 gap with no visible effect
-  on the status buffer output.  External callers that inspect `orig_path`
-  directly would need this populated.
+- **Worktree-rename detection:** unstaged renames show as a delete+add pair
+  because the Zig walker has no content-similarity detector (staged renames,
+  detected by libgit2 in the X column, render as `old -> new`). Adding this
+  would require hashing/comparing blob contents in the walker.

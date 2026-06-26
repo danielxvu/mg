@@ -91,6 +91,35 @@ void commit_file(const fs::path &dir, const char *name, const std::string &body,
     git_repository_free(repo);
 }
 
+// A repo with a STAGED rename: old.txt is committed, then moved to new.txt and
+// the move staged (HEAD has old.txt, the index has new.txt, byte-identical).
+// libgit2 HEAD->index rename detection coalesces this into ONE renamed entry
+// whose source path is old.txt.
+fs::path make_staged_rename_repo()
+{
+    auto dir = make_temp_dir();
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_init(&repo, dir.string().c_str(), 0) == 0);
+    git_repository_free(repo);
+
+    commit_file(dir, "old.txt", "alpha\nbravo\ncharlie\ndelta\n", "add old");
+
+    // Move on disk, then restage: drop old.txt and add new.txt to the index.
+    fs::rename(dir / "old.txt", dir / "new.txt");
+    REQUIRE(git_repository_open(&repo, dir.string().c_str()) == 0);
+    git_index *idx = nullptr;
+    REQUIRE(git_repository_index(&idx, repo) == 0);
+    REQUIRE(git_index_remove_bypath(idx, "old.txt") == 0);
+    REQUIRE(git_index_add_bypath(idx, "new.txt") == 0);
+    REQUIRE(git_index_write(idx) == 0);
+    git_index_free(idx);
+    git_repository_free(repo);
+
+    git_libgit2_shutdown();
+    return dir;
+}
+
 // A repo whose committed file has two far-apart regions changed on disk,
 // producing two independent hunks in the unstaged diff.
 fs::path make_repo_with_two_hunks()
@@ -1285,6 +1314,24 @@ TEST_CASE("repo_status fails on a path that is not a git repository")
     auto dir = make_temp_dir(); // empty dir, no .git
     auto st = mg::git::repo_status(dir.string());
     CHECK_FALSE(st.has_value());
+    fs::remove_all(dir);
+}
+
+TEST_CASE("repo_status coalesces a staged rename and records the source path")
+{
+    auto dir = make_staged_rename_repo();
+
+    auto st = mg::git::repo_status(dir.string());
+    REQUIRE(st.has_value());
+    REQUIRE(st->size() == 1); // ONE renamed entry, not delete-old + add-new
+
+    const auto &e = st->front();
+    CHECK(e.index == status::renamed);
+    CHECK(e.worktree == status::unmodified);
+    CHECK(e.path == "new.txt");          // destination
+    REQUIRE(e.orig_path.has_value());
+    CHECK(*e.orig_path == "old.txt");    // source
+
     fs::remove_all(dir);
 }
 
@@ -2946,6 +2993,41 @@ TEST_CASE("hybrid_status == repo_status with only staged changes (X only)")
     REQUIRE(h.has_value());
     REQUIRE(g.has_value());
     CHECK(status_set(*h) == status_set(*g));
+    fs::remove_all(dir);
+}
+
+TEST_CASE("staged_status coalesces a staged rename with its source path")
+{
+    auto dir = make_staged_rename_repo();
+    auto st = mg::git::staged_status(dir.string());
+    REQUIRE(st.has_value());
+    REQUIRE(st->size() == 1); // ONE renamed entry, not add-new + delete-old
+    CHECK(st->front().x == mg::magit::status::renamed);
+    CHECK(st->front().path == "new.txt");
+    REQUIRE(st->front().orig_path.has_value());
+    CHECK(*st->front().orig_path == "old.txt");
+    fs::remove_all(dir);
+}
+
+TEST_CASE("hybrid_status == repo_status on a staged rename, carrying orig_path")
+{
+    auto dir = make_staged_rename_repo();
+    auto h = mg::git::hybrid_status(dir.string());
+    auto g = mg::git::repo_status(dir.string());
+    REQUIRE(h.has_value());
+    REQUIRE(g.has_value());
+    CHECK(status_set(*h) == status_set(*g)); // both: one renamed new.txt entry
+
+    // The hybrid carries the rename source on its staged (X) column.
+    bool saw = false;
+    for (const auto &e : *h)
+        if (e.path == "new.txt") {
+            CHECK(e.index == mg::magit::status::renamed);
+            REQUIRE(e.orig_path.has_value());
+            CHECK(*e.orig_path == "old.txt");
+            saw = true;
+        }
+    CHECK(saw);
     fs::remove_all(dir);
 }
 
