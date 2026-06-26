@@ -186,25 +186,23 @@ class monitor {
 public:
     explicit monitor(std::string repo) : repo_(std::move(repo))
     {
-        // Watch the worktree root and .git recursively, so nested worktree
-        // edits and .git/refs|logs (commits, branch switches) wake the monitor.
-        // Exclude .git/objects (churns hugely, never affects status) and, via
-        // the git-aware predicate, every gitignored tree (node_modules, build/,
-        // …) -- those can't change `git status` and would otherwise dominate
-        // the watch set (e.g. 50k dirs where only ~1k are tracked).
-        std::vector<std::string> roots{repo_, repo_ + "/.git"};
-        std::vector<std::string> ignores{repo_ + "/.git/objects"};
-        if (auto w = mg::fswatch::watcher::create(
-                roots, ignores, mg::git::make_ignore_predicate(repo_)))
-            watcher_.emplace(std::move(*w));
+        // The watcher's recursive tree walk opens one fd per directory (macOS
+        // kqueue) and can take seconds on a large repo -- so it is built on the
+        // monitor thread (see run()), NOT here. Doing it here would block
+        // mg_magit_start and freeze editor startup until the walk finished. The
+        // ctor only launches the thread, so mg_magit_start returns immediately.
         thread_ = std::thread([this] { run(); });
     }
 
     ~monitor()
     {
         stop_.request_stop();
-        if (watcher_)
-            watcher_->wake(); // release a blocked wait() immediately
+        {
+            // watcher_ is created on the monitor thread (run()); guard the read.
+            std::lock_guard lk(mu_);
+            if (watcher_)
+                watcher_->wake(); // release a blocked wait() immediately
+        }
         if (thread_.joinable())
             thread_.join();
     }
@@ -331,7 +329,24 @@ private:
 
     void run()
     {
-        full_refresh(); // initial baseline, before any event
+        full_refresh(); // initial baseline, before any event (one status scan)
+
+        // Build the recursive watcher HERE, on the monitor thread: the tree walk
+        // opens one fd per directory (macOS kqueue) and can take seconds on a
+        // large repo. The initial status above is already published, so the UI
+        // is fully responsive while this runs in the background. Watch the
+        // worktree root + .git (so commits/branch switches wake us); exclude
+        // .git/objects and, via the git-aware predicate, every gitignored tree.
+        {
+            std::vector<std::string> roots{repo_, repo_ + "/.git"};
+            std::vector<std::string> ignores{repo_ + "/.git/objects"};
+            auto w = mg::fswatch::watcher::create(
+                roots, ignores, mg::git::make_ignore_predicate(repo_));
+            if (w) {
+                std::lock_guard lk(mu_);
+                watcher_.emplace(std::move(*w));
+            }
+        }
         if (!watcher_)
             return;
         while (!stop_.stop_requested()) {
