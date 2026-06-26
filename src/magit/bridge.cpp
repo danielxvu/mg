@@ -724,6 +724,13 @@ int compose_status_view(const status_view &v, const char *repo_path,
             out("Head:     " + v.head->short_oid + " " + v.head->summary);
     }
 
+    if (mg::git::diff_view_context() != 3 || mg::git::diff_view_ignore_ws()) {
+        std::string dv = "Diff:     -U" + std::to_string(mg::git::diff_view_context());
+        if (mg::git::diff_view_ignore_ws())
+            dv += " -w";
+        out(dv);
+    }
+
     if (v.upstream && v.upstream->has_upstream) {
         std::string line = "Upstream: " + v.upstream->name;
         if (v.upstream->ahead != 0 || v.upstream->behind != 0)
@@ -1219,11 +1226,18 @@ extern "C" int mg_magit_head_message(const char *repo_path, char *buf,
     return static_cast<int>(len);
 }
 
+extern "C" void mg_magit_set_diff_view(int context, int ignore_ws)
+{
+    mg::git::set_diff_view(context, ignore_ws != 0);
+}
+
 extern "C" int mg_magit_stage_hunk(const char *repo_path, const char *path,
                                    int hunk)
 {
     if (repo_path == nullptr || path == nullptr || hunk < 0)
         return 0;
+    if (mg::git::diff_view_ignore_ws())
+        return -2;   // can't stage from a whitespace-ignored diff
     return mg::git::stage_hunk(repo_path, path, hunk).has_value() ? 1 : 0;
 }
 
@@ -1232,6 +1246,8 @@ extern "C" int mg_magit_unstage_hunk(const char *repo_path, const char *path,
 {
     if (repo_path == nullptr || path == nullptr || hunk < 0)
         return 0;
+    if (mg::git::diff_view_ignore_ws())
+        return -2;   // can't stage from a whitespace-ignored diff
     return mg::git::unstage_hunk(repo_path, path, hunk).has_value() ? 1 : 0;
 }
 
@@ -1241,6 +1257,8 @@ extern "C" int mg_magit_stage_region(const char *repo_path, const char *path,
     if (repo_path == nullptr || path == nullptr || hunk < 0 || first < 0 ||
         last < first)
         return 0;
+    if (mg::git::diff_view_ignore_ws())
+        return -2;   // can't stage from a whitespace-ignored diff
     return mg::git::stage_region(repo_path, path, hunk, first, last).has_value()
                ? 1
                : 0;
@@ -1252,6 +1270,8 @@ extern "C" int mg_magit_unstage_region(const char *repo_path, const char *path,
     if (repo_path == nullptr || path == nullptr || hunk < 0 || first < 0 ||
         last < first)
         return 0;
+    if (mg::git::diff_view_ignore_ws())
+        return -2;   // can't stage from a whitespace-ignored diff
     return mg::git::unstage_region(repo_path, path, hunk, first, last)
                    .has_value()
                ? 1
@@ -1264,6 +1284,8 @@ extern "C" int mg_magit_discard_region(const char *repo_path, const char *path,
     if (repo_path == nullptr || path == nullptr || hunk < 0 || first < 0 ||
         last < first)
         return 0;
+    if (mg::git::diff_view_ignore_ws())
+        return -2;   // can't stage from a whitespace-ignored diff
     return mg::git::discard_region(repo_path, path, hunk, first, last)
                    .has_value()
                ? 1

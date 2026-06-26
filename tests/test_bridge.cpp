@@ -2311,3 +2311,29 @@ TEST_CASE("resetting HEAD to a reflog oid moves HEAD there (reset-at-point path)
     CHECK(prev.rfind(head2->short_oid, 0) == 0); // HEAD now at the older commit
     fs::remove_all(dir);
 }
+
+TEST_CASE("staging a hunk is blocked (-2) while ignore-whitespace is on")
+{
+    auto dir = make_repo_unstaged(); // a tracked file with an unstaged hunk
+    mg_magit_set_diff_view(3, /*ignore_ws=*/1);
+    CHECK(mg_magit_stage_hunk(dir.string().c_str(), "a.txt", 0) == -2);
+    mg_magit_set_diff_view(3, 0);     // ws off -> normal staging (1) or 0
+    CHECK(mg_magit_stage_hunk(dir.string().c_str(), "a.txt", 0) != -2);
+    mg_magit_set_diff_view(3, 0);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("status header shows the diff-view indicator when non-default")
+{
+    auto dir = make_repo_full();
+    mg_magit_set_diff_view(6, 1);
+    std::vector<std::string> lines;
+    mg_magit_status_buffer(dir.string().c_str(), nullptr, 0,
+        [](void *c, const char *l, int, const char *, int) {
+            static_cast<std::vector<std::string> *>(c)->emplace_back(l); }, &lines);
+    bool shown = false;
+    for (auto &l : lines) if (l.find("-U6") != std::string::npos && l.find("-w") != std::string::npos) shown = true;
+    CHECK(shown);
+    mg_magit_set_diff_view(3, 0);     // reset (default -> no indicator)
+    fs::remove_all(dir);
+}
