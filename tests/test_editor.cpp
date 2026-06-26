@@ -167,6 +167,67 @@ TEST_CASE("l h opens the *magit-reflog* buffer from magit-status")
     CHECK(ok);
 }
 
+/*
+ * Regression test for the shared oid-map wrong-oid hazard (FM-REFLOG review):
+ * open *magit-log* (builds oid map for that buffer), then open *magit-reflog*
+ * (rebuilds the map for the reflog buffer), then switch back to *magit-log*
+ * via C-x b without a rebuild.  RET must produce "Not on a commit" -- the
+ * guard `curbp != magit_log_oid_bp` fires and returns NULL -- never a diff
+ * built from the reflog entry that happened to sit at the same row index.
+ */
+TEST_CASE("RET in *magit-log* after switching from *magit-reflog* shows Not on a commit")
+{
+    auto repo = make_repo();
+    sh(repo.string(), "git commit --allow-empty -m second");
+    const std::string repofile = (repo / "tracked.txt").string();
+
+    winsize ws{}; ws.ws_row = 40; ws.ws_col = 100;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) {
+        ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", repofile.c_str(), (char *)nullptr);
+        _exit(127);
+    }
+    bool ok = false;
+    if (wait_for(master, "tracked.txt", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x1bxmagit-status\r", 15);
+        if (wait_for(master, "On branch", std::chrono::seconds(8))) {
+            // l l: open the log buffer (map built for *magit-log*)
+            (void)!::write(master, "ll", 2);
+            if (wait_for(master, "second", std::chrono::seconds(8))) {
+                // q: close log, return to *magit-status* so l h is available
+                (void)!::write(master, "q", 1);
+                if (wait_for(master, "On branch", std::chrono::seconds(8))) {
+                    // l h: open the reflog (map rebuilt for *magit-reflog*)
+                    (void)!::write(master, "lh", 2);
+                    if (wait_for(master, "HEAD@{0}", std::chrono::seconds(8))) {
+                        // C-x b *magit-log* RET: switch back without rebuilding
+                        // \x18 = C-x, then 'b' triggers usebuffer prompt
+                        const char switchbuf[] = "\x18""b*magit-log*\r";
+                        (void)!::write(master, switchbuf, sizeof switchbuf - 1);
+                        // wait for the log buffer to be current again
+                        if (wait_for(master, "second", std::chrono::seconds(8))) {
+                            // RET on what was a commit line -- guard must fire
+                            (void)!::write(master, "\r", 1);
+                            // safe outcome: stale-map guard returns NULL
+                            ok = wait_for(master, "Not on a commit",
+                                std::chrono::seconds(8));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    const char quit[] = "\x18\x03";
+    (void)!::write(master, quit, sizeof quit - 1);
+    for (int i = 0; i < 20; ++i) { int st = 0; if (::waitpid(pid, &st, WNOHANG) == pid) break; usleep(100000); }
+    ::kill(pid, SIGKILL); ::waitpid(pid, nullptr, 0); ::close(master);
+    fs::remove_all(repo);
+    CHECK(ok);
+}
+
 TEST_CASE("$ opens the *magit-process* buffer from magit-status")
 {
     auto repo = make_repo();

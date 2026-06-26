@@ -208,10 +208,18 @@ static struct buffer	*magit_commit_bp;
 static char	magit_expanded[MAGIT_MAX_EXPANDED][PATH_MAX];
 static int	magit_expanded_count;
 
-/* For *magit-log*: the full commit oid per buffer line ("" for non-commits). */
+/*
+ * Per-line oid map shared by *magit-log* AND *magit-reflog*.  The map is
+ * rebuilt by magit_log_build(), magit_reflog_build(), and the async log-file
+ * wake (MG_ASYNC_LOG_FILE).  magit_log_oid_bp records which buffer owns the
+ * current map; magit_log_oid_at_point() returns NULL when curbp differs from
+ * that owner so a stale map can never yield a wrong commit oid on a buffer
+ * switch (C-x b / C-x o) without a rebuild.
+ */
 #define MAGIT_OID_LEN 64
-static char	magit_log_oid[MAGIT_MAX_LINES][MAGIT_OID_LEN];
-static int	magit_log_count;
+static char		 magit_log_oid[MAGIT_MAX_LINES][MAGIT_OID_LEN];
+static int		 magit_log_count;
+static struct buffer	*magit_log_oid_bp;	/* buffer the oid map was last built for */
 
 /* When non-empty, *magit-log* is filtered to commits touching this file (l f);
  * empty means the whole-repo log (l l). */
@@ -806,9 +814,9 @@ static const struct magit_menu_item conflict_items[] = {
 	{ 'o', "keep ours" }, { 't', "keep theirs" }
 };
 static const struct magit_menu_item reflog_reset_items[] = {
-	{ 's', "soft (move HEAD only)" },
+	{ 'h', "hard (reset working tree)" },
 	{ 'm', "mixed (reset index)" },
-	{ 'h', "hard (reset working tree)" }
+	{ 's', "soft (move HEAD only)" }
 };
 
 #define MENU_N(a) ((int)(sizeof(a) / sizeof((a)[0])))
@@ -1107,7 +1115,7 @@ magit_assert_menus_consistent(void)
 	static struct magit_menu *const all[] = {
 		&pull_menu, &push_menu, &reset_menu, &worktree_menu, &bisect_menu,
 		&branch_menu, &commit_menu, &log_menu, &rebase_menu, &tag_menu,
-		&stash_menu, &conflict_menu
+		&stash_menu, &conflict_menu, &reflog_reset_menu
 	};
 	size_t	m;
 	int	i;
@@ -1350,6 +1358,7 @@ magit_async_apply(void)
 		bp->b_flag |= BFREADONLY;
 		if (kind == MG_ASYNC_LOG_FILE) {
 			magit_log_count = 0;	/* magit_log_emit rebuilds the oid map */
+			magit_log_oid_bp = bp;	/* record the owning buffer */
 			(void)mg_magit_async_take(magit_log_emit, bp);
 		} else {
 			(void)mg_magit_async_take(magit_plain_emit, bp);
@@ -1512,6 +1521,7 @@ magit_log_build(struct buffer *bp)
 			wp->w_marko = 0;
 			wp->w_rflag |= WFFULL;
 		}
+	magit_log_oid_bp = bp;
 	return (TRUE);
 }
 
@@ -2292,6 +2302,7 @@ magit_reflog_build(struct buffer *bp)
 			wp->w_marko = 0;
 			wp->w_rflag |= WFFULL;
 		}
+	magit_log_oid_bp = bp;
 	return (TRUE);
 }
 
@@ -2386,6 +2397,11 @@ magit_log_oid_at_point(void)
 	struct line	*lp;
 	int		 idx = 0;
 
+	/* Guard: the oid map is shared by *magit-log* and *magit-reflog*.  If
+	 * the user switched buffers (C-x b / C-x o) without rebuilding, the
+	 * map belongs to a different buffer and must not be used. */
+	if (curbp != magit_log_oid_bp)
+		return (NULL);
 	for (lp = bfirstlp(curbp);
 	    lp != curwp->w_dotp && lp != curbp->b_headp; lp = lforw(lp))
 		idx++;
