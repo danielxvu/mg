@@ -19,6 +19,8 @@
 
 #include "bridge.h"
 
+import mg.magit.proclog;
+
 namespace fs = std::filesystem;
 
 namespace {
@@ -2058,4 +2060,74 @@ TEST_CASE("async delivers the latest request, never a phantom generation")
 
 	mg_magit_stop();
 	fs::remove_all(dir);
+}
+
+// FM-PROCESS-LOG: Task 2 — real git subprocess $ entries
+
+TEST_CASE("a CLI commit logs a $ entry with output and ok=true")
+{
+    auto dir = make_repo_with_changes(); // staged.txt is staged
+    mg::magit::proclog::clear();
+    REQUIRE(mg_magit_commit(dir.string().c_str(), "log me") == 1);
+
+    auto s = mg::magit::proclog::snapshot();
+    bool found = false;
+    for (const auto &e : s)
+        if (e.kind == '$' && e.command.find("git commit") != std::string::npos) {
+            CHECK(e.ok);
+            CHECK(e.command.find("log me") != std::string::npos);
+            found = true;
+        }
+    CHECK(found);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("a commit rejected by a pre-commit hook logs ok=false with output")
+{
+    auto dir = make_repo_with_changes();
+    // install a pre-commit hook that always fails
+    fs::create_directories(dir / ".git" / "hooks");
+    {
+        std::ofstream h(dir / ".git" / "hooks" / "pre-commit");
+        h << "#!/bin/sh\necho REJECTED_BY_HOOK 1>&2\nexit 1\n";
+    }
+    fs::permissions(dir / ".git" / "hooks" / "pre-commit",
+                    fs::perms::owner_all, fs::perm_options::add);
+
+    mg::magit::proclog::clear();
+    mg_magit_commit(dir.string().c_str(), "blocked");
+
+    auto s = mg::magit::proclog::snapshot();
+    bool found = false;
+    for (const auto &e : s)
+        if (e.kind == '$' && e.command.find("git commit") != std::string::npos) {
+            CHECK_FALSE(e.ok);
+            CHECK(e.output.find("REJECTED_BY_HOOK") != std::string::npos);
+            found = true;
+        }
+    CHECK(found);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("a CLI push logs a $ entry with the terminal-output note")
+{
+    // make_repo_full has a commit; create a bare remote and wire origin.
+    auto dir = make_repo_full();
+    auto bare = make_temp_dir();
+    REQUIRE(std::system(("git init --bare '" + bare.string() + "' >/dev/null 2>&1").c_str()) == 0);
+    REQUIRE(std::system(("git -C '" + dir.string() + "' remote add origin '" + bare.string() + "' >/dev/null 2>&1").c_str()) == 0);
+
+    mg::magit::proclog::clear();
+    mg_magit_push_cli(dir.string().c_str(), /*force=*/0, /*set_upstream=*/1);
+
+    auto s = mg::magit::proclog::snapshot();
+    bool found = false;
+    for (const auto &e : s)
+        if (e.kind == '$' && e.command.find("git push") != std::string::npos) {
+            CHECK(e.output.find("output shown in terminal") != std::string::npos);
+            found = true;
+        }
+    CHECK(found);
+    fs::remove_all(dir);
+    fs::remove_all(bare);
 }

@@ -1336,7 +1336,13 @@ extern "C" int mg_magit_fetch_cli(const char *repo_path)
 {
     if (repo_path == nullptr)
         return -1;
-    return mg::git::git_terminal(repo_path, {"fetch", "origin"});
+    std::vector<std::string> args{"fetch", "origin"};
+    std::vector<std::string> cmd{"git"};
+    cmd.insert(cmd.end(), args.begin(), args.end());
+    int rc = mg::git::git_terminal(repo_path, std::move(args));
+    mg::magit::proclog::record('$', mg::magit::proclog::argv_to_command(cmd),
+                               "(output shown in terminal)", rc == 0, 0);
+    return rc;
 }
 
 extern "C" int mg_magit_push_cli(const char *repo_path, int force,
@@ -1351,7 +1357,12 @@ extern "C" int mg_magit_push_cli(const char *repo_path, int force,
         args.emplace_back("-u");
     args.emplace_back("origin");
     args.emplace_back("HEAD");
-    return mg::git::git_terminal(repo_path, std::move(args));
+    std::vector<std::string> cmd{"git"};
+    cmd.insert(cmd.end(), args.begin(), args.end());
+    int rc = mg::git::git_terminal(repo_path, std::move(args));
+    mg::magit::proclog::record('$', mg::magit::proclog::argv_to_command(cmd),
+                               "(output shown in terminal)", rc == 0, 0);
+    return rc;
 }
 
 extern "C" int mg_magit_pull_cli(const char *repo_path, int rebase)
@@ -1363,7 +1374,12 @@ extern "C" int mg_magit_pull_cli(const char *repo_path, int rebase)
         args.emplace_back("--rebase");
     args.emplace_back("--no-edit");
     args.emplace_back("origin");
-    return mg::git::git_terminal(repo_path, std::move(args));
+    std::vector<std::string> cmd{"git"};
+    cmd.insert(cmd.end(), args.begin(), args.end());
+    int rc = mg::git::git_terminal(repo_path, std::move(args));
+    mg::magit::proclog::record('$', mg::magit::proclog::argv_to_command(cmd),
+                               "(output shown in terminal)", rc == 0, 0);
+    return rc;
 }
 
 extern "C" int mg_magit_reset(const char *repo_path, const char *rev, int mode)

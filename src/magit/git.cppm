@@ -8,6 +8,7 @@ module;
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cstddef>
 #include <cstdio>
 #include <expected>
@@ -41,6 +42,7 @@ extern "C" char **environ;
 export module mg.git;
 
 import mg.magit;
+import mg.magit.proclog;
 
 // ---- internal RAII + mapping helpers (not exported) -----------------------
 namespace mg::git::detail {
@@ -3415,7 +3417,16 @@ std::expected<void, error> discard(std::string repo, std::string file)
 static std::expected<std::string, error>
 commit_via_cli(const std::string &repo, std::vector<std::string> args)
 {
+    std::vector<std::string> cmd;
+    cmd.reserve(args.size() + 1);
+    cmd.push_back("git");
+    for (const auto &a : args) cmd.push_back(a);
+    auto t0 = std::chrono::steady_clock::now();
     auto run = detail::run_git(repo, std::move(args));
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                  std::chrono::steady_clock::now() - t0).count();
+    mg::magit::proclog::record('$', mg::magit::proclog::argv_to_command(cmd),
+                               run.output, run.code == 0, ms);
     if (run.code != 0) {
         std::string msg = run.output.empty() ? "git commit failed" : run.output;
         while (!msg.empty() && (msg.back() == '\n' || msg.back() == '\r'))
@@ -3449,7 +3460,16 @@ std::expected<std::string, error> commit(std::string repo, std::string message)
 static std::expected<apply_result, error>
 apply_via_cli(const std::string &repo, std::vector<std::string> args)
 {
+    std::vector<std::string> cmd;
+    cmd.reserve(args.size() + 1);
+    cmd.push_back("git");
+    for (const auto &a : args) cmd.push_back(a);
+    auto t0 = std::chrono::steady_clock::now();
     auto run = detail::run_git(repo, std::move(args));
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                  std::chrono::steady_clock::now() - t0).count();
+    mg::magit::proclog::record('$', mg::magit::proclog::argv_to_command(cmd),
+                               run.output, run.code == 0, ms);
     if (run.code == 0)
         return apply_result::done;
 
