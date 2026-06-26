@@ -140,6 +140,9 @@ static int	magit_log_visit(int, int);
 static int	magit_log_refresh(int, int);
 static int	magit_log_revert(int, int);
 static int	magit_log_note(int, int);
+static int	magit_reflog(int, int);
+static int	magit_reflog_refresh(int, int);
+static int	magit_reflog_build(struct buffer *);
 static int	magit_merge(int, int);
 static int	magit_revert(int, int);
 static int	magit_reset_soft(int, int);
@@ -388,18 +391,20 @@ static struct KEYMAPE (2) magit_conflictmenu = {
 static PF log_f[] = { magit_log_file };
 static PF log_l[] = { magit_log };
 static PF log_g[] = { magit_log_graph_cmd };
+static PF log_h[] = { magit_reflog };		/* l h: HEAD reflog */
 static PF log_r[] = { magit_log_range_cmd };
 static PF log_s[] = { magit_log_pickaxe_s };
 static PF log_G[] = { magit_log_pickaxe_g };
 
-static struct KEYMAPE (6) magit_logmenu = {
-	6,
-	6,
+static struct KEYMAPE (7) magit_logmenu = {
+	7,
+	7,
 	rescan,
 	{
 		{ 'G', 'G', log_G, NULL },	/* l G: pickaxe -G (regex) */
 		{ 'f', 'f', log_f, NULL },	/* l f: log file */
 		{ 'g', 'g', log_g, NULL },	/* l g: graph log */
+		{ 'h', 'h', log_h, NULL },	/* l h: HEAD reflog */
 		{ 'l', 'l', log_l, NULL },	/* l l: log all */
 		{ 'r', 'r', log_r, NULL },	/* l r: log range */
 		{ 's', 's', log_s, NULL }	/* l s: pickaxe -S (string) */
@@ -547,6 +552,29 @@ static struct KEYMAPE (2) magit_metamap = {
 	{
 		{ 'n', 'n', magit_meta_n, NULL },	/* M-n: next section */
 		{ 'p', 'p', magit_meta_p, NULL }	/* M-p: previous section */
+	}
+};
+
+/*
+ * *magit-reflog* keymap: RET shows the entry's diff (reuses magit_log_visit),
+ * g refreshes, q closes. ESC prefix forwards to magit_metamap (M-n/M-p).
+ * Entries MUST be ascending: CCHR('M')=13, CCHR('[')=27, 'g'=103, 'q'=113.
+ */
+static PF reflog_ret[] = { magit_log_visit };		/* RET: show entry diff */
+static PF reflog_esc[] = { NULL };			/* ESC: meta prefix */
+static PF reflog_g[]   = { magit_reflog_refresh };	/* g: refresh */
+static PF reflog_q[]   = { delwind };			/* q: close */
+
+static struct KEYMAPE (4) magit_reflogmap = {
+	4,
+	4,
+	rescan,
+	{
+		{ CCHR('M'), CCHR('M'), reflog_ret, NULL },	/* RET: show entry */
+		{ CCHR('['), CCHR('['), reflog_esc,		/* ESC: meta prefix */
+		    (KEYMAP *)&magit_metamap },
+		{ 'g', 'g', reflog_g, NULL },			/* g: refresh */
+		{ 'q', 'q', reflog_q, NULL }			/* q: close */
 	}
 };
 
@@ -1193,6 +1221,7 @@ magit_status(int f, int n)
 		/* Register the log/commit-view modes here too: RET on a stash opens
 		 * the commit-view buffer without ever going through `l`. */
 		maps_add((KEYMAP *)&maglogmap, "magit-log-mode");
+		maps_add((KEYMAP *)&magit_reflogmap, "magit-reflog-mode");
 		maps_add((KEYMAP *)&magcommitmap, "magit-commit-view-mode");
 		maps_add((KEYMAP *)&magprocessmap, "magit-process-mode");
 		maps_add((KEYMAP *)&magit_todomap, "magit-rebase-todo-mode");
@@ -2192,6 +2221,72 @@ magit_log_refresh(int f, int n)
 	if ((bp = bfind("*magit-log*", TRUE)) == NULL)
 		return (FALSE);
 	return (magit_log_build(bp));
+}
+
+/*
+ * (Re)build the *magit-reflog* buffer + its per-line oid map (shared with the
+ * *magit-log* map; rebuilt on every entry/refresh, so oid-at-point is correct
+ * while this buffer is current).
+ */
+static int
+magit_reflog_build(struct buffer *bp)
+{
+	struct mgwin	*wp;
+	char		 cwd[PATH_MAX];
+
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
+		return (FALSE);
+	(void)strlcpy(bp->b_cwd, cwd, sizeof(bp->b_cwd));
+	bp->b_flag |= BFIGNDIRTY;
+	if (bclear(bp) != TRUE)
+		return (FALSE);
+	bp->b_flag |= BFREADONLY;
+	magit_log_count = 0;	/* magit_log_emit refills the oid map */
+	(void)mg_magit_reflog_buffer(cwd, 100, magit_log_emit, bp);
+	bp->b_dotp = bfirstlp(bp);
+	bp->b_doto = 0;
+	for (wp = wheadp; wp != NULL; wp = wp->w_wndp)
+		if (wp->w_bufp == bp) {
+			wp->w_dotp = bp->b_dotp;
+			wp->w_doto = 0;
+			wp->w_markp = NULL;
+			wp->w_marko = 0;
+			wp->w_rflag |= WFFULL;
+		}
+	return (TRUE);
+}
+
+/* l h: open the HEAD reflog in a read-only *magit-reflog* buffer. */
+static int
+magit_reflog(int f, int n)
+{
+	struct buffer	*bp;
+	struct mgwin	*wp;
+
+	if ((bp = bfind("*magit-reflog*", TRUE)) == NULL)
+		return (FALSE);
+	if (magit_reflog_build(bp) != TRUE)
+		return (FALSE);
+	if ((wp = popbuf(bp, WNONE)) == NULL)
+		return (FALSE);
+	curwp = wp;
+	curbp = bp;
+	wp->w_dotp = bp->b_dotp;
+	wp->w_doto = bp->b_doto;
+	bp->b_modes[1] = name_mode("magit-reflog-mode");
+	bp->b_nmodes = 1;
+	return (TRUE);
+}
+
+/* g in *magit-reflog*: rebuild in place. */
+static int
+magit_reflog_refresh(int f, int n)
+{
+	struct buffer	*bp;
+
+	if ((bp = bfind("*magit-reflog*", FALSE)) == NULL)
+		return (FALSE);
+	return (magit_reflog_build(bp));
 }
 
 /* B: blame the file at point in a read-only *magit-blame* buffer. */
