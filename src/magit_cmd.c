@@ -1348,15 +1348,6 @@ magit_plain_emit(void *ctx, const char *line, int kind, const char *path,
 	(void)addlinef((struct buffer *)ctx, "%s", (char *)line);
 }
 
-/* emit callback for *magit-process*: text only (kind/path/hunk not used). */
-static void
-magit_process_emit(void *ctx, const char *line, int kind, const char *path,
-    int hunk)
-{
-	(void)kind; (void)path; (void)hunk;
-	(void)addlinef((struct buffer *)ctx, "%s", (char *)line);
-}
-
 /*
  * magit-process: show the process log in a read-only *magit-process* buffer.
  * Bound to `$` in magit-status-mode (mirrors magit's `$` binding).
@@ -1372,14 +1363,12 @@ magit_process(int f, int n)
 	bp->b_flag |= BFIGNDIRTY;
 	if (bclear(bp) != TRUE)
 		return (FALSE);
-	(void)mg_magit_process_log(magit_process_emit, bp);
+	(void)mg_magit_process_log(magit_plain_emit, bp);
 	bp->b_flag |= BFREADONLY;
 	if ((wp = popbuf(bp, WNONE)) == NULL)
 		return (FALSE);
 	curwp = wp;
 	curbp = bp;
-	wp->w_dotp = bp->b_dotp;
-	wp->w_doto = bp->b_doto;
 	bp->b_modes[1] = name_mode("magit-process-mode");
 	bp->b_nmodes = 1;
 	(void)gotobob(f, n);		/* top: newest entry first */

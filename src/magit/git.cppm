@@ -3468,10 +3468,11 @@ apply_via_cli(const std::string &repo, std::vector<std::string> args)
     auto run = detail::run_git(repo, std::move(args));
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                   std::chrono::steady_clock::now() - t0).count();
-    mg::magit::proclog::record('$', mg::magit::proclog::argv_to_command(cmd),
-                               run.output, run.code == 0, ms);
-    if (run.code == 0)
+    if (run.code == 0) {
+        mg::magit::proclog::record('$', mg::magit::proclog::argv_to_command(cmd),
+                                   run.output, true, ms);
         return apply_result::done;
+    }
 
     detail::init_guard guard;
     git_repository *raw = nullptr;
@@ -3480,13 +3481,18 @@ apply_via_cli(const std::string &repo, std::vector<std::string> args)
         git_index *raw_idx = nullptr;
         if (git_repository_index(&raw_idx, r.get()) == 0) {
             detail::index_ptr idx(raw_idx);
-            if (git_index_has_conflicts(idx.get()))
+            if (git_index_has_conflicts(idx.get())) {
+                mg::magit::proclog::record('$', mg::magit::proclog::argv_to_command(cmd),
+                                           run.output, true, ms);
                 return apply_result::conflicts;
+            }
         }
     }
     std::string msg = run.output.empty() ? "git failed" : run.output;
     while (!msg.empty() && (msg.back() == '\n' || msg.back() == '\r'))
         msg.pop_back();
+    mg::magit::proclog::record('$', mg::magit::proclog::argv_to_command(cmd),
+                               msg, false, ms);
     return std::unexpected(error{0, std::move(msg)});
 }
 

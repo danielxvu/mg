@@ -2109,6 +2109,78 @@ TEST_CASE("a commit rejected by a pre-commit hook logs ok=false with output")
     fs::remove_all(dir);
 }
 
+TEST_CASE("a conflict-stop merge logs a $ entry with ok=true")
+{
+    // Reproduce a conflicting merge using the same pattern as the existing
+    // "mg_magit_merge returns 2 (left conflicts)" test: two branches diverge on
+    // the same file so git merge exits non-zero and leaves MERGE_HEAD on disk.
+    // The $ entry must have ok=true (conflict-stop is not a failure).
+    auto dir = make_temp_dir();
+    auto repo = dir.string();
+    git_libgit2_init();
+    git_repository *r0 = nullptr;
+    REQUIRE(git_repository_init(&r0, repo.c_str(), 0) == 0);
+    git_config *cfg = nullptr;
+    REQUIRE(git_repository_config(&cfg, r0) == 0);
+    git_config_set_string(cfg, "user.name", "T");
+    git_config_set_string(cfg, "user.email", "t@t");
+    git_config_free(cfg);
+    git_repository_free(r0);
+    git_libgit2_shutdown();
+
+    auto commit = [&](const char *body, const char *msg) {
+        git_libgit2_init();
+        git_repository *r2 = nullptr;
+        REQUIRE(git_repository_open(&r2, repo.c_str()) == 0);
+        std::ofstream(dir / "a.txt") << body;
+        git_index *idx = nullptr;
+        REQUIRE(git_repository_index(&idx, r2) == 0);
+        REQUIRE(git_index_add_bypath(idx, "a.txt") == 0);
+        REQUIRE(git_index_write(idx) == 0);
+        git_oid toid;
+        REQUIRE(git_index_write_tree(&toid, idx) == 0);
+        git_tree *tree = nullptr;
+        REQUIRE(git_tree_lookup(&tree, r2, &toid) == 0);
+        git_signature *sig = nullptr;
+        REQUIRE(git_signature_now(&sig, "T", "t@t") == 0);
+        git_oid head;
+        bool born = git_reference_name_to_id(&head, r2, "HEAD") == 0;
+        git_commit *parent = nullptr;
+        if (born)
+            git_commit_lookup(&parent, r2, &head);
+        const git_commit *parents[1] = {parent};
+        git_oid out;
+        REQUIRE(git_commit_create(&out, r2, "HEAD", sig, sig, nullptr, msg, tree,
+                                  born ? 1 : 0, born ? parents : nullptr) == 0);
+        if (parent)
+            git_commit_free(parent);
+        git_signature_free(sig);
+        git_tree_free(tree);
+        git_index_free(idx);
+        git_repository_free(r2);
+        git_libgit2_shutdown();
+    };
+
+    commit("base\n", "C1");
+    REQUIRE(mg_magit_branch_create(repo.c_str(), "feature") == 1);
+    commit("main change\n", "C2 main");
+    REQUIRE(mg_magit_checkout(repo.c_str(), "feature") == 1);
+    commit("feature change\n", "C3 feature");
+
+    mg::magit::proclog::clear();
+    CHECK(mg_magit_merge(repo.c_str(), "master") == 2); // stopped on conflicts
+
+    auto s = mg::magit::proclog::snapshot();
+    bool found = false;
+    for (const auto &e : s)
+        if (e.kind == '$' && e.command.find("git merge") != std::string::npos) {
+            CHECK(e.ok); // conflict-stop is NOT a failure
+            found = true;
+        }
+    CHECK(found);
+    fs::remove_all(dir);
+}
+
 TEST_CASE("a CLI push logs a $ entry with the terminal-output note")
 {
     // make_repo_full has a commit; create a bare remote and wire origin.
@@ -2124,6 +2196,7 @@ TEST_CASE("a CLI push logs a $ entry with the terminal-output note")
     bool found = false;
     for (const auto &e : s)
         if (e.kind == '$' && e.command.find("git push") != std::string::npos) {
+            CHECK(e.ok);
             CHECK(e.output.find("output shown in terminal") != std::string::npos);
             found = true;
         }
@@ -2168,12 +2241,14 @@ TEST_CASE("tag creation logs a ≈ git tag entry")
 {
     auto dir = make_repo_full(); // has a commit to tag
     mg::magit::proclog::clear();
-    mg_magit_tag_create(dir.string().c_str(), "v0.1", nullptr, nullptr); // confirm arity in bridge.h
+    mg_magit_tag_create(dir.string().c_str(), "v0.1", nullptr, nullptr);
     auto s = mg::magit::proclog::snapshot();
     bool found = false;
     for (const auto &e : s)
-        if (e.kind == '~' && e.command.find("git tag v0.1") != std::string::npos)
+        if (e.kind == '~') {
+            CHECK(e.command == "git tag v0.1");
             found = true;
+        }
     CHECK(found);
     fs::remove_all(dir);
 }
