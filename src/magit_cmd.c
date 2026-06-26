@@ -66,6 +66,9 @@ static int	magit_commit_extend(int, int);
 static int	magit_commit_reword(int, int);
 static int	magit_commit_finish(int, int);
 static int	magit_commit_abort(int, int);
+static int	magit_show_level_1(int, int);
+static int	magit_show_level_2(int, int);
+static int	magit_show_level_3(int, int);
 static int	magit_toggle_expand(int, int);
 static int	magit_visit(int, int);
 static int	magit_help(int, int);
@@ -556,12 +559,18 @@ static PF magit_dollar[] = { magit_process };
  */
 static PF magit_meta_n[] = { magit_next_section };
 static PF magit_meta_p[] = { magit_prev_section };
+static PF meta_1[] = { magit_show_level_1 };
+static PF meta_2[] = { magit_show_level_2 };
+static PF meta_3[] = { magit_show_level_3 };
 
-static struct KEYMAPE (2) magit_metamap = {
-	2,
-	2,
+static struct KEYMAPE (5) magit_metamap = {
+	5,
+	5,
 	rescan,
 	{
+		{ '1', '1', meta_1, NULL },	/* M-1: collapse to headers */
+		{ '2', '2', meta_2, NULL },	/* M-2: show files */
+		{ '3', '3', meta_3, NULL },	/* M-3: expand hunks */
 		{ 'n', 'n', magit_meta_n, NULL },	/* M-n: next section */
 		{ 'p', 'p', magit_meta_p, NULL }	/* M-p: previous section */
 	}
@@ -2635,6 +2644,70 @@ magit_toggle_fold(const char *line)
 		(void)strlcpy(magit_folded[magit_folded_count++], key, PATH_MAX);
 	return (TRUE);
 }
+
+/*
+ * Global visibility level for *magit-status* (Magit's M-1/M-2/M-3,
+ * magit-section-show-level-N-all). Rewrites the fold/expand sets by scanning the
+ * current buffer, then rebuilds:
+ *   level 1 = collapse (every section folded, headers only)
+ *   level 2 = files    (nothing folded, nothing expanded -- the default)
+ *   level 3 = expand   (every diffable file's inline diff shown)
+ */
+static int
+magit_show_level(int level, int f, int n)
+{
+	struct line	*lp;
+	int		 idx = 0;
+
+	if (strcmp(curbp->b_bname, "*magit-status*") != 0) {
+		ewprintf("Section levels apply in *magit-status*");
+		return (FALSE);
+	}
+
+	magit_folded_count = 0;
+	magit_expanded_count = 0;
+	if (level == 2)
+		return (magit_refresh(f, n));	/* both cleared -> default view */
+
+	for (lp = bfirstlp(curbp);
+	    lp != curbp->b_headp && idx < magit_meta_count;
+	    lp = lforw(lp), idx++) {
+		int kind = magit_meta[idx].kind;
+		if (level == 1 && kind == MG_LINE_SECTION) {
+			char	hdr[PATH_MAX], key[PATH_MAX];
+			int	len = llength(lp);
+			int	j, dup = 0;
+
+			if (len >= (int)sizeof(hdr))
+				len = (int)sizeof(hdr) - 1;
+			memcpy(hdr, ltext(lp), len);
+			hdr[len] = '\0';
+			magit_section_key(hdr, key, sizeof(key));
+			for (j = 0; j < magit_folded_count; j++)
+				if (strcmp(magit_folded[j], key) == 0) { dup = 1; break; }
+			if (!dup && magit_folded_count < MAGIT_MAX_FOLDED)
+				(void)strlcpy(magit_folded[magit_folded_count++], key,
+				    PATH_MAX);
+		} else if (level == 3 && (kind == MG_LINE_UNSTAGED ||
+		    kind == MG_LINE_STAGED)) {
+			const char	*p = magit_meta[idx].path;
+			int		 j, dup = 0;
+
+			if (p[0] == '\0')
+				continue;
+			for (j = 0; j < magit_expanded_count; j++)
+				if (strcmp(magit_expanded[j], p) == 0) { dup = 1; break; }
+			if (!dup && magit_expanded_count < MAGIT_MAX_EXPANDED)
+				(void)strlcpy(magit_expanded[magit_expanded_count++], p,
+				    PATH_MAX);
+		}
+	}
+	return (magit_refresh(f, n));
+}
+
+static int magit_show_level_1(int f, int n) { return (magit_show_level(1, f, n)); }
+static int magit_show_level_2(int f, int n) { return (magit_show_level(2, f, n)); }
+static int magit_show_level_3(int f, int n) { return (magit_show_level(3, f, n)); }
 
 /* TAB: fold/unfold a section header, or expand/collapse a file's inline diff. */
 static int

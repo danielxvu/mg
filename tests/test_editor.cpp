@@ -118,6 +118,35 @@ static void drain(int fd, int ms, int quiet_ms = 50)
         last_data = std::chrono::steady_clock::now();
     }
 }
+
+// Like drain() but accumulates and returns all bytes read during the window.
+static std::string drain_str(int fd, std::chrono::milliseconds timeout, int quiet_ms = 50)
+{
+    std::string acc;
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    auto last_data = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() < deadline) {
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        FD_SET(fd, &rfds);
+        timeval tv{0, 10 * 1000}; // 10ms poll
+        int ready = ::select(fd + 1, &rfds, nullptr, nullptr, &tv);
+        if (ready <= 0) {
+            auto idle = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - last_data);
+            if (idle.count() >= quiet_ms)
+                break;
+            continue;
+        }
+        char buf[8192];
+        ssize_t n = ::read(fd, buf, sizeof buf);
+        if (n <= 0)
+            break;
+        acc.append(buf, static_cast<size_t>(n));
+        last_data = std::chrono::steady_clock::now();
+    }
+    return acc;
+}
 } // namespace
 
 TEST_CASE("magit-status renders on the buffer's repo when neomg is launched outside it")
@@ -368,4 +397,141 @@ TEST_CASE("x m in *magit-reflog* resets HEAD to the entry at point")
     ::kill(pid, SIGKILL); ::waitpid(pid, nullptr, 0); ::close(master);
     fs::remove_all(repo);
     CHECK(ok);
+}
+
+TEST_CASE("M-3 expands all files to hunks in *magit-status*")
+{
+    auto repo = make_repo();                 // git repo + tracked.txt committed
+    // modify the tracked file so there's an unstaged hunk to expand
+    { std::ofstream f((repo / "tracked.txt"), std::ios::app); f << "ALPHA_LINE\n"; }
+    const std::string repofile = (repo / "tracked.txt").string();
+
+    winsize ws{}; ws.ws_row = 40; ws.ws_col = 100;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) {
+        // Launch from a non-git dir so the background status monitor (keyed on
+        // getcwd() in mg_magit_start) never starts; a warm monitor would serve
+        // ITS repo's snapshot instead of this buffer's b_cwd. Outside any repo,
+        // every status build is synchronous from b_cwd -- deterministic.
+        ::chdir(fs::temp_directory_path().c_str());
+        ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", repofile.c_str(), (char *)nullptr);
+        _exit(127);
+    }
+    bool ok = false;
+    if (wait_for(master, "tracked.txt", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x1bxmagit-status\r", 15);
+        if (wait_for(master, "Unstaged changes", std::chrono::seconds(8))) {
+            // C-x 1: make *magit-status* the ONLY window. magit-status splits
+            // (the tracked.txt file buffer stays in the top window), so without
+            // this the file's "ALPHA_LINE"/name would be on screen regardless of
+            // the magit level and contaminate the needles.
+            (void)!::write(master, "\x18" "1", 2);
+            (void)!::write(master, "\x1b" "3", 2);   // M-3: expand all
+            (void)!::write(master, "\x0c", 1);        // C-l: force full repaint
+            ok = wait_for(master, "ALPHA_LINE", std::chrono::seconds(8)); // hunk line
+        }
+    }
+    const char quit[] = "\x18\x03";
+    (void)!::write(master, quit, sizeof quit - 1);
+    for (int i = 0; i < 20; ++i) { int st = 0; if (::waitpid(pid, &st, WNOHANG) == pid) break; usleep(100000); }
+    ::kill(pid, SIGKILL); ::waitpid(pid, nullptr, 0); ::close(master);
+    fs::remove_all(repo);
+    CHECK(ok);
+}
+
+TEST_CASE("M-1 collapses section bodies; M-2 restores files")
+{
+    auto repo = make_repo();
+    { std::ofstream f((repo / "tracked.txt"), std::ios::app); f << "ALPHA_LINE\n"; }
+    const std::string repofile = (repo / "tracked.txt").string();
+
+    winsize ws{}; ws.ws_row = 40; ws.ws_col = 100;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) {
+        // Launch from a non-git dir so the background status monitor is not
+        // started: mg_magit_start() (main.c) keys the monitor on getcwd(), and
+        // when that monitor is warm, mg_magit_status_snapshot returns ITS repo's
+        // snapshot regardless of the status buffer's b_cwd. Launched outside any
+        // repo, discover_workdir() fails, no monitor runs, and every status
+        // build (incl. the M-1/M-2 rebuilds) is synchronous from the buffer's
+        // own b_cwd (the opened file's repo) -- deterministic, no stale snapshot.
+        ::chdir(fs::temp_directory_path().c_str());
+        ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", repofile.c_str(), (char *)nullptr);
+        _exit(127);
+    }
+    bool collapsed = false, restored = false;
+    if (wait_for(master, "tracked.txt", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x1bxmagit-status\r", 15);
+        if (wait_for(master, "Unstaged changes", std::chrono::seconds(8))) {
+            (void)!::write(master, "\x18" "1", 2);    // C-x 1: only *magit-status*
+            (void)!::write(master, "\x1b" "3", 2);   // M-3: expand (hunk shown)
+            (void)!::write(master, "\x0c", 1);
+            if (wait_for(master, "ALPHA_LINE", std::chrono::seconds(8))) {
+                // M-1: collapse. Force a clean full repaint, drain to quiet,
+                // then the snapshot must keep the header but drop the file body.
+                (void)!::write(master, "\x1b" "1", 2);
+                (void)!::write(master, "\x0c", 1);
+                std::string snap = drain_str(master, std::chrono::milliseconds(1500));
+                collapsed = snap.find("Unstaged changes") != std::string::npos &&
+                            snap.find("tracked.txt") == std::string::npos;
+                // M-2: restore files (the file name returns, no hunk)
+                (void)!::write(master, "\x1b" "2", 2);
+                (void)!::write(master, "\x0c", 1);
+                restored = wait_for(master, "tracked.txt", std::chrono::seconds(8));
+            }
+        }
+    }
+    const char quit[] = "\x18\x03";
+    (void)!::write(master, quit, sizeof quit - 1);
+    for (int i = 0; i < 20; ++i) { int st = 0; if (::waitpid(pid, &st, WNOHANG) == pid) break; usleep(100000); }
+    ::kill(pid, SIGKILL); ::waitpid(pid, nullptr, 0); ::close(master);
+    fs::remove_all(repo);
+    CHECK(collapsed);
+    CHECK(restored);
+}
+
+TEST_CASE("M-1 is a guarded no-op in *magit-reflog* (status-only)")
+{
+    auto repo = make_repo();
+    sh(repo.string(), "git commit --allow-empty -m second"); // reflog >= 2 entries
+    const std::string repofile = (repo / "tracked.txt").string();
+
+    winsize ws{}; ws.ws_row = 40; ws.ws_col = 100;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) {
+        // Non-git cwd: keep the getcwd-keyed status monitor off so the buffer's
+        // b_cwd repo is the only source of truth (see M-3 test for the rationale).
+        ::chdir(fs::temp_directory_path().c_str());
+        ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", repofile.c_str(), (char *)nullptr);
+        _exit(127);
+    }
+    bool guarded = false;
+    if (wait_for(master, "tracked.txt", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x1bxmagit-status\r", 15);
+        if (wait_for(master, "On branch", std::chrono::seconds(8))) {
+            (void)!::write(master, "lh", 2);  // l (log menu) h (reflog)
+            if (wait_for(master, "HEAD@{0}", std::chrono::seconds(8))) {
+                (void)!::write(master, "\x18" "1", 2);  // C-x 1: only *magit-reflog*
+                (void)!::write(master, "\x1b" "1", 2);   // M-1 in reflog -> guarded
+                (void)!::write(master, "\x0c", 1);        // force repaint of echo line
+                // The guard ewprintf renders in the echo area.
+                guarded = wait_for(master, "Section levels apply", std::chrono::seconds(8));
+            }
+        }
+    }
+    const char quit[] = "\x18\x03";
+    (void)!::write(master, quit, sizeof quit - 1);
+    for (int i = 0; i < 20; ++i) { int st = 0; if (::waitpid(pid, &st, WNOHANG) == pid) break; usleep(100000); }
+    ::kill(pid, SIGKILL); ::waitpid(pid, nullptr, 0); ::close(master);
+    fs::remove_all(repo);
+    CHECK(guarded);
 }
