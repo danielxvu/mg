@@ -877,7 +877,7 @@ magit_resolve_at_point(int take_theirs, int f, int n)
 		ewprintf("Point is not on a conflicted file");
 		return (FALSE);
 	}
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	if (mg_magit_resolve_conflict(cwd, path, take_theirs) != 1) {
 		ewprintf("Resolve failed");
@@ -1315,8 +1315,11 @@ magit_log_build(struct buffer *bp)
 	struct mgwin	*wp;
 	char		 cwd[PATH_MAX];
 
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
+	/* Persist the repo on the log buffer so refresh (g) from within it
+	 * targets the same repo, not the process cwd. */
+	(void)strlcpy(bp->b_cwd, cwd, sizeof(bp->b_cwd));
 	bp->b_flag |= BFIGNDIRTY;
 	if (bclear(bp) != TRUE)
 		return (FALSE);
@@ -1489,7 +1492,7 @@ magit_ediff_build_all(struct buffer *m, struct buffer *o, struct buffer *t)
 	magit_ediff_hl_n = magit_ediff_oreg_n = magit_ediff_treg_n = 0;
 	magit_ediff_merged_bp = m;
 
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (0);
 	(void)snprintf(full, sizeof(full), "%s/%s", cwd, magit_ediff_path);
 	if ((fp = fopen(full, "r")) != NULL) {
@@ -1630,7 +1633,7 @@ magit_ediff_sync(void)
 	 * bridge re-emits region `side`'s lines (with wdiff markers) in the same
 	 * order build_all recorded them. */
 	magit_ediff_ref_n = 0;
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (regions);
 	magit_ediff_refrow = 0;
 	magit_ediff_reftgt = magit_ediff_oreg;
@@ -1735,7 +1738,7 @@ magit_ediff_resolve(int side, int f, int n)
 	char	cwd[PATH_MAX];
 	int	regions;
 
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	if (mg_magit_resolve_conflict_hunk(cwd, magit_ediff_path,
 	    magit_ediff_region, side) != 1) {
@@ -1964,10 +1967,11 @@ magit_blame(int f, int n)
 		ewprintf("Not on a file");
 		return (FALSE);
 	}
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	if ((bp = bfind("*magit-blame*", TRUE)) == NULL)
 		return (FALSE);
+	(void)strlcpy(bp->b_cwd, cwd, sizeof(bp->b_cwd)); /* repo for in-buffer cmds */
 	bp->b_flag |= BFIGNDIRTY;
 	if (bclear(bp) != TRUE)
 		return (FALSE);
@@ -2023,10 +2027,11 @@ magit_show_rev(const char *rev)
 	struct mgwin	*wp;
 	char		 cwd[PATH_MAX];
 
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	if ((bp = bfind("*magit-commit*", TRUE)) == NULL)
 		return (FALSE);
+	(void)strlcpy(bp->b_cwd, cwd, sizeof(bp->b_cwd)); /* repo for in-buffer cmds */
 	bp->b_flag |= BFIGNDIRTY;
 	if (bclear(bp) != TRUE)
 		return (FALSE);
@@ -2080,7 +2085,7 @@ magit_cherrypick(int f, int n)
 	else if (eread("Cherry-pick: ", rev, sizeof(rev), EFNEW | EFCR) == NULL ||
 	    rev[0] == '\0')
 		return (ABORT);
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	return (magit_apply_report(mg_magit_cherrypick(cwd, rev), "Cherry-pick",
 	    f, n));
@@ -2101,7 +2106,7 @@ magit_log_note(int f, int n)
 	if (eread("Note (empty to remove): ", msg, sizeof(msg),
 	    EFNEW | EFCR | EFNUL) == NULL)
 		return (ABORT);
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	ok = (msg[0] == '\0') ? mg_magit_note_remove(cwd, oid)
 	                      : mg_magit_note_set(cwd, oid, msg);
@@ -2127,7 +2132,7 @@ magit_log_revert(int f, int n)
 	(void)snprintf(prompt, sizeof(prompt), "Revert commit %.8s", oid);
 	if (eyesno(prompt) != TRUE)
 		return (FALSE);
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	{
 		int code = mg_magit_revert(cwd, oid);
@@ -2302,7 +2307,7 @@ magit_visit(int f, int n)
 		ewprintf("Nothing to visit on this line");
 		return (FALSE);
 	}
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	if (snprintf(full, sizeof(full), "%s/%s", cwd, path) >=
 	    (int)sizeof(full))
@@ -2454,7 +2459,7 @@ magit_stash_apply(int f, int n)
 		ewprintf("Not on a stash");
 		return (FALSE);
 	}
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	if (mg_magit_stash_apply(cwd, hunk) != 1) {	/* hunk holds the index */
 		ewprintf("Stash apply failed");
@@ -2472,7 +2477,7 @@ magit_stash_push(int f, int n)
 	if (eread("Stash message: ", msg, sizeof(msg),
 	    EFNEW | EFCR | EFNUL) == NULL)
 		return (ABORT);
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	if (mg_magit_stash_push(cwd, msg) != 1) {
 		ewprintf("Stash failed (nothing to stash?)");
@@ -2491,7 +2496,7 @@ magit_stash_pop(int f, int n)
 
 	kind = magit_at_point(&path, &hunk);
 	index = (kind == MG_LINE_STASH) ? hunk : 0;	/* hunk holds the index */
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	if (mg_magit_stash_pop(cwd, index) != 1) {
 		ewprintf("Stash pop failed");
@@ -2513,7 +2518,7 @@ magit_checkout(int f, int n)
 		ewprintf("Not on a branch");
 		return (FALSE);
 	}
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	if (mg_magit_checkout(cwd, path) != 1) {	/* path holds the name */
 		ewprintf("Checkout failed");
@@ -2531,7 +2536,7 @@ magit_branch_create(int f, int n)
 	if (eread("Create branch: ", name, sizeof(name), EFNEW | EFCR) == NULL ||
 	    name[0] == '\0')
 		return (ABORT);
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	if (mg_magit_branch_create(cwd, name) != 1) {
 		ewprintf("Branch create failed");
@@ -2557,7 +2562,7 @@ magit_branch_delete(int f, int n)
 	(void)snprintf(prompt, sizeof(prompt), "Delete branch %s", name);
 	if (eyesno(prompt) != TRUE)
 		return (FALSE);
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	if (mg_magit_branch_delete(cwd, name) != 1) {
 		ewprintf("Branch delete failed");
@@ -2583,7 +2588,7 @@ magit_branch_rename(int f, int n)
 	if (eread("Rename %s to: ", to, sizeof(to), EFNEW | EFCR, from) == NULL ||
 	    to[0] == '\0')
 		return (ABORT);
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	if (mg_magit_branch_rename(cwd, from, to) != 1) {
 		ewprintf("Branch rename failed");
@@ -2605,7 +2610,7 @@ magit_do_tag_create(int annotated, int f, int n)
 	    (eread("Tag message: ", msg, sizeof(msg), EFNEW | EFCR) == NULL ||
 	    msg[0] == '\0'))
 		return (ABORT);
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	if (mg_magit_tag_create(cwd, name, "HEAD", annotated ? msg : NULL) != 1) {
 		ewprintf("Tag create failed");
@@ -2642,7 +2647,7 @@ magit_tag_delete_cmd(int f, int n)
 	else if (eread("Delete tag: ", name, sizeof(name), EFNEW | EFCR) ==
 	    NULL || name[0] == '\0')
 		return (ABORT);
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	if (mg_magit_tag_delete(cwd, name) != 1) {
 		ewprintf("Tag delete failed");
@@ -2663,7 +2668,7 @@ magit_worktree_add_cmd(int f, int n)
 	if (eread("Worktree path: ", path, sizeof(path), EFNEW | EFCR) == NULL ||
 	    path[0] == '\0')
 		return (ABORT);
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	if (mg_magit_worktree_add(cwd, name, path) != 1) {
 		ewprintf("Worktree add failed");
@@ -2689,7 +2694,7 @@ magit_worktree_delete_cmd(int f, int n)
 	(void)snprintf(prompt, sizeof(prompt), "Delete worktree %s", name);
 	if (eyesno(prompt) != TRUE)
 		return (FALSE);
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	if (mg_magit_worktree_remove(cwd, name) != 1) {
 		ewprintf("Worktree delete failed");
@@ -2729,7 +2734,7 @@ magit_bisect_start_cmd(int f, int n)
 	if (eread("Bisect good (revision): ", good, sizeof(good),
 	    EFNEW | EFCR) == NULL || good[0] == '\0')
 		return (ABORT);
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	return (magit_bisect_report(
 	    mg_magit_bisect_start(cwd, bad, good, msg, sizeof(msg)), msg, f, n));
@@ -2741,7 +2746,7 @@ magit_bisect_bad(int f, int n)
 {
 	char	cwd[PATH_MAX], msg[256];
 
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	return (magit_bisect_report(
 	    mg_magit_bisect_mark(cwd, 1, msg, sizeof(msg)), msg, f, n));
@@ -2752,7 +2757,7 @@ magit_bisect_good(int f, int n)
 {
 	char	cwd[PATH_MAX], msg[256];
 
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	return (magit_bisect_report(
 	    mg_magit_bisect_mark(cwd, 0, msg, sizeof(msg)), msg, f, n));
@@ -2764,7 +2769,7 @@ magit_bisect_reset_cmd(int f, int n)
 {
 	char	cwd[PATH_MAX];
 
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	if (mg_magit_bisect_reset(cwd) != 1) {
 		ewprintf("Bisect reset failed");
@@ -2788,7 +2793,7 @@ magit_merge(int f, int n)
 	else if (eread("Merge branch: ", name, sizeof(name), EFNEW | EFCR) ==
 	    NULL || name[0] == '\0')
 		return (ABORT);
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	return (magit_apply_report(mg_magit_merge(cwd, name), "Merge", f, n));
 }
@@ -2802,7 +2807,7 @@ magit_revert(int f, int n)
 	if (eread("Revert commit: ", rev, sizeof(rev), EFNEW | EFCR) == NULL ||
 	    rev[0] == '\0')
 		return (ABORT);
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	return (magit_apply_report(mg_magit_revert(cwd, rev), "Revert", f, n));
 }
@@ -2820,7 +2825,7 @@ magit_do_reset(int mode, int f, int n)
 		return (ABORT);
 	if (mode == 2 && eyesno("Hard reset discards working-tree changes") != TRUE)
 		return (FALSE);
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	if (mg_magit_reset(cwd, rev, mode) != 1) {
 		ewprintf("Reset failed");
@@ -2988,7 +2993,7 @@ magit_fetch(int f, int n)
 	char	cwd[PATH_MAX];
 	int	code;
 
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	code = magit_run_net(MNET_FETCH, cwd, 0, 0, "Fetching from origin...");
 	if (code == -2)
@@ -3017,7 +3022,7 @@ magit_pull(int f, int n)
 	char	cwd[PATH_MAX];
 	int	code;
 
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	code = magit_run_net(MNET_PULL, cwd, 0, 0, "Pulling from origin...");
 	if (code == -2)
@@ -3041,7 +3046,7 @@ magit_do_push(int force, int set_upstream, int f, int n)
 	char	cwd[PATH_MAX];
 	int	code;
 
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	code = magit_run_net(MNET_PUSH, cwd, force, set_upstream,
 	    "Pushing to origin...");
@@ -3080,7 +3085,7 @@ magit_pull_rebase(int f, int n)
 	char	cwd[PATH_MAX];
 	int	code;
 
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	code = magit_run_net(MNET_PULL_REBASE, cwd, 0, 0,
 	    "Pulling (rebase) from origin...");
@@ -3142,7 +3147,7 @@ magit_rebase_upstream(int f, int n)
 {
 	char	cwd[PATH_MAX];
 
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	return (magit_rebase_report(mg_magit_rebase(cwd, "@{u}"),
 	    "Rebase onto upstream", f, n));
@@ -3157,7 +3162,7 @@ magit_rebase_elsewhere(int f, int n)
 	if (eread("Rebase onto: ", onto, sizeof(onto), EFNEW | EFCR) == NULL ||
 	    onto[0] == '\0')
 		return (ABORT);
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	return (magit_rebase_report(mg_magit_rebase(cwd, onto), "Rebase", f, n));
 }
@@ -3168,7 +3173,7 @@ magit_rebase_continue(int f, int n)
 {
 	char	cwd[PATH_MAX];
 
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	return (magit_rebase_report(mg_magit_rebase_continue(cwd),
 	    "Rebase continue", f, n));
@@ -3180,7 +3185,7 @@ magit_rebase_skip(int f, int n)
 {
 	char	cwd[PATH_MAX];
 
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	return (magit_rebase_report(mg_magit_rebase_skip(cwd), "Rebase skip",
 	    f, n));
@@ -3192,7 +3197,7 @@ magit_rebase_abort(int f, int n)
 {
 	char	cwd[PATH_MAX];
 
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	if (mg_magit_rebase_abort(cwd) != 1) {
 		ewprintf("Rebase abort failed");
@@ -3209,7 +3214,7 @@ magit_stage(int f, int n)
 	char	 cwd[PATH_MAX];
 	int	 kind, hunk, rhunk, first, last;
 
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	/* With a mark spanning one hunk's diff lines, stage just that region. */
 	if (magit_region(&rhunk, &rpath, &first, &last)) {
@@ -3246,7 +3251,7 @@ magit_unstage(int f, int n)
 	char	 cwd[PATH_MAX];
 	int	 kind, hunk, rhunk, first, last;
 
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	/* With a mark spanning one hunk's diff lines, unstage just that region. */
 	if (magit_region(&rhunk, &rpath, &first, &last)) {
@@ -3296,7 +3301,7 @@ magit_ignore(int f, int n)
 	if (eread("Ignore (pattern): ", pat, sizeof(pat), EFNEW | EFCR | EFDEF) ==
 	    NULL || pat[0] == '\0')
 		return (ABORT);
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	if (mg_magit_ignore(cwd, pat) != 1) {
 		ewprintf("Ignore failed");
@@ -3311,7 +3316,7 @@ magit_stage_all(int f, int n)
 {
 	char	cwd[PATH_MAX];
 
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	if (mg_magit_stage_all(cwd) != 1) {
 		ewprintf("Stage all failed");
@@ -3326,7 +3331,7 @@ magit_unstage_all(int f, int n)
 {
 	char	cwd[PATH_MAX];
 
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	if (mg_magit_unstage_all(cwd) != 1) {
 		ewprintf("Unstage all failed");
@@ -3343,7 +3348,7 @@ magit_discard(int f, int n)
 	char	 prompt[PATH_MAX + 32];
 	int	 kind, hunk, rhunk, first, last;
 
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	/* With a mark spanning one hunk's diff lines, discard just that region. */
 	if (magit_region(&rhunk, &rpath, &first, &last)) {
@@ -3406,6 +3411,11 @@ magit_open_commit_buffer(int op)
 	}
 	if ((bp = bfind("*magit-commit*", TRUE)) == NULL)
 		return (FALSE);
+	/* Capture the repo from the invoking buffer (curbp, before showbuffer
+	 * switches to *magit-commit*) so the message prefill + the commit itself
+	 * target the right repo, not the process cwd. */
+	if (getbufcwd(cwd, sizeof(cwd)) == TRUE)
+		(void)strlcpy(bp->b_cwd, cwd, sizeof(bp->b_cwd));
 	bp->b_flag |= BFIGNDIRTY;
 	if (bclear(bp) != TRUE)
 		return (FALSE);
@@ -3418,7 +3428,7 @@ magit_open_commit_buffer(int op)
 	curbp = bp;
 
 	/* Pre-fill HEAD's message for amend/reword. */
-	if (op != MG_COMMIT_NEW && getcwd(cwd, sizeof(cwd)) != NULL) {
+	if (op != MG_COMMIT_NEW && getbufcwd(cwd, sizeof(cwd)) == TRUE) {
 		char	msg[4096];
 		int	i, len;
 
@@ -3464,7 +3474,7 @@ magit_commit_extend(int f, int n)
 {
 	char	cwd[PATH_MAX];
 
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	if (mg_magit_commit_extend(cwd) != 1) {
 		ewprintf("Extend failed (is user.name/user.email set?)");
@@ -3522,7 +3532,7 @@ magit_commit_finish(int f, int n)
 		ewprintf("Aborting commit due to empty message");
 		return (FALSE);
 	}
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	switch (magit_commit_op) {
 	case MG_COMMIT_AMEND:
@@ -3629,7 +3639,7 @@ magit_rebase_interactive_cmd(int f, int n)
 	if (eread("Rebase interactively onto: ", onto, sizeof(onto),
 	    EFNEW | EFCR) == NULL || onto[0] == '\0')
 		return (ABORT);
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 
 	magit_todo_count = 0;
@@ -3752,7 +3762,7 @@ magit_todo_execute(int f, int n)
 	char				cwd[PATH_MAX];
 	int				i, rc;
 
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
 	for (i = 0; i < magit_todo_count; i++) {
 		steps[i].action = magit_todo[i].action;
