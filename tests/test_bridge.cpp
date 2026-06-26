@@ -2307,6 +2307,7 @@ TEST_CASE("resetting HEAD to a reflog oid moves HEAD there (reset-at-point path)
 
     auto head2 = mg::git::read_head(dir.string());
     REQUIRE(head2.has_value());
+    REQUIRE(head2->short_oid.size() == 8);
     CHECK(prev.rfind(head2->short_oid, 0) == 0); // HEAD now at the older commit
     fs::remove_all(dir);
 }
