@@ -289,11 +289,12 @@ absent). Keep this in sync with the README's "What it doesn't do (vs Magit)".
   neomg): `M-1`/`M-2`/`M-3` (Magit's `magit-section-show-level-N-all`) collapse to
   headers / show files / expand hunks, reusing the fold/expand state. (S-TAB isn't
   receivable in mg's TUI, so M-1/2/3 is the binding.)
-- [~] **FM-DIFF-CTL — diff context + whitespace controls.** IN PROGRESS (branch
-  `fm-diff-ctl`): `+`/`-` grow/shrink `git_diff_options.context_lines` (applied to
-  display AND the staging ops so hunk indices stay aligned); `w` toggles `-w`
-  (`GIT_DIFF_IGNORE_WHITESPACE`, display-only — hunk staging disabled while on).
-  Spec: `docs/superpowers/specs/2026-06-26-fm-diff-ctl-design.md`.
+- [x] **FM-DIFF-CTL — diff context + whitespace controls.** ✅ DONE (PR #96):
+  `+`/`-` grow/shrink `git_diff_options.context_lines` (applied to display AND the
+  staging ops so hunk indices stay aligned); `w` toggles `-w`
+  (`GIT_DIFF_IGNORE_WHITESPACE`, display-only — hunk staging disabled while on);
+  `Diff: -U<n> -w` header (rendered live from atomic globals). Final review caught
+  + fixed a monitor/UI data race on the view config.
   - [ ] **FM-DIFF-REFINE (deferred from FM-DIFF-CTL)** — word-level / refined
     intra-line diff highlighting. The ediff cell-highlight *display* infra
     (`magit_cell_highlighted` / `magit_ediff_ref`) is reusable, but the per-hunk
@@ -312,9 +313,14 @@ absent). Keep this in sync with the README's "What it doesn't do (vs Magit)".
   `--all` multi-ref graph (HEAD only); pickaxe is repo-wide with no per-file
   prompt. Add ref decoration (oid → pointing refs), an `--all` graph mode, and a
   per-file pickaxe entry point.
-- [ ] **FM-GIT-CMD — `:` run arbitrary git** (`magit-git-command`). Prompt for a
-  git command line, run it via the existing `run_git`/`git_terminal`, and surface
-  output in the `*magit-process*` buffer just added (its natural home).
+- [~] **FM-GIT-CMD — `:` run arbitrary git** (`magit-git-command`). IN PROGRESS
+  (branch `fm-git-cmd`): `:` prompts (`eread`), tokenizes (quote-aware, no shell),
+  runs captured via the existing `detail::run_git`, records a `$` `proclog` entry,
+  shows `*magit-process*`. Spec: `docs/superpowers/specs/2026-06-26-fm-git-cmd-design.md`.
+  - [ ] **FM-GIT-CMD-TTY (deferred from FM-GIT-CMD)** — auto-route interactive /
+    network subcommands (`push`/`pull`/`fetch`/`rebase -i`) from `:` to the
+    tty-inherit path (`git_terminal`); v1 is captured-only (use the dedicated keys
+    for those).
 - [ ] **FM-SHOW-REFS — `y` refs overview** (`magit-show-refs`): a `*magit-refs*`
   buffer of local branches, remotes, and tags with ahead/behind vs HEAD
   (`git_branch_iterator` + `git_graph_ahead_behind`).
