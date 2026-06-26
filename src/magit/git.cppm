@@ -846,10 +846,36 @@ std::expected<void, error>
 discard_region(std::string repo, std::string path, std::size_t hunk_index,
                std::size_t sel_first, std::size_t sel_last);
 
+// Set the process-global diff-view configuration. `context` is clamped to
+// [0,32]. This config is read by file_diff (display) AND path_scoped_diff_opts
+// (staging ops) so hunk indices stay aligned at any context width.
+// `ignore_ws` is applied only by file_diff; staging never ignores whitespace
+// (a patch must apply exactly).
+void set_diff_view(int context, bool ignore_ws);
+int  diff_view_context();
+bool diff_view_ignore_ws();
+
 } // namespace mg::git
 
 // ---- definition -----------------------------------------------------------
 namespace mg::git {
+
+// Process-global diff-view config (context lines + ignore-whitespace).
+// Read by file_diff (display) AND path_scoped_diff_opts (staging) so that
+// displayed hunk indices stay aligned with what staging ops recompute.
+// Default matches libgit2's own default (3 context lines, no ws ignore).
+namespace {
+int  g_diff_context  = 3;
+bool g_diff_ignore_ws = false;
+}
+
+void set_diff_view(int context, bool ignore_ws)
+{
+    g_diff_context   = context < 0 ? 0 : (context > 32 ? 32 : context);
+    g_diff_ignore_ws = ignore_ws;
+}
+int  diff_view_context()  { return g_diff_context; }
+bool diff_view_ignore_ws() { return g_diff_ignore_ws; }
 
 static error last_error()
 {
@@ -3653,6 +3679,9 @@ file_diff(std::string repo, std::string path, bool staged)
     char *paths[1] = {const_cast<char *>(path.c_str())};
     opts.pathspec.strings = paths;
     opts.pathspec.count = 1;
+    opts.context_lines = static_cast<uint32_t>(g_diff_context);
+    if (g_diff_ignore_ws)
+        opts.flags |= GIT_DIFF_IGNORE_WHITESPACE;
 
     git_diff *raw_diff = nullptr;
     if (staged) {
@@ -3732,11 +3761,15 @@ apply_hunk_to_index(git_repository *repo, git_diff *diff, std::size_t hunk_index
 }
 
 // Fill `opts` with a single-path pathspec (the storage must outlive the diff).
+// Also applies the current diff-view context so staging ops recompute the same
+// hunk numbering as file_diff. Whitespace is never ignored here -- a patch must
+// apply exactly.
 static void path_scoped_diff_opts(git_diff_options &opts, char **path_storage)
 {
     git_diff_options_init(&opts, GIT_DIFF_OPTIONS_VERSION);
     opts.pathspec.strings = path_storage;
     opts.pathspec.count = 1;
+    opts.context_lines = static_cast<uint32_t>(g_diff_context);
 }
 
 std::expected<void, error>
