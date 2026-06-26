@@ -51,6 +51,44 @@ fs::path make_repo_with_changes()
     return dir;
 }
 
+// A repo with one commit (old.txt) whose rename to new.txt has been staged --
+// the substrate for the "renamed old.txt -> new.txt" status line.
+fs::path make_repo_with_staged_rename()
+{
+    auto dir = make_temp_dir();
+    git_libgit2_init();
+    git_repository *repo = nullptr;
+    REQUIRE(git_repository_init(&repo, dir.string().c_str(), 0) == 0);
+
+    std::ofstream(dir / "old.txt") << "alpha\nbravo\ncharlie\ndelta\n";
+    git_index *idx = nullptr;
+    REQUIRE(git_repository_index(&idx, repo) == 0);
+    REQUIRE(git_index_add_bypath(idx, "old.txt") == 0);
+    REQUIRE(git_index_write(idx) == 0);
+    git_oid tree_oid;
+    REQUIRE(git_index_write_tree(&tree_oid, idx) == 0);
+    git_tree *tree = nullptr;
+    REQUIRE(git_tree_lookup(&tree, repo, &tree_oid) == 0);
+    git_signature *sig = nullptr;
+    REQUIRE(git_signature_now(&sig, "T", "t@t") == 0);
+    git_oid coid;
+    REQUIRE(git_commit_create(&coid, repo, "HEAD", sig, sig, nullptr,
+                              "add old", tree, 0, nullptr) == 0);
+    git_signature_free(sig);
+    git_tree_free(tree);
+
+    // Stage the rename: move on disk, drop old.txt and add new.txt to the index.
+    fs::rename(dir / "old.txt", dir / "new.txt");
+    REQUIRE(git_index_remove_bypath(idx, "old.txt") == 0);
+    REQUIRE(git_index_add_bypath(idx, "new.txt") == 0);
+    REQUIRE(git_index_write(idx) == 0);
+    git_index_free(idx);
+
+    git_repository_free(repo);
+    git_libgit2_shutdown();
+    return dir;
+}
+
 // A repo with one commit, then a staged change and an untracked file.
 fs::path make_repo_full()
 {
@@ -575,6 +613,34 @@ TEST_CASE("mg_magit_status_buffer composes branch, sections, and commits")
     CHECK(untracked_ok);
     CHECK(staged_ok);
     CHECK(section_ok);
+
+    fs::remove_all(dir);
+}
+
+TEST_CASE("mg_magit_status_buffer renders a staged rename as 'old.txt -> new.txt'")
+{
+    auto dir = make_repo_with_staged_rename();
+
+    struct row { std::string line; int kind; std::string path; };
+    std::vector<row> rows;
+    mg_magit_status_buffer(
+        dir.string().c_str(), nullptr, 0,
+        [](void *ctx, const char *line, int kind, const char *path, int) {
+            static_cast<std::vector<row> *>(ctx)->push_back(
+                {line, kind, path ? path : ""});
+        },
+        &rows);
+
+    // Magit shows BOTH endpoints: "renamed  old.txt -> new.txt". The row's path
+    // stays the destination (new.txt) so staging/visiting still target the file.
+    bool rename_row = false;
+    for (const auto &r : rows)
+        if (r.kind == MG_LINE_STAGED && r.path == "new.txt") {
+            CHECK(r.line.find("renamed") != std::string::npos);
+            CHECK(r.line.find("old.txt -> new.txt") != std::string::npos);
+            rename_row = true;
+        }
+    CHECK(rename_row);
 
     fs::remove_all(dir);
 }

@@ -219,6 +219,19 @@ mg::magit::file_status map_entry(const git_status_entry *e)
         p = e->head_to_index->new_file.path;
     if (p)
         fs.path = p;
+
+    // orig_path: the rename/copy SOURCE (old_file.path). For a staged rename
+    // libgit2 fills head_to_index; for an unstaged one, index_to_workdir. Only
+    // the staged dimension is rename-detected here (see status_scoped flags),
+    // but populate both symmetrically so the field is correct if WT-rename
+    // detection is ever enabled.
+    if (fs.index == status::renamed || fs.index == status::copied) {
+        if (e->head_to_index && e->head_to_index->old_file.path)
+            fs.orig_path = e->head_to_index->old_file.path;
+    } else if (fs.worktree == status::renamed || fs.worktree == status::copied) {
+        if (e->index_to_workdir && e->index_to_workdir->old_file.path)
+            fs.orig_path = e->index_to_workdir->old_file.path;
+    }
     return fs;
 }
 
@@ -403,8 +416,9 @@ repo_status(std::string path);
 
 // One staged entry: a path changed between HEAD and the index (X column).
 struct staged_entry {
-    std::string path;
+    std::string path;                    // destination (new_file.path)
     mg::magit::status x;
+    std::optional<std::string> orig_path; // rename/copy source, else empty
 };
 
 // Index-vs-HEAD diff (staged changes, the "X" column). On an unborn HEAD (no
@@ -889,9 +903,17 @@ session::status_scoped(std::span<const std::string> pathspecs)
     // EXCLUDE_SUBMODULES: submodules have their own status section (a recursive
     // per-submodule status scan dominates the cost on submodule-heavy repos).
     // UPDATE_INDEX: persist the refreshed stat cache so repeat calls are faster.
+    // RENAMES_HEAD_TO_INDEX: coalesce a staged rename into one GIT_STATUS_INDEX_
+    // RENAMED entry (source in head_to_index->old_file.path) instead of a
+    // delete+add pair -- this is the X column the hybrid's staged_status mirrors
+    // via git_diff_find_similar, so the two engines agree (the equivalence
+    // tests pin this). Worktree renames are intentionally NOT detected here: the
+    // hybrid's Y column is the Zig walker, which has no similarity detector, so
+    // enabling INDEX_TO_WORKDIR would desync the oracle from the hybrid.
     opts.flags = GIT_STATUS_OPT_INCLUDE_UNTRACKED |
                  GIT_STATUS_OPT_EXCLUDE_SUBMODULES |
-                 GIT_STATUS_OPT_UPDATE_INDEX;
+                 GIT_STATUS_OPT_UPDATE_INDEX |
+                 GIT_STATUS_OPT_RENAMES_HEAD_TO_INDEX;
 
     // Limit the scan to the given pathspecs (default git pathspec matching, so a
     // directory "src" covers src/**). Empty == whole repo. The pointers borrow
@@ -986,6 +1008,17 @@ staged_status(std::string repo_path)
         return std::unexpected(last_error());
     detail::diff_ptr diff(raw_diff);
 
+    // Coalesce add+delete pairs into GIT_DELTA_RENAMED so a staged rename is one
+    // entry whose old_file.path is the source. GIT_DIFF_FIND_RENAMES is set
+    // explicitly (not GIT_DIFF_FIND_BY_CONFIG) so detection is deterministic
+    // regardless of the repo's diff.renames config -- this mirrors the oracle's
+    // GIT_STATUS_OPT_RENAMES_HEAD_TO_INDEX so hybrid and repo_status agree.
+    git_diff_find_options find_opts;
+    git_diff_find_options_init(&find_opts, GIT_DIFF_FIND_OPTIONS_VERSION);
+    find_opts.flags = GIT_DIFF_FIND_RENAMES;
+    if (git_diff_find_similar(diff.get(), &find_opts) != 0)
+        return std::unexpected(last_error());
+
     using mg::magit::status;
     std::vector<staged_entry> out;
     const std::size_t n = git_diff_num_deltas(diff.get());
@@ -1012,10 +1045,14 @@ staged_status(std::string repo_path)
         case GIT_DELTA_RENAMED:
             e.x = status::renamed;
             e.path = delta->new_file.path ? delta->new_file.path : "";
+            if (delta->old_file.path)
+                e.orig_path = delta->old_file.path;
             break;
         case GIT_DELTA_COPIED:
             e.x = status::copied;
             e.path = delta->new_file.path ? delta->new_file.path : "";
+            if (delta->old_file.path)
+                e.orig_path = delta->old_file.path;
             break;
         default:
             continue; // skip UNMODIFIED, IGNORED, UNTRACKED, etc.
@@ -1093,6 +1130,7 @@ hybrid_status(std::string repo)
                                    e.path, {}});
         it->second.path = e.path;
         it->second.index = e.x;
+        it->second.orig_path = e.orig_path; // rename/copy source (X column)
         if (inserted)
             it->second.worktree = mg::magit::status::unmodified;
         // else: keep Zig-set worktree column
