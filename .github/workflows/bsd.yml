@@ -1,0 +1,105 @@
+name: bsd
+
+# Validate the kqueue fswatch backend on real BSDs. macOS now defaults to the
+# FSEvents backend (one stream, no per-dir fds), so kqueue/EVFILT_VNODE is the
+# BSD-only path -- and these QEMU VMs (the only way to run a real BSD; Docker
+# can't, it shares the Linux kernel) are where it's exercised for real. The
+# cheap continuous check is the macOS `cpp-kqueue` preset (Darwin shares the
+# BSD kqueue API); this catches the platform-specific tail.
+#
+# We build the native-magit modules suite (no zig: ENABLE_ZIG_STATUS=OFF) and
+# run the fswatch tests. FreeBSD is the gate; OpenBSD/NetBSD are best-effort
+# (older/limited C++20-module toolchains) and don't fail the workflow.
+
+on:
+  push:
+    branches: [neomg, fm-fsevents]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: bsd-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  freebsd:
+    name: FreeBSD (kqueue fswatch)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build + test in a FreeBSD VM
+        uses: vmactions/freebsd-vm@v1
+        with:
+          usesh: true
+          prepare: |
+            pkg install -y llvm cmake ninja git libgit2 utf8proc pkgconf
+          run: |
+            set -eux
+            # FreeBSD base `cc` is clang but ships no clang-scan-deps; the pkg
+            # `llvm` does. Discover a clang that has a matching scan-deps so
+            # CMake can scan the C++20 modules.
+            SCANDEPS="$(command -v clang-scan-deps || ls /usr/local/bin/clang-scan-deps* 2>/dev/null | sort -V | tail -1)"
+            CXX="$(command -v clang++ || ls /usr/local/bin/clang++* 2>/dev/null | sort -V | tail -1)"
+            CC="$(command -v clang || ls /usr/local/bin/clang[0-9]* 2>/dev/null | sort -V | tail -1)"
+            echo "CC=$CC CXX=$CXX SCANDEPS=$SCANDEPS"
+            cmake -S . -B build -G Ninja \
+              -DENABLE_CPP_UPGRADES=ON -DENABLE_NATIVE_MAGIT=ON -DENABLE_ZIG_STATUS=OFF \
+              -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+              -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX" \
+              -DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS="$SCANDEPS"
+            cmake --build build
+            # A git identity is needed by the commit-path tests run via ctest.
+            git config --global user.email "build@mg.test"
+            git config --global user.name  "mg build"
+            ctest --test-dir build --output-on-failure
+
+  # Best-effort: these have older / less-complete C++20-module toolchains, so
+  # they don't gate the workflow -- they're early-warning for the kqueue path.
+  openbsd:
+    name: OpenBSD (kqueue fswatch, best-effort)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build + test in an OpenBSD VM
+        uses: vmactions/openbsd-vm@v1
+        with:
+          usesh: true
+          prepare: |
+            pkg_add cmake ninja git libgit2 utf8proc llvm
+          run: |
+            set -eux
+            SCANDEPS="$(command -v clang-scan-deps || ls /usr/local/bin/clang-scan-deps* 2>/dev/null | sort -V | tail -1)"
+            cmake -S . -B build -G Ninja \
+              -DENABLE_CPP_UPGRADES=ON -DENABLE_NATIVE_MAGIT=ON -DENABLE_ZIG_STATUS=OFF \
+              -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+              -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+              -DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS="$SCANDEPS"
+            cmake --build build --target test_fswatch
+            git config --global user.email "build@mg.test"; git config --global user.name "mg build"
+            ctest --test-dir build -R "fswatch|watch_stream|watcher" --output-on-failure
+
+  netbsd:
+    name: NetBSD (kqueue fswatch, best-effort)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build + test in a NetBSD VM
+        uses: vmactions/netbsd-vm@v1
+        with:
+          usesh: true
+          prepare: |
+            /usr/sbin/pkg_add cmake ninja-build git libgit2 utf8proc clang || \
+              pkgin -y install cmake ninja-build git libgit2 utf8proc clang
+          run: |
+            set -eux
+            SCANDEPS="$(command -v clang-scan-deps || ls /usr/pkg/bin/clang-scan-deps* 2>/dev/null | sort -V | tail -1)"
+            cmake -S . -B build -G Ninja \
+              -DENABLE_CPP_UPGRADES=ON -DENABLE_NATIVE_MAGIT=ON -DENABLE_ZIG_STATUS=OFF \
+              -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+              -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+              -DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS="$SCANDEPS"
+            cmake --build build --target test_fswatch
+            git config --global user.email "build@mg.test"; git config --global user.name "mg build"
+            ctest --test-dir build -R "fswatch|watch_stream|watcher" --output-on-failure
