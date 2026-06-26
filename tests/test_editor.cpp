@@ -85,6 +85,39 @@ bool wait_for(int fd, const char *needle, std::chrono::milliseconds timeout)
     }
     return acc.find(needle) != std::string::npos;
 }
+
+// Drain all pending pty output.  Keeps reading until quiet_ms consecutive
+// milliseconds elapse without any new bytes, or until the overall deadline
+// (ms) is reached.  A single idle poll is not sufficient on Linux: the pty
+// kernel buffer may deliver a C-l repaint in multiple bursts separated by
+// short gaps, so stopping at the first idle window leaves ANSI escape bytes
+// still in flight when the caller sends the next key.
+static void drain(int fd, int ms, int quiet_ms = 50)
+{
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(ms);
+    auto last_data = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() < deadline) {
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        FD_SET(fd, &rfds);
+        timeval tv{0, 10 * 1000}; // 10ms poll
+        int ready = ::select(fd + 1, &rfds, nullptr, nullptr, &tv);
+        if (ready <= 0) {
+            // Check if we have sustained quiet long enough to stop.
+            auto idle = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - last_data);
+            if (idle.count() >= quiet_ms)
+                break;
+            continue;
+        }
+        char buf[8192];
+        ssize_t n = ::read(fd, buf, sizeof buf);
+        if (n <= 0)
+            break;
+        last_data = std::chrono::steady_clock::now();
+    }
+}
 } // namespace
 
 TEST_CASE("magit-status renders on the buffer's repo when neomg is launched outside it")
@@ -197,8 +230,16 @@ TEST_CASE("RET in *magit-log* after switching from *magit-reflog* shows Not on a
             // l l: open the log buffer (map built for *magit-log*)
             (void)!::write(master, "ll", 2);
             if (wait_for(master, "second", std::chrono::seconds(8))) {
-                // q: close log, return to *magit-status* so l h is available
-                (void)!::write(master, "q", 1);
+                // q: close log window.  After the window is deleted the
+                // display does an INCREMENTAL update: only the rows that
+                // were previously occupied by the log window are rewritten.
+                // "On branch" lives in the top rows of the status buffer
+                // (rows 0-4 of the former upper sub-window), which are
+                // already correct in pscreen and are NOT rewritten.
+                // Sending C-l (0x0c) after q forces sgarbf=TRUE, which
+                // triggers a full screen repaint -- every row including
+                // the "On branch" header is emitted to the pty.
+                (void)!::write(master, "q\x0c", 2);
                 if (wait_for(master, "On branch", std::chrono::seconds(8))) {
                     // l h: open the reflog (map rebuilt for *magit-reflog*)
                     (void)!::write(master, "lh", 2);
@@ -207,8 +248,38 @@ TEST_CASE("RET in *magit-log* after switching from *magit-reflog* shows Not on a
                         // \x18 = C-x, then 'b' triggers usebuffer prompt
                         const char switchbuf[] = "\x18""b*magit-log*\r";
                         (void)!::write(master, switchbuf, sizeof switchbuf - 1);
-                        // wait for the log buffer to be current again
-                        if (wait_for(master, "second", std::chrono::seconds(8))) {
+                        // After the switch, force a full-screen redraw with
+                        // C-l (reposition, 0x0c).  The incremental terminal
+                        // update only writes the changed cells of the mode
+                        // line (e.g. "log*" replacing "reflog*"), so the
+                        // literal string "*magit-log*" may not appear in the
+                        // pty stream.  C-l sets sgarbf=TRUE which triggers a
+                        // full repaint, guaranteeing the complete buffer name
+                        // "*magit-log*" is emitted as a contiguous sequence.
+                        // This also acts as a settle: if the switch is still
+                        // in-flight when C-l arrives, it queues behind it and
+                        // the redraw reflects the final state.
+                        (void)!::write(master, "\x0c", 1);
+                        // Wait for the mode-line marker that is UNIQUE to the
+                        // *magit-log* buffer AFTER a full repaint.  The mode
+                        // line for a read-only unchanged buffer is "-:%%- " +
+                        // buffer-name, so "-:%%-" followed by " *magit-log*"
+                        // produces the contiguous string "- *magit-log*".
+                        // This string CANNOT appear in the minibuffer echo
+                        // (which just shows "*magit-log*" without the mode-
+                        // line prefix), so it is a reliable post-switch
+                        // confirmation.  The *magit-reflog* buffer similarly
+                        // shows "- *magit-reflog*" and never "- *magit-log*".
+                        if (wait_for(master, "- *magit-log*", std::chrono::seconds(8))) {
+                            // Drain any residual pty bytes from the redraw
+                            // so the subsequent RET lands on a quiet terminal.
+                            // Use a generous total window (500ms) with a 60ms
+                            // sustained-quiet threshold: Linux pty output from a
+                            // full C-l repaint can arrive in several bursts, and
+                            // a short single-idle drain would exit too early,
+                            // leaving ANSI escape sequences in the pipe when RET
+                            // fires.
+                            drain(master, 500, 60);
                             // RET on what was a commit line -- guard must fire
                             (void)!::write(master, "\r", 1);
                             // safe outcome: stale-map guard returns NULL
