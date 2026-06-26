@@ -85,6 +85,21 @@ if(ENABLE_NATIVE_MAGIT)
     target_link_libraries(test_bridge PRIVATE doctest::doctest mg_magit)
     doctest_discover_tests(test_bridge)
 
+    # Editor-level (pty) test: drives the built neomg binary to cover the C
+    # command layer (src/magit_cmd.c) the engine tests can't reach. Needs the
+    # binary path + forkpty (libutil on glibc; in libc on musl/macOS, so link
+    # util only if a separate lib exists).
+    add_executable(test_editor test_editor.cpp)
+    target_link_libraries(test_editor PRIVATE doctest::doctest)
+    find_library(UTIL_LIB util)
+    if(UTIL_LIB)
+        target_link_libraries(test_editor PRIVATE ${UTIL_LIB})
+    endif()
+    add_dependencies(test_editor mg) # the binary it drives
+    target_compile_definitions(test_editor PRIVATE
+        NEOMG_BINARY="$<TARGET_FILE:mg>")
+    doctest_discover_tests(test_editor)
+
     # Manual status micro-benchmark (NOT registered with CTest). Links the magit
     # module so the README's numbers are reproducible:
     #   ./build/tests/neomg_bench <repo> [scoped-subdir]
