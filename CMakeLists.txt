@@ -31,6 +31,14 @@ option(ENABLE_CPP_UPGRADES "Compile the modern C++23 modules instead of plain C"
 option(ENABLE_NATIVE_MAGIT "Link the native C++ Git DAG engine (src/magit/)"     OFF)
 option(ENABLE_TSAN         "Build every target with ThreadSanitizer (gate)"     OFF)
 option(ENABLE_ZIG_STATUS   "Use the Zig worktree-status walker for cold status (needs zig 0.16)" OFF)
+option(MG_FSWATCH_FORCE_KQUEUE "On macOS, use the kqueue fswatch backend instead of FSEvents (exercises the BSD code path)" OFF)
+
+# On macOS the fswatch default is FSEvents; this forces the kqueue backend so
+# the BSD-only code path stays compiled + tested on the Mac (Darwin shares the
+# BSD EVFILT_VNODE API). Linux/BSD ignore it.
+if(MG_FSWATCH_FORCE_KQUEUE)
+  add_compile_definitions(MG_FSWATCH_FORCE_KQUEUE)
+endif()
 
 if(ENABLE_ZIG_STATUS)
   find_program(ZIG_EXE zig HINTS /opt/local/bin /opt/homebrew/bin /usr/local/bin REQUIRED)

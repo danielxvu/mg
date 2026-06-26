@@ -41,6 +41,17 @@
       }
     },
     {
+      "name": "cpp-kqueue",
+      "displayName": "C++23 + modules, kqueue fswatch backend (BSD proxy)",
+      "description": "Same as cpp but MG_FSWATCH_FORCE_KQUEUE=ON, so mg.fswatch compiles the kqueue backend instead of FSEvents. macOS shares the BSD EVFILT_VNODE kqueue API, so running the fswatch suite here exercises the FreeBSD/OpenBSD/NetBSD code path without a BSD machine. ENABLE_ZIG_STATUS=OFF keeps it focused on the watcher (no zig toolchain needed).",
+      "inherits": "cpp",
+      "binaryDir": "${sourceDir}/build-kqueue",
+      "cacheVariables": {
+        "MG_FSWATCH_FORCE_KQUEUE": "ON",
+        "ENABLE_ZIG_STATUS": "OFF"
+      }
+    },
+    {
       "name": "cpp-linux",
       "displayName": "Linux: C++23 + modules (distro clang)",
       "description": "Native Linux build (Arch primary, Alpine too). Uses the distro clang/clang++ in PATH; CMake auto-detects clang-scan-deps next to it. CMAKE_POLICY_VERSION_MINIMUM=3.5 lets the fetched doctest configure under CMake 4.x. Used by the docker/ images and for native builds: `cmake --preset cpp-linux && cmake --build --preset cpp-linux && ctest --preset cpp-linux`.",
@@ -72,6 +83,7 @@
     { "name": "c-legacy",      "configurePreset": "c-legacy" },
     { "name": "cpp",           "configurePreset": "cpp" },
     { "name": "cpp-tsan",      "configurePreset": "cpp-tsan" },
+    { "name": "cpp-kqueue",    "configurePreset": "cpp-kqueue" },
     { "name": "cpp-linux",     "configurePreset": "cpp-linux" },
     { "name": "cpp-linux-tsan", "configurePreset": "cpp-linux-tsan" }
   ],
@@ -79,6 +91,11 @@
     {
       "name": "cpp",
       "configurePreset": "cpp",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "cpp-kqueue",
+      "configurePreset": "cpp-kqueue",
       "output": { "outputOnFailure": true }
     },
     {

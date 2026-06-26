@@ -27,7 +27,11 @@ fs::path make_temp_dir()
     std::string buf = (fs::temp_directory_path() / "mg_fswatch_XXXXXX").string();
     char *p = ::mkdtemp(buf.data());
     REQUIRE(p != nullptr);
-    return fs::path(p);
+    // Canonicalize: macOS temp dirs live under /var -> /private/var, and the
+    // FSEvents backend reports canonical paths (as does libgit2's workdir in the
+    // real monitor). Use canonical paths so event-path comparisons match on
+    // every backend.
+    return fs::canonical(p);
 }
 } // namespace
 
@@ -38,7 +42,10 @@ TEST_CASE("watcher::create succeeds on an existing directory")
 
     auto w = watcher::create(paths);
     REQUIRE(w.has_value());
-    CHECK(w->fd() >= 0);
+    // A fresh watch of a small dir is not degraded. (fd() is backend-specific:
+    // a real descriptor on kqueue/inotify, -1 on the FSEvents backend, which
+    // delivers via a dispatch queue -- so assert the backend-agnostic contract.)
+    CHECK_FALSE(w->degraded());
 
     fs::remove_all(dir);
 }
@@ -165,27 +172,40 @@ TEST_CASE("watcher dynamically watches directories created after create()")
     fs::remove_all(dir);
 }
 
-// A change under an ignored prefix must not wake the watcher: the ignored dir
-// is never registered, so the only thing that releases wait() is the wake().
+// A change under an ignored prefix must never be reported as an event naming a
+// path inside that prefix. (kqueue/inotify never register the ignored dir, so
+// there are no events at all; the FSEvents backend watches the whole subtree
+// but excludes/filters the ignored path via FSEventStreamSetExclusionPaths +
+// the callback filter. FSEvents may still surface an *unignored ancestor* of an
+// ignored change -- which the monitor handles with a harmless full rescan -- so
+// the cross-backend contract is "no event inside the ignored subtree", not
+// "zero events".)
 TEST_CASE("watcher skips ignored subtrees")
 {
     auto dir = make_temp_dir();
     fs::create_directory(dir / "ig");
     std::array<std::string, 1> roots{dir.string()};
-    std::array<std::string, 1> ignores{(dir / "ig").string()};
+    const std::string ig = (dir / "ig").string();
+    std::array<std::string, 1> ignores{ig};
     auto w = watcher::create(roots, ignores);
     REQUIRE(w.has_value());
 
     std::thread t([&] {
         { std::ofstream(dir / "ig" / "f.txt") << "x"; } // under the ignored dir
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        w->wake();
+        w->wake(); // guarantees wait() returns even if no event ever fires
     });
     auto evs = w->wait();
     t.join();
 
     REQUIRE(evs.has_value());
-    CHECK(evs->empty()); // woken only; the ignored change produced no event
+    for (const auto &e : *evs) {
+        const bool inside =
+            e.path == ig || (e.path.size() > ig.size() &&
+                             e.path.compare(0, ig.size(), ig) == 0 &&
+                             e.path[ig.size()] == '/');
+        CHECK_FALSE(inside); // the ignored subtree itself is never reported
+    }
 
     fs::remove_all(dir);
 }

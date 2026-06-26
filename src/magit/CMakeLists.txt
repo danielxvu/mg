@@ -21,6 +21,13 @@ target_link_libraries(mg_magit PUBLIC PkgConfig::GIT2)
 find_package(Threads REQUIRED)
 target_link_libraries(mg_magit PUBLIC Threads::Threads)
 
+# mg.fswatch uses FSEvents (CoreServices) on macOS by default. Harmless to link
+# even when MG_FSWATCH_FORCE_KQUEUE compiles the kqueue backend instead (no
+# CoreServices symbols are referenced then). libdispatch is in libSystem.
+if(APPLE)
+    target_link_libraries(mg_magit PUBLIC "-framework CoreServices")
+endif()
+
 if(ENABLE_ZIG_STATUS)
     # Build + link the Zig worktree-status walker via the shared helper, which
     # handles the macOS Apple-ld repack uniformly (see cmake/AddZigLibrary.cmake).

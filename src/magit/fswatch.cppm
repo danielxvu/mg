@@ -10,13 +10,17 @@
 // (M2b) and the background-thread bridge (M2d) build on top of this.
 
 module;
+#include <atomic>             // FSEvents: lock-free degraded flag
 #include <cerrno>
+#include <condition_variable> // FSEvents: bridge the callback thread to wait()
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
-#include <filesystem>      // recursive tree walk (both backends)
+#include <filesystem>      // recursive tree walk (kqueue/inotify)
 #include <functional>      // ignore predicate (git-aware, supplied by caller)
+#include <memory>          // FSEvents: own the (non-movable) callback state
+#include <mutex>           // FSEvents: guard the pending-events buffer
 #include <span>
 #include <string>
 #include <unordered_map>   // wd/fd -> dir path
@@ -27,22 +31,111 @@ module;
 #include <fcntl.h>
 #include <unistd.h>
 
+// macOS default backend is FSEvents (one stream for the whole worktree, no
+// per-directory fds, no startup walk). Define MG_FSWATCH_FORCE_KQUEUE to use
+// the kqueue backend on macOS instead -- this exercises the BSD kqueue code
+// path on the Mac (Darwin's kqueue is the same EVFILT_VNODE API the BSDs use),
+// so the BSD-only backend stays continuously tested without a BSD machine.
+#if defined(__APPLE__) && !defined(MG_FSWATCH_FORCE_KQUEUE)
+#  define MG_FSWATCH_FSEVENTS 1
+#endif
+
 #if defined(__linux__)
 #  include <poll.h>
 #  include <sys/eventfd.h>
 #  include <sys/inotify.h>
+#elif defined(MG_FSWATCH_FSEVENTS)
+#  include <CoreServices/CoreServices.h> // FSEvents
+#  include <dispatch/dispatch.h>         // serial queue for the stream callback
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
 #  include <array>
 #  include <sys/event.h>
 #  include <sys/resource.h> // raise RLIMIT_NOFILE for the per-dir watch fds
 #  include <sys/types.h>
 #else
-#  error "mg.fswatch: unsupported platform (needs kqueue or inotify)"
+#  error "mg.fswatch: unsupported platform (needs FSEvents, kqueue, or inotify)"
 #endif
 
 export module mg.fswatch;
 
 import mg.coro;
+
+// Module-internal helpers (not exported).
+namespace mg::fswatch::detail {
+
+// True if `path` is, or is nested under, any ignore prefix in `ignores`, or the
+// caller's `pred` rejects it. Shared by every backend's filtering.
+inline bool path_ignored(const std::vector<std::string> &ignores,
+                         const std::function<bool(const std::string &)> &pred,
+                         const std::string &path)
+{
+    for (const auto &ig : ignores)
+        if (path == ig ||
+            (path.size() > ig.size() && path.compare(0, ig.size(), ig) == 0 &&
+             path[ig.size()] == '/'))
+            return true;
+    return pred && pred(path);
+}
+
+#if defined(MG_FSWATCH_FSEVENTS)
+// State the FSEvents callback (running on a dispatch queue) shares with wait()
+// (running on the monitor thread). Heap-owned by the watcher via unique_ptr so
+// the watcher stays movable while this -- with its non-movable mutex/condvar --
+// keeps a stable address for the stream's callback context.
+struct fse_state {
+    std::mutex mu;
+    std::condition_variable cv;
+    std::vector<std::string> pending; // distinct changed dirs; "" == resync marker
+    bool woken = false;               // wake() was called (guarded by mu)
+    std::atomic<bool> degraded{false}; // FSEvents dropped events / asked for a rescan
+    std::vector<std::string> ignores; // filter state (callback owns its copy)
+    std::function<bool(const std::string &)> ignore_pred;
+};
+
+// FSEvents delivers coalesced change notifications here on the dispatch queue.
+// Paths are directories (dir-level stream). Drop/overflow flags become the
+// resync marker + degraded. Filtered, deduped, and handed to wait() via cv.
+inline void fse_callback(ConstFSEventStreamRef, void *info, size_t n,
+                         void *paths, const FSEventStreamEventFlags flags[],
+                         const FSEventStreamEventId[])
+{
+    auto *st = static_cast<fse_state *>(info);
+    auto **cpaths = static_cast<char **>(paths);
+    std::vector<std::string> add;
+    add.reserve(n);
+    bool resync = false;
+    for (size_t i = 0; i < n; ++i) {
+        if (flags[i] & (kFSEventStreamEventFlagUserDropped |
+                        kFSEventStreamEventFlagKernelDropped |
+                        kFSEventStreamEventFlagMustScanSubDirs)) {
+            resync = true; // we lost track -> consumer must full-rescan
+            continue;
+        }
+        std::string p = cpaths[i];
+        // FSEvents reports directory paths with a trailing '/'; strip it so paths
+        // match the kqueue/inotify convention and the consumer's repo prefix
+        // (which has none).
+        if (p.size() > 1 && p.back() == '/')
+            p.pop_back();
+        if (!path_ignored(st->ignores, st->ignore_pred, p))
+            add.push_back(std::move(p));
+    }
+    if (add.empty() && !resync)
+        return;
+    {
+        std::lock_guard lk(st->mu);
+        if (resync) {
+            st->degraded = true;
+            st->pending.emplace_back(); // empty path == resync marker
+        }
+        for (auto &p : add)
+            st->pending.push_back(std::move(p));
+    }
+    st->cv.notify_one();
+}
+#endif // MG_FSWATCH_FSEVENTS
+
+} // namespace mg::fswatch::detail
 
 export namespace mg::fswatch {
 
@@ -70,16 +163,22 @@ public:
     {
         if (this != &other) {
             close_all();
-            queue_fd_ = std::exchange(other.queue_fd_, -1);
-            wake_fd_  = std::exchange(other.wake_fd_, -1);
             ignores_     = std::move(other.ignores_);
             ignore_pred_ = std::move(other.ignore_pred_);
-            degraded_    = std::exchange(other.degraded_, false);
-#if defined(__linux__)
-            wd_path_  = std::move(other.wd_path_);
+#if defined(MG_FSWATCH_FSEVENTS)
+            stream_ = std::exchange(other.stream_, nullptr);
+            queue_  = std::exchange(other.queue_, nullptr);
+            st_     = std::move(other.st_);
 #else
+            queue_fd_ = std::exchange(other.queue_fd_, -1);
+            wake_fd_  = std::exchange(other.wake_fd_, -1);
+            degraded_ = std::exchange(other.degraded_, false);
+#  if defined(__linux__)
+            wd_path_  = std::move(other.wd_path_);
+#  else
             fd_path_  = std::move(other.fd_path_);
             watched_  = std::move(other.watched_);
+#  endif
 #endif
         }
         return *this;
@@ -111,12 +210,27 @@ public:
     // while no one is waiting is remembered and consumed by the next wait().
     void wake() noexcept;
 
-    int fd() const noexcept { return queue_fd_; }
+    int fd() const noexcept
+    {
+#if defined(MG_FSWATCH_FSEVENTS)
+        return -1; // FSEvents delivers via a dispatch queue; no pollable fd
+#else
+        return queue_fd_;
+#endif
+    }
 
-    // True once the kernel watch/fd limit was hit while building/extending the
-    // tree: the watch set is incomplete, so changes in unwatched dirs can be
-    // missed. The consumer should fall back to a full rescan when degraded.
-    bool degraded() const noexcept { return degraded_; }
+    // True once event delivery degraded: the kernel watch/fd limit was hit
+    // (kqueue/inotify), or FSEvents dropped events / asked for a full rescan.
+    // The watch set / event stream is incomplete, so the consumer should fall
+    // back to a full rescan.
+    bool degraded() const noexcept
+    {
+#if defined(MG_FSWATCH_FSEVENTS)
+        return st_->degraded.load(std::memory_order_relaxed);
+#else
+        return degraded_;
+#endif
+    }
 
 private:
     watcher() = default;
@@ -127,15 +241,31 @@ private:
 
     void close_all() noexcept
     {
-#if !defined(__linux__)
+#if defined(MG_FSWATCH_FSEVENTS)
+        if (stream_) {
+            FSEventStreamStop(stream_);
+            FSEventStreamInvalidate(stream_); // unschedule from the queue
+            FSEventStreamRelease(stream_);
+            stream_ = nullptr;
+        }
+        if (queue_) {
+            // Flush any callback block already queued before we free st_, so the
+            // callback can never touch freed state (no new blocks: invalidated).
+            dispatch_sync_f(queue_, nullptr, [](void *) {});
+            dispatch_release(queue_);
+            queue_ = nullptr;
+        }
+        st_.reset(); // safe: no callback can run after stop+invalidate+flush
+#else
+#  if !defined(__linux__)
         for (const auto &kv : fd_path_) // kqueue: per-dir open fds
             if (kv.first >= 0)
                 ::close(kv.first);
         fd_path_.clear();
         watched_.clear();
-#else
+#  else
         wd_path_.clear(); // inotify wds are dropped when queue_fd_ is closed
-#endif
+#  endif
         if (wake_fd_ >= 0) {
             ::close(wake_fd_);
             wake_fd_ = -1;
@@ -144,25 +274,34 @@ private:
             ::close(queue_fd_);
             queue_fd_ = -1;
         }
+#endif
     }
 
-    int queue_fd_ = -1; // kqueue fd, or inotify fd
-    int wake_fd_  = -1; // inotify: eventfd; kqueue: unused (-1)
-
-    // Recursive-watch state shared by both backends: the ignore prefixes and a
-    // degraded flag set when the kernel watch/fd limit is hit while building or
-    // extending the tree. add_tree() recursively registers a dir + its subdirs;
-    // is_ignored() tests a path against the prefixes.
+    // Ignore prefixes + the git-aware predicate (kqueue/inotify consult these
+    // during the recursive walk via is_ignored(); the FSEvents callback keeps
+    // its own copy in fse_state and filters there). is_ignored() tests a path
+    // against the prefixes.
     std::vector<std::string> ignores_;
     std::function<bool(const std::string &)> ignore_pred_;
+    bool is_ignored(const std::string &path) const;
+
+#if defined(MG_FSWATCH_FSEVENTS) // ----------------------------------- FSEvents
+    FSEventStreamRef stream_ = nullptr; // one stream for the whole worktree
+    dispatch_queue_t queue_  = nullptr; // serial queue the callback runs on
+    std::unique_ptr<detail::fse_state> st_; // callback <-> wait() shared state
+#else                            // -------------------------- kqueue / inotify
+    int queue_fd_ = -1; // kqueue fd, or inotify fd
+    int wake_fd_  = -1; // inotify: eventfd; kqueue: unused (-1)
+    // degraded flag set when the kernel watch/fd limit is hit while building or
+    // extending the tree. add_tree() recursively registers a dir + its subdirs.
     bool degraded_ = false;
     void add_tree(const std::string &dir);
-    bool is_ignored(const std::string &path) const;
-#if defined(__linux__)
+#  if defined(__linux__)
     std::unordered_map<int, std::string> wd_path_; // inotify: watch desc -> dir
-#else
+#  else
     std::unordered_map<int, std::string> fd_path_; // kqueue: open fd -> dir
     std::unordered_set<std::string> watched_;      // kqueue: avoid re-watching
+#  endif
 #endif
 };
 
@@ -180,16 +319,12 @@ mg::generator<fs_event> watch_stream(watcher &w, mg::stop_flag stop)
     }
 }
 
-// True if `path` is, or is nested under, any ignore prefix. Shared by both
-// backends; the recursive walk skips these subtrees.
+// True if `path` is, or is nested under, any ignore prefix. Used by the
+// kqueue/inotify recursive walk to skip subtrees. (FSEvents filters in its
+// callback via detail::path_ignored directly.)
 bool watcher::is_ignored(const std::string &path) const
 {
-    for (const auto &ig : ignores_)
-        if (path == ig ||
-            (path.size() > ig.size() && path.compare(0, ig.size(), ig) == 0 &&
-             path[ig.size()] == '/'))
-            return true;
-    return ignore_pred_ && ignore_pred_(path);
+    return detail::path_ignored(ignores_, ignore_pred_, path);
 }
 
 #if defined(__linux__) // ---------------------------------------- inotify ----
@@ -320,6 +455,129 @@ watcher::wait()
     out.reserve(dirs.size());
     for (const auto &d : dirs)
         out.push_back(fs_event{d});
+    return out;
+}
+
+#elif defined(MG_FSWATCH_FSEVENTS) // ----------------------------- FSEvents ----
+// One FSEventStream watches each root's whole subtree -- FSEvents is inherently
+// recursive and auto-covers directories created later, so there are NO
+// per-directory fds, no recursive walk, and no startup cost. The stream runs on
+// a serial dispatch queue; the callback (detail::fse_callback) filters + buffers
+// changed dirs and notifies wait() via the fse_state condvar.
+
+std::expected<watcher, watch_error>
+watcher::create(std::span<const std::string> roots,
+                std::span<const std::string> ignores,
+                std::function<bool(const std::string &)> ignore_pred)
+{
+    // FSEvents (unlike kqueue/inotify) happily creates a stream for a path that
+    // does not exist yet. Match the other backends' contract: a watch with no
+    // existing root is a setup failure.
+    bool any_exists = false;
+    for (const auto &r : roots) {
+        std::error_code ec;
+        if (std::filesystem::exists(r, ec)) {
+            any_exists = true;
+            break;
+        }
+    }
+    if (!any_exists)
+        return std::unexpected(watch_error{"FSEvents: no existing roots", ENOENT});
+
+    watcher w;
+    w.st_ = std::make_unique<detail::fse_state>();
+    w.st_->ignores.assign(ignores.begin(), ignores.end());
+    w.st_->ignore_pred = std::move(ignore_pred);
+
+    CFMutableArrayRef paths =
+        CFArrayCreateMutable(nullptr, static_cast<CFIndex>(roots.size()),
+                             &kCFTypeArrayCallBacks);
+    if (paths == nullptr)
+        return std::unexpected(watch_error{"CFArrayCreateMutable", errno});
+    for (const auto &r : roots) {
+        CFStringRef s = CFStringCreateWithCString(nullptr, r.c_str(),
+                                                  kCFStringEncodingUTF8);
+        if (s) {
+            CFArrayAppendValue(paths, s);
+            CFRelease(s);
+        }
+    }
+
+    FSEventStreamContext ctx{};
+    ctx.info = w.st_.get();
+    // Dir-level events (no FileEvents flag); char** paths (no UseCFTypes).
+    // NoDefer = deliver the first event of a burst promptly; WatchRoot = also
+    // notify if a watched root itself is moved/deleted.
+    w.stream_ = FSEventStreamCreate(
+        nullptr, &detail::fse_callback, &ctx, paths,
+        kFSEventStreamEventIdSinceNow, /*latency*/ 0.15,
+        kFSEventStreamCreateFlagNoDefer | kFSEventStreamCreateFlagWatchRoot);
+    CFRelease(paths);
+    if (w.stream_ == nullptr)
+        return std::unexpected(watch_error{"FSEventStreamCreate", errno});
+
+    w.queue_ = dispatch_queue_create("mg.fswatch", DISPATCH_QUEUE_SERIAL);
+    FSEventStreamSetDispatchQueue(w.stream_, w.queue_);
+
+    // Exclude the explicit ignore prefixes at the SOURCE: FSEvents watches whole
+    // subtrees and can coalesce a deep change up to an ancestor, so callback
+    // filtering alone can't keep an ignored subtree from waking us via its
+    // unignored parent. SetExclusionPaths drops changes under these paths
+    // entirely (max 8 honored; the monitor passes one -- .git/objects). The
+    // gitignore *predicate* (node_modules, …) can't be expressed as a static
+    // path list, so those are still filtered in the callback (best-effort:
+    // an ancestor-coalesced event may slip through to a harmless full rescan).
+    if (!ignores.empty()) {
+        CFMutableArrayRef excl = CFArrayCreateMutable(
+            nullptr, static_cast<CFIndex>(ignores.size()), &kCFTypeArrayCallBacks);
+        if (excl) {
+            for (const auto &ig : ignores) {
+                CFStringRef s = CFStringCreateWithCString(nullptr, ig.c_str(),
+                                                          kCFStringEncodingUTF8);
+                if (s) {
+                    CFArrayAppendValue(excl, s);
+                    CFRelease(s);
+                }
+            }
+            FSEventStreamSetExclusionPaths(w.stream_, excl);
+            CFRelease(excl);
+        }
+    }
+
+    if (!FSEventStreamStart(w.stream_))
+        return std::unexpected(watch_error{"FSEventStreamStart", errno});
+    return w;
+}
+
+void watcher::wake() noexcept
+{
+    {
+        std::lock_guard lk(st_->mu);
+        st_->woken = true;
+    }
+    st_->cv.notify_one();
+}
+
+std::expected<std::vector<fs_event>, watch_error>
+watcher::wait()
+{
+    std::unique_lock lk(st_->mu);
+    st_->cv.wait(lk, [&] { return st_->woken || !st_->pending.empty(); });
+
+    std::vector<fs_event> out;
+    st_->woken = false; // consume the wake (empty return == woken, no change)
+    if (!st_->pending.empty()) {
+        std::unordered_set<std::string> seen;
+        out.reserve(st_->pending.size());
+        for (auto &p : st_->pending) {
+            if (p.empty()) {
+                out.push_back(fs_event{}); // resync marker (consumer full-rescans)
+            } else if (seen.insert(p).second) {
+                out.push_back(fs_event{std::move(p)});
+            }
+        }
+        st_->pending.clear();
+    }
     return out;
 }
 
