@@ -14,7 +14,7 @@ name: linux
 
 on:
   push:
-    branches: [master, cpp-refactor, fm-zig-hybrid]
+    branches: [master, cpp-refactor, neomg]
   pull_request:
   workflow_dispatch:
 
