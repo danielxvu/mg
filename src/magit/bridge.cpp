@@ -518,6 +518,12 @@ const char *state_word(mg::magit::status s)
     }
 }
 
+// Record an in-process libgit2 mutation as its equivalent git command.
+void proc_eq(const std::string &cmd, bool ok)
+{
+    mg::magit::proclog::record('~', cmd, "", ok, 0);
+}
+
 } // namespace
 
 extern "C" void mg_magit_start(const char *repo_path)
@@ -1113,35 +1119,45 @@ extern "C" int mg_magit_stage(const char *repo_path, const char *path)
 {
     if (repo_path == nullptr || path == nullptr)
         return 0;
-    return mg::git::stage(repo_path, path).has_value() ? 1 : 0;
+    bool ok = mg::git::stage(repo_path, path).has_value();
+    proc_eq(std::string("git add ") + path, ok);
+    return ok ? 1 : 0;
 }
 
 extern "C" int mg_magit_unstage(const char *repo_path, const char *path)
 {
     if (repo_path == nullptr || path == nullptr)
         return 0;
-    return mg::git::unstage(repo_path, path).has_value() ? 1 : 0;
+    bool ok = mg::git::unstage(repo_path, path).has_value();
+    proc_eq(std::string("git reset HEAD -- ") + path, ok);
+    return ok ? 1 : 0;
 }
 
 extern "C" int mg_magit_discard(const char *repo_path, const char *path)
 {
     if (repo_path == nullptr || path == nullptr)
         return 0;
-    return mg::git::discard(repo_path, path).has_value() ? 1 : 0;
+    bool ok = mg::git::discard(repo_path, path).has_value();
+    proc_eq(std::string("git checkout -- ") + path, ok);
+    return ok ? 1 : 0;
 }
 
 extern "C" int mg_magit_stage_all(const char *repo_path)
 {
     if (repo_path == nullptr)
         return 0;
-    return mg::git::stage_all(repo_path).has_value() ? 1 : 0;
+    bool ok = mg::git::stage_all(repo_path).has_value();
+    proc_eq("git add -A", ok);
+    return ok ? 1 : 0;
 }
 
 extern "C" int mg_magit_unstage_all(const char *repo_path)
 {
     if (repo_path == nullptr)
         return 0;
-    return mg::git::unstage_all(repo_path).has_value() ? 1 : 0;
+    bool ok = mg::git::unstage_all(repo_path).has_value();
+    proc_eq("git reset HEAD", ok);
+    return ok ? 1 : 0;
 }
 
 extern "C" int mg_magit_commit(const char *repo_path, const char *message)
@@ -1243,38 +1259,46 @@ extern "C" int mg_magit_stash_apply(const char *repo_path, int index)
 {
     if (repo_path == nullptr || index < 0)
         return 0;
-    return mg::git::stash_apply(repo_path, index).has_value() ? 1 : 0;
+    bool ok = mg::git::stash_apply(repo_path, index).has_value();
+    proc_eq("git stash apply", ok);
+    return ok ? 1 : 0;
 }
 
 extern "C" int mg_magit_stash_drop(const char *repo_path, int index)
 {
     if (repo_path == nullptr || index < 0)
         return 0;
-    return mg::git::stash_drop(repo_path, index).has_value() ? 1 : 0;
+    bool ok = mg::git::stash_drop(repo_path, index).has_value();
+    proc_eq("git stash drop", ok);
+    return ok ? 1 : 0;
 }
 
 extern "C" int mg_magit_stash_push(const char *repo_path, const char *message)
 {
     if (repo_path == nullptr)
         return 0;
-    return mg::git::stash_push(repo_path, message == nullptr ? "" : message)
-                   .has_value()
-               ? 1
-               : 0;
+    bool ok = mg::git::stash_push(repo_path, message == nullptr ? "" : message)
+                      .has_value();
+    proc_eq("git stash push", ok);
+    return ok ? 1 : 0;
 }
 
 extern "C" int mg_magit_stash_pop(const char *repo_path, int index)
 {
     if (repo_path == nullptr || index < 0)
         return 0;
-    return mg::git::stash_pop(repo_path, index).has_value() ? 1 : 0;
+    bool ok = mg::git::stash_pop(repo_path, index).has_value();
+    proc_eq("git stash pop", ok);
+    return ok ? 1 : 0;
 }
 
 extern "C" int mg_magit_checkout(const char *repo_path, const char *name)
 {
     if (repo_path == nullptr || name == nullptr)
         return 0;
-    return mg::git::checkout_branch(repo_path, name).has_value() ? 1 : 0;
+    bool ok = mg::git::checkout_branch(repo_path, name).has_value();
+    proc_eq(std::string("git checkout ") + name, ok);
+    return ok ? 1 : 0;
 }
 
 // The UI's credential prompt, registered by the C core; adapted to the engine's
@@ -1389,7 +1413,10 @@ extern "C" int mg_magit_reset(const char *repo_path, const char *rev, int mode)
     const mg::git::reset_mode m = mode == 0   ? mg::git::reset_mode::soft
                                   : mode == 2 ? mg::git::reset_mode::hard
                                               : mg::git::reset_mode::mixed;
-    return mg::git::reset_to(repo_path, rev, m).has_value() ? 1 : 0;
+    bool ok = mg::git::reset_to(repo_path, rev, m).has_value();
+    const char *mode_word = mode == 0 ? "--soft" : mode == 2 ? "--hard" : "--mixed";
+    proc_eq(std::string("git reset ") + mode_word + " " + rev, ok);
+    return ok ? 1 : 0;
 }
 
 extern "C" int mg_magit_revert(const char *repo_path, const char *rev)
@@ -1414,18 +1441,20 @@ extern "C" int mg_magit_tag_create(const char *repo_path, const char *name,
 {
     if (repo_path == nullptr || name == nullptr || name[0] == '\0')
         return 0;
-    return mg::git::create_tag(repo_path, name, target ? target : "HEAD",
-                               message ? message : "")
-                   .has_value()
-               ? 1
-               : 0;
+    bool ok = mg::git::create_tag(repo_path, name, target ? target : "HEAD",
+                                  message ? message : "")
+                      .has_value();
+    proc_eq(std::string("git tag ") + name, ok);
+    return ok ? 1 : 0;
 }
 
 extern "C" int mg_magit_tag_delete(const char *repo_path, const char *name)
 {
     if (repo_path == nullptr || name == nullptr || name[0] == '\0')
         return 0;
-    return mg::git::delete_tag(repo_path, name).has_value() ? 1 : 0;
+    bool ok = mg::git::delete_tag(repo_path, name).has_value();
+    proc_eq(std::string("git tag -d ") + name, ok);
+    return ok ? 1 : 0;
 }
 
 extern "C" int mg_magit_blame_file(const char *repo_path, const char *path,
@@ -1453,7 +1482,9 @@ extern "C" int mg_magit_ignore(const char *repo_path, const char *pattern)
 {
     if (repo_path == nullptr || pattern == nullptr || pattern[0] == '\0')
         return 0;
-    return mg::git::ignore_path(repo_path, pattern).has_value() ? 1 : 0;
+    bool ok = mg::git::ignore_path(repo_path, pattern).has_value();
+    proc_eq(std::string("echo ") + pattern + " >> .gitignore", ok);
+    return ok ? 1 : 0;
 }
 
 extern "C" int mg_magit_resolve_conflict(const char *repo_path,
@@ -1561,14 +1592,18 @@ extern "C" int mg_magit_note_set(const char *repo_path, const char *rev,
 {
     if (repo_path == nullptr || rev == nullptr || message == nullptr)
         return 0;
-    return mg::git::set_note(repo_path, rev, message).has_value() ? 1 : 0;
+    bool ok = mg::git::set_note(repo_path, rev, message).has_value();
+    proc_eq("git notes add", ok);
+    return ok ? 1 : 0;
 }
 
 extern "C" int mg_magit_note_remove(const char *repo_path, const char *rev)
 {
     if (repo_path == nullptr || rev == nullptr)
         return 0;
-    return mg::git::remove_note(repo_path, rev).has_value() ? 1 : 0;
+    bool ok = mg::git::remove_note(repo_path, rev).has_value();
+    proc_eq("git notes remove", ok);
+    return ok ? 1 : 0;
 }
 
 extern "C" int mg_magit_worktree_add(const char *repo_path, const char *name,
@@ -1614,7 +1649,9 @@ extern "C" int mg_magit_bisect_start(const char *repo_path, const char *bad,
         good == nullptr || good[0] == '\0')
         return 0;
     auto r = mg::git::bisect_start(repo_path, bad, good);
-    if (!r)
+    bool ok = r.has_value();
+    proc_eq("git bisect start", ok);
+    if (!ok)
         return 0;
     fill_msg(*r, out, outlen);
     return 1;
@@ -1626,7 +1663,9 @@ extern "C" int mg_magit_bisect_mark(const char *repo_path, int is_bad,
     if (repo_path == nullptr)
         return 0;
     auto r = mg::git::bisect_mark(repo_path, is_bad != 0);
-    if (!r)
+    bool ok = r.has_value();
+    proc_eq(is_bad ? "git bisect bad" : "git bisect good", ok);
+    if (!ok)
         return 0;
     fill_msg(*r, out, outlen);
     return 1;
@@ -1636,7 +1675,9 @@ extern "C" int mg_magit_bisect_reset(const char *repo_path)
 {
     if (repo_path == nullptr)
         return 0;
-    return mg::git::bisect_reset(repo_path).has_value() ? 1 : 0;
+    bool ok = mg::git::bisect_reset(repo_path).has_value();
+    proc_eq("git bisect reset", ok);
+    return ok ? 1 : 0;
 }
 
 extern "C" int mg_magit_bisect_active(const char *repo_path)
@@ -1650,28 +1691,39 @@ extern "C" int mg_magit_rebase(const char *repo_path, const char *upstream)
 {
     if (repo_path == nullptr || upstream == nullptr || upstream[0] == '\0')
         return 0;
-    return rebase_code(mg::git::rebase_onto(repo_path, upstream));
+    auto r = mg::git::rebase_onto(repo_path, upstream);
+    int code = rebase_code(r);
+    proc_eq(std::string("git rebase ") + upstream, code != 0);
+    return code;
 }
 
 extern "C" int mg_magit_rebase_continue(const char *repo_path)
 {
     if (repo_path == nullptr)
         return 0;
-    return rebase_code(mg::git::rebase_continue(repo_path));
+    auto r = mg::git::rebase_continue(repo_path);
+    int code = rebase_code(r);
+    proc_eq("git rebase --continue", code != 0);
+    return code;
 }
 
 extern "C" int mg_magit_rebase_skip(const char *repo_path)
 {
     if (repo_path == nullptr)
         return 0;
-    return rebase_code(mg::git::rebase_skip(repo_path));
+    auto r = mg::git::rebase_skip(repo_path);
+    int code = rebase_code(r);
+    proc_eq("git rebase --skip", code != 0);
+    return code;
 }
 
 extern "C" int mg_magit_rebase_abort(const char *repo_path)
 {
     if (repo_path == nullptr)
         return 0;
-    return mg::git::rebase_abort(repo_path).has_value() ? 1 : 0;
+    bool ok = mg::git::rebase_abort(repo_path).has_value();
+    proc_eq("git rebase --abort", ok);
+    return ok ? 1 : 0;
 }
 
 extern "C" int mg_magit_rebase_in_progress(const char *repo_path)
@@ -1720,22 +1772,28 @@ extern "C" int mg_magit_rebase_interactive(const char *repo_path,
         plan.push_back({a, steps[i].oid ? steps[i].oid : "",
                         steps[i].message ? steps[i].message : ""});
     }
-    return rebase_code(
-        mg::git::rebase_interactive(repo_path, onto, std::move(plan)));
+    auto r = mg::git::rebase_interactive(repo_path, onto, std::move(plan));
+    int code = rebase_code(r);
+    proc_eq(std::string("git rebase -i ") + onto, code != 0);
+    return code;
 }
 
 extern "C" int mg_magit_branch_create(const char *repo_path, const char *name)
 {
     if (repo_path == nullptr || name == nullptr || name[0] == '\0')
         return 0;
-    return mg::git::create_branch(repo_path, name).has_value() ? 1 : 0;
+    bool ok = mg::git::create_branch(repo_path, name).has_value();
+    proc_eq(std::string("git branch ") + name, ok);
+    return ok ? 1 : 0;
 }
 
 extern "C" int mg_magit_branch_delete(const char *repo_path, const char *name)
 {
     if (repo_path == nullptr || name == nullptr || name[0] == '\0')
         return 0;
-    return mg::git::delete_branch(repo_path, name).has_value() ? 1 : 0;
+    bool ok = mg::git::delete_branch(repo_path, name).has_value();
+    proc_eq(std::string("git branch -D ") + name, ok);
+    return ok ? 1 : 0;
 }
 
 extern "C" int mg_magit_branch_rename(const char *repo_path, const char *from,
@@ -1744,5 +1802,7 @@ extern "C" int mg_magit_branch_rename(const char *repo_path, const char *from,
     if (repo_path == nullptr || from == nullptr || to == nullptr ||
         from[0] == '\0' || to[0] == '\0')
         return 0;
-    return mg::git::rename_branch(repo_path, from, to).has_value() ? 1 : 0;
+    bool ok = mg::git::rename_branch(repo_path, from, to).has_value();
+    proc_eq(std::string("git branch -m ") + from + " " + to, ok);
+    return ok ? 1 : 0;
 }

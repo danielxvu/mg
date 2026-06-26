@@ -2131,3 +2131,49 @@ TEST_CASE("a CLI push logs a $ entry with the terminal-output note")
     fs::remove_all(dir);
     fs::remove_all(bare);
 }
+
+// FM-PROCESS-LOG: Task 3 — libgit2 mutation ≈ entries
+
+TEST_CASE("staging logs a ≈ git add entry; status reads log nothing")
+{
+    auto dir = make_repo_with_changes(); // untracked.txt present
+    mg::magit::proclog::clear();
+
+    REQUIRE(mg_magit_stage(dir.string().c_str(), "untracked.txt") == 1);
+
+    auto after_stage = mg::magit::proclog::snapshot();
+    bool found = false;
+    for (const auto &e : after_stage)
+        if (e.kind == '~' && e.command == "git add untracked.txt") {
+            CHECK(e.ok);
+            found = true;
+        }
+    CHECK(found);
+
+    // A read must NOT add an entry.
+    std::size_t before = mg::magit::proclog::snapshot().size();
+    std::vector<std::string> sink;
+    mg_magit_status_buffer(
+        dir.string().c_str(), nullptr, 0,
+        [](void *c, const char *l, int, const char *, int) {
+            static_cast<std::vector<std::string> *>(c)->emplace_back(l);
+        },
+        &sink);
+    CHECK(mg::magit::proclog::snapshot().size() == before);
+
+    fs::remove_all(dir);
+}
+
+TEST_CASE("tag creation logs a ≈ git tag entry")
+{
+    auto dir = make_repo_full(); // has a commit to tag
+    mg::magit::proclog::clear();
+    mg_magit_tag_create(dir.string().c_str(), "v0.1", nullptr, nullptr); // confirm arity in bridge.h
+    auto s = mg::magit::proclog::snapshot();
+    bool found = false;
+    for (const auto &e : s)
+        if (e.kind == '~' && e.command.find("git tag v0.1") != std::string::npos)
+            found = true;
+    CHECK(found);
+    fs::remove_all(dir);
+}
