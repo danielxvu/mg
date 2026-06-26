@@ -863,19 +863,23 @@ namespace mg::git {
 // Process-global diff-view config (context lines + ignore-whitespace).
 // Read by file_diff (display) AND path_scoped_diff_opts (staging) so that
 // displayed hunk indices stay aligned with what staging ops recompute.
+// Also read by the monitor thread in compose_status_view (the Diff: header).
+// Must be atomic: the UI thread writes via set_diff_view while the monitor
+// thread reads in compose_status_view concurrently.
 // Default matches libgit2's own default (3 context lines, no ws ignore).
 namespace {
-int  g_diff_context  = 3;
-bool g_diff_ignore_ws = false;
+std::atomic<int>  g_diff_context{3};
+std::atomic<bool> g_diff_ignore_ws{false};
 }
 
 void set_diff_view(int context, bool ignore_ws)
 {
-    g_diff_context   = context < 0 ? 0 : (context > 32 ? 32 : context);
-    g_diff_ignore_ws = ignore_ws;
+    g_diff_context.store(context < 0 ? 0 : (context > 32 ? 32 : context),
+                         std::memory_order_relaxed);
+    g_diff_ignore_ws.store(ignore_ws, std::memory_order_relaxed);
 }
-int  diff_view_context()  { return g_diff_context; }
-bool diff_view_ignore_ws() { return g_diff_ignore_ws; }
+int  diff_view_context()  { return g_diff_context.load(std::memory_order_relaxed); }
+bool diff_view_ignore_ws() { return g_diff_ignore_ws.load(std::memory_order_relaxed); }
 
 static error last_error()
 {
@@ -3679,8 +3683,8 @@ file_diff(std::string repo, std::string path, bool staged)
     char *paths[1] = {const_cast<char *>(path.c_str())};
     opts.pathspec.strings = paths;
     opts.pathspec.count = 1;
-    opts.context_lines = static_cast<uint32_t>(g_diff_context);
-    if (g_diff_ignore_ws)
+    opts.context_lines = static_cast<uint32_t>(g_diff_context.load(std::memory_order_relaxed));
+    if (g_diff_ignore_ws.load(std::memory_order_relaxed))
         opts.flags |= GIT_DIFF_IGNORE_WHITESPACE;
 
     git_diff *raw_diff = nullptr;
@@ -3769,7 +3773,7 @@ static void path_scoped_diff_opts(git_diff_options &opts, char **path_storage)
     git_diff_options_init(&opts, GIT_DIFF_OPTIONS_VERSION);
     opts.pathspec.strings = path_storage;
     opts.pathspec.count = 1;
-    opts.context_lines = static_cast<uint32_t>(g_diff_context);
+    opts.context_lines = static_cast<uint32_t>(g_diff_context.load(std::memory_order_relaxed));
 }
 
 std::expected<void, error>
