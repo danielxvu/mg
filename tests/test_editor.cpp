@@ -526,17 +526,25 @@ TEST_CASE("+ grows diff context; w blocks hunk staging with a warning")
                 (void)!::write(master, "+++", 3);       // context 3->6
                 (void)!::write(master, "\x0c", 1);
                 grew = wait_for(master, "TENLINE", std::chrono::seconds(8));
-                // turn on -w, then try to stage a hunk -> warn
-                (void)!::write(master, "w", 1);
-                (void)!::write(master, "\x0c", 1);
-                drain_str(master, std::chrono::milliseconds(1200));
-                // after w+refresh, cursor is at top; navigate down to the @@ hunk line.
-                // layout: On branch / Head: / Diff: / (blank) / Untracked(1) / file /
-                //         (blank) / Unstaged(1) / tracked.txt / @@ ...
-                // = 9 C-n presses from line 1 to reach line 10 (hunk header)
-                (void)!::write(master, "\x0e\x0e\x0e\x0e\x0e\x0e\x0e\x0e\x0e", 9);
-                (void)!::write(master, "s", 1);         // stage hunk at point
-                warned = wait_for(master, "Turn off -w", std::chrono::seconds(8));
+                if (grew) {
+                    // turn on -w, then try to stage a hunk -> warn
+                    (void)!::write(master, "w", 1);
+                    (void)!::write(master, "\x0c", 1);
+                    // Event-wait (not a wall-clock sleep): the "Diff: -U.. -w"
+                    // header line only renders once w has taken effect and the
+                    // repaint has landed, so it reliably signals the screen has
+                    // settled before we send navigation keys. (A @@ hunk header
+                    // is also re-confirmed visible below.)
+                    wait_for(master, "Diff:", std::chrono::seconds(8));
+                    wait_for(master, "@@", std::chrono::seconds(8));
+                    // after w+refresh, cursor is at top; navigate to the @@ hunk line.
+                    // layout: On branch / Head: / Diff: / (blank) / Untracked(1) /
+                    //   file / (blank) / Unstaged(1) / tracked.txt / @@ ...
+                    // = 9 C-n presses from line 1 to reach line 10 (hunk header)
+                    (void)!::write(master, "\x0e\x0e\x0e\x0e\x0e\x0e\x0e\x0e\x0e", 9);
+                    (void)!::write(master, "s", 1);     // stage hunk at point
+                    warned = wait_for(master, "Turn off -w", std::chrono::seconds(8));
+                }
             }
         }
     }
