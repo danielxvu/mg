@@ -1,5 +1,5 @@
-# Convenience GNU make wrapper around the CMake build (CMake is the real build
-# system; this just saves typing for the common local workflow).
+# Local dev convenience wrapper around the CMake build (CMake is the real build
+# system for the neomg fork). Provides:
 #
 #   make install-local                 # build + install -> ~/.local/bin/neomg
 #   make install-local PREFIX=~/opt    # ...into ~/opt/bin instead
@@ -8,11 +8,25 @@
 #   make uninstall-local               # remove what install-local laid down
 #   make clean                         # remove the build dir
 #
-# The default `cpp` preset is the macOS toolchain (MacPorts clang-21 + zig 0.16,
-# native Magit + Zig hybrid status). On Linux: `make install-local PRESET=cpp-linux`.
+# On Linux: append PRESET=cpp-linux.
 #
-# Named GNUmakefile so GNU make picks it ahead of any autotools-generated
-# Makefile (the repo ships an upstream Makefile.am).
+# --- Coexistence with the upstream autotools build -------------------------
+# The repo also ships the upstream autotools build (configure.ac / Makefile.am),
+# whose CI does `./autogen.sh && ./configure && make`. ./configure generates a
+# `Makefile`, but GNU make prefers THIS GNUmakefile over it -- which would
+# shadow the autotools build. So: if a generated `Makefile` exists (i.e. the
+# tree has been ./configure'd), defer every target to it. The convenience
+# targets below are only active on a fresh, unconfigured checkout.
+
+ifneq ($(wildcard Makefile),)
+
+# Configured (autotools) tree: forward everything to the generated Makefile.
+MAKEFLAGS += --no-print-directory
+.DEFAULT_GOAL := all
+%:
+	@$(MAKE) -f Makefile $@
+
+else
 
 PREFIX    ?= $(HOME)/.local
 PRESET    ?= cpp
@@ -46,3 +60,5 @@ test: build
 ## clean: remove the build directory
 clean:
 	rm -rf $(BUILD_DIR)
+
+endif
