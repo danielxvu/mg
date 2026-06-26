@@ -449,6 +449,50 @@ TEST_CASE("bridge publishes a summarized modeline for a repo")
     fs::remove_all(dir);
 }
 
+// Count this process's open file descriptors via /dev/fd (present on macOS and
+// Linux). Used to prove the monitor opens no per-directory watch fds when there
+// is nothing to watch.
+static int count_open_fds()
+{
+    std::error_code ec;
+    int n = 0;
+    for (auto it = fs::directory_iterator("/dev/fd", ec);
+         !ec && it != fs::directory_iterator(); it.increment(ec))
+        ++n;
+    return n;
+}
+
+// Regression (latent since the monitor was wired into the C core): launched
+// OUTSIDE any git repository, mg_magit_start watched the launch directory
+// unconditionally -- the macOS kqueue backend opens one fd per directory, so
+// starting mg in a large non-repo tree (e.g. ~/src, 20k+ dirs) exhausted the
+// process fd table and made every later fopen/opendir fail with EMFILE,
+// breaking file-open, dired, and minibuffer completion. The monitor must stay
+// inert outside a repo.
+TEST_CASE("monitor opens no per-dir watch fds when launched outside a repo")
+{
+    auto nonrepo = make_temp_dir(); // a plain directory, NOT a git repo
+    for (int i = 0; i < 64; ++i)
+        fs::create_directories(nonrepo / ("d" + std::to_string(i)));
+
+    const int before = count_open_fds();
+    mg_magit_start(nonrepo.string().c_str());
+    const int after = count_open_fds();
+
+    // With no repo there is nothing to track, so the modeline is empty too.
+    char buf[128] = {0};
+    CHECK(mg_magit_modeline(buf, sizeof buf) == 0);
+
+    mg_magit_stop();
+    fs::remove_all(nonrepo);
+
+    // Pre-fix (macOS): kqueue opens an fd for the dir + its 64 subdirs.
+    // Post-fix: no repo -> no monitor -> no per-dir watch fds (a small slack
+    // covers libgit2's transient discovery handles). On Linux inotify uses a
+    // single fd regardless, so this mainly guards the macOS exhaustion path.
+    CHECK(after - before < 8);
+}
+
 // FM-ASYNC-STATUS thread-safety gate. The monitor thread publishes snapshots
 // (writing current_/snapshot_/snapshot_fp_ under its mutex and poking the wake
 // pipe) while the UI thread hammers every read-side accessor the editor uses:

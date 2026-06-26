@@ -511,8 +511,16 @@ extern "C" void mg_magit_start(const char *repo_path)
     // on another (TSan-confirmed on the Linux/OpenSSL backend).
     mg::git::global_init();
     g_wake.open_pipe(); // before any worker thread that may signal it
-    g_monitor = std::make_unique<monitor>(repo_path ? repo_path : ".");
-    g_jobs = std::make_unique<job_runner>();
+    // Only run the monitor when launched inside a git repository. Outside one
+    // there is nothing to track, and recursively watching an arbitrary tree
+    // (e.g. `mg ~/src`) opens a watch fd per directory and exhausts the process
+    // fd table -- breaking file-open, dired, and completion. discover_workdir
+    // searches upward, so launching in any subdirectory of a repo still works;
+    // we watch the bounded workdir rather than the raw launch directory.
+    if (auto workdir = mg::git::discover_workdir(repo_path ? repo_path : ".")) {
+        g_monitor = std::make_unique<monitor>(*workdir);
+        g_jobs = std::make_unique<job_runner>();
+    }
 }
 
 extern "C" void mg_magit_stop(void)

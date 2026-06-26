@@ -457,6 +457,14 @@ private:
     std::unique_ptr<impl> p_;
 };
 
+// The working-tree root of the repository containing `path` (searching upward,
+// like session::open), or nullopt if `path` is not inside a non-bare git
+// repository. The status monitor gates on this: launched outside any repo it
+// must not watch, since recursively watching an arbitrary directory tree opens
+// one watch fd per directory (macOS kqueue) and can exhaust the process fd
+// table. The returned path has no trailing slash.
+std::optional<std::string> discover_workdir(std::string path);
+
 std::expected<head_info, error> read_head(std::string path);
 
 // The current branch's upstream tracking status (name + ahead/behind counts).
@@ -851,6 +859,24 @@ std::expected<session, error> session::open(std::string path)
         return std::unexpected(last_error());
     p->repo.reset(raw);
     return session(std::move(p));
+}
+
+std::optional<std::string> discover_workdir(std::string path)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    // flags = 0 -> open_ext walks up parent dirs, so a subdirectory of a repo
+    // still resolves to that repo (matching session::open).
+    if (git_repository_open_ext(&raw, path.c_str(), 0, nullptr) != 0)
+        return std::nullopt;
+    detail::repo_ptr repo(raw);
+    const char *wd = git_repository_workdir(repo.get());
+    if (wd == nullptr) // bare repo: no working tree to watch
+        return std::nullopt;
+    std::string s(wd);
+    if (s.size() > 1 && s.back() == '/') // git_repository_workdir has a trailing '/'
+        s.pop_back();
+    return s;
 }
 
 std::expected<std::vector<mg::magit::file_status>, error>

@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -3200,3 +3201,27 @@ TEST_CASE("hybrid_status mirrors repo_status on a split index (fail-closed)")
 }
 
 #endif // MG_ZIG_STATUS
+
+// discover_workdir gates the status monitor: it must resolve a repo from any
+// subdirectory (search-up) but return nullopt outside a repo, so launching mg
+// outside a repository never starts a recursive watch (the fd-exhaustion bug).
+TEST_CASE("discover_workdir resolves a repo and its subdirs, nullopt outside one")
+{
+    // A plain directory that is not a git repo -> nullopt.
+    auto plain = make_temp_dir();
+    CHECK_FALSE(mg::git::discover_workdir(plain.string()).has_value());
+    fs::remove_all(plain);
+
+    // A real repo -> its workdir; from a nested subdirectory, the SAME workdir.
+    auto repo = make_repo_with_changes();
+    fs::create_directories(repo / "a" / "b");
+    auto from_root = mg::git::discover_workdir(repo.string());
+    auto from_sub = mg::git::discover_workdir((repo / "a" / "b").string());
+    REQUIRE(from_root.has_value());
+    REQUIRE(from_sub.has_value());
+    // Canonicalize both sides: git_repository_workdir canonicalizes symlinks
+    // (macOS /var -> /private/var) and the temp path may not.
+    CHECK(fs::weakly_canonical(*from_root) == fs::weakly_canonical(repo));
+    CHECK(fs::weakly_canonical(*from_sub) == fs::weakly_canonical(repo));
+    fs::remove_all(repo);
+}
