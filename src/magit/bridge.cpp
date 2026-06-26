@@ -948,7 +948,26 @@ extern "C" int mg_magit_status_snapshot(const char *repo_path,
         emit(ctx, "    (refreshing...)", MG_LINE_OTHER, nullptr, -1);
         ++n;
     }
+
+    // Emit the Diff: header live from the current (atomic) view config.
+    // The snapshot's baked Diff: line reflects the monitor's last publish_view,
+    // which may predate a set_diff_view call on the UI thread (repo_fingerprint
+    // ignores the view config, so a toggle does NOT mark the snapshot stale).
+    // Reading the atomic globals here always produces the current value and
+    // keeps the header calculation off the monitor thread.
+    if (mg::git::diff_view_context() != 3 || mg::git::diff_view_ignore_ws()) {
+        std::string dv =
+            "Diff:     -U" + std::to_string(mg::git::diff_view_context());
+        if (mg::git::diff_view_ignore_ws())
+            dv += " -w";
+        emit(ctx, dv.c_str(), MG_LINE_OTHER, nullptr, -1);
+        ++n;
+    }
+
     for (const auto &e : snap) {
+        // Skip baked Diff: lines — emitted live above from current atomics.
+        if (e.line.rfind("Diff:", 0) == 0)
+            continue;
         emit(ctx, e.line.c_str(), e.kind,
              e.path.empty() ? nullptr : e.path.c_str(), e.hunk);
         ++n;

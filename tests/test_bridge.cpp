@@ -2337,3 +2337,64 @@ TEST_CASE("status header shows the diff-view indicator when non-default")
     mg_magit_set_diff_view(3, 0);     // reset (default -> no indicator)
     fs::remove_all(dir);
 }
+
+TEST_CASE("snapshot replay reflects current diff-view (not baked header)")
+{
+    // Regression test for the Diff: header lag under monitor-on config.
+    // The baked snapshot is composed at view (3,0) by the monitor thread.
+    // After set_diff_view(6,1) on the UI thread — with no fs event to trigger
+    // a new publish_view — mg_magit_status_snapshot must still emit the current
+    // Diff: header because it reads the atomic globals live, not from the baked
+    // snapshot line.
+    auto dir = make_repo_full();
+    const std::string repo = dir.string();
+
+    mg_magit_start(repo.c_str());
+
+    // Wait for the monitor to publish an initial snapshot at default view (3,0).
+    std::vector<std::string> initial;
+    for (int i = 0; i < 200 && initial.empty(); ++i) {
+        initial.clear();
+        mg_magit_status_snapshot(repo.c_str(), nullptr, 0,
+            [](void *c, const char *l, int, const char *, int) {
+                static_cast<std::vector<std::string> *>(c)->emplace_back(l ? l : "");
+            }, &initial);
+        if (initial.empty())
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    REQUIRE(!initial.empty()); // monitor produced a snapshot
+
+    // At default view (3,0) there must be no Diff: header.
+    bool default_has_header = false;
+    for (const auto &l : initial)
+        if (l.rfind("Diff:", 0) == 0)
+            default_has_header = true;
+    CHECK(!default_has_header);
+
+    // Toggle to non-default on the UI thread. No fs event fires — the monitor
+    // will NOT rebuild unless something touches the workdir/index. This is
+    // exactly the lag scenario: the baked snapshot still has no Diff: line.
+    mg_magit_set_diff_view(6, /*ignore_ws=*/1);
+
+    // The very next snapshot replay must show -U6 -w (from live atomic read).
+    std::vector<std::string> after;
+    mg_magit_status_snapshot(repo.c_str(), nullptr, 0,
+        [](void *c, const char *l, int, const char *, int) {
+            static_cast<std::vector<std::string> *>(c)->emplace_back(l ? l : "");
+        }, &after);
+
+    bool has_header = false;
+    int header_count = 0;
+    for (const auto &l : after) {
+        if (l.find("-U6") != std::string::npos && l.find("-w") != std::string::npos) {
+            has_header = true;
+            ++header_count;
+        }
+    }
+    CHECK(has_header);
+    CHECK(header_count == 1); // exactly once; baked line is filtered out
+
+    mg_magit_stop();
+    mg_magit_set_diff_view(3, 0); // reset
+    fs::remove_all(dir);
+}
