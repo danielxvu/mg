@@ -42,6 +42,18 @@ TEST_CASE("argv_to_command single-quotes args with spaces")
     CHECK(argv_to_command(plain) == "git add foo.c");
 }
 
+TEST_CASE("argv_to_command escapes embedded single quotes (POSIX '\\'' idiom)")
+{
+    std::vector<std::string> argv{"git", "commit", "-m", "it's"};
+    CHECK(argv_to_command(argv) == "git commit -m 'it'\\''s'");
+}
+
+TEST_CASE("argv_to_command single-quotes args containing a tab")
+{
+    std::vector<std::string> argv{"git", "grep", "a\tb"};
+    CHECK(argv_to_command(argv) == "git grep 'a\tb'");
+}
+
 TEST_CASE("mg_magit_process_log streams entries newest-first, tagged")
 {
     clear();
@@ -73,13 +85,15 @@ TEST_CASE("mg_magit_process_log streams entries newest-first, tagged")
 TEST_CASE("mg_magit_process_log emits an empty-state line when nothing logged")
 {
     clear();
-    std::vector<std::string> lines;
+    struct row { std::string line; int kind; };
+    std::vector<row> rows;
     int n = mg_magit_process_log(
-        [](void *ctx, const char *line, int, const char *, int) {
-            static_cast<std::vector<std::string> *>(ctx)->emplace_back(line);
+        [](void *ctx, const char *line, int kind, const char *, int) {
+            static_cast<std::vector<row> *>(ctx)->push_back({line, kind});
         },
-        &lines);
+        &rows);
     CHECK(n == 1);
-    CHECK(lines.size() == 1);
-    CHECK(lines[0].find("No git operations") != std::string::npos);
+    REQUIRE(rows.size() == 1);
+    CHECK(rows[0].line.find("No git operations") != std::string::npos);
+    CHECK(rows[0].kind == MG_LINE_OTHER); // spec: empty state is MG_LINE_OTHER
 }
