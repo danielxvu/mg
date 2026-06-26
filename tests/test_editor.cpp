@@ -23,10 +23,12 @@
 #include <sys/wait.h>
 #include <termios.h>
 #include <unistd.h>
-#if defined(__APPLE__)
-#  include <util.h> // forkpty
-#else
-#  include <pty.h>  // forkpty
+#if defined(__linux__)
+#  include <pty.h>     // forkpty (glibc/musl)
+#elif defined(__FreeBSD__)
+#  include <libutil.h> // forkpty (FreeBSD)
+#else                  // macOS, OpenBSD, NetBSD
+#  include <util.h>    // forkpty
 #endif
 
 namespace fs = std::filesystem;

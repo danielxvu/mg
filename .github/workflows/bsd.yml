@@ -81,6 +81,8 @@ jobs:
             # zig 0.16 for the syntax tokenizer (official OpenBSD build).
             ZT=zig-x86_64-openbsd-0.16.0.tar.xz
             curl -fsSL -o "/tmp/$ZT" "https://ziglang.org/download/0.16.0/$ZT"
+            [ "$(openssl dgst -sha256 /tmp/$ZT | awk '{print $NF}')" = "25b72946e8b2dde5c93bc03cbebeb17e4d90eea8040acce8bb78cefdeee97337" ] \
+              || { echo "zig checksum mismatch"; exit 1; }
             tar -xf "/tmp/$ZT" -C /usr/local
             ln -sf /usr/local/zig-x86_64-openbsd-0.16.0/zig /usr/local/bin/zig
             zig version
@@ -112,6 +114,8 @@ jobs:
             # zig 0.16 for the syntax tokenizer (official NetBSD build).
             ZT=zig-x86_64-netbsd-0.16.0.tar.xz
             curl -fsSL -o "/tmp/$ZT" "https://ziglang.org/download/0.16.0/$ZT"
+            [ "$(openssl dgst -sha256 /tmp/$ZT | awk '{print $NF}')" = "e235ca96f63034a009aca831c69394a1c14498a8e06ff5f358fc3fb4bed73dfb" ] \
+              || { echo "zig checksum mismatch"; exit 1; }
             tar -xf "/tmp/$ZT" -C /usr/local
             ln -sf /usr/local/zig-x86_64-netbsd-0.16.0/zig /usr/local/bin/zig
             zig version
