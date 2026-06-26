@@ -178,6 +178,9 @@ static int	magit_todo_up(int, int);
 static int	magit_todo_down(int, int);
 static int	magit_todo_execute(int, int);
 static int	magit_todo_abort(int, int);
+static int	magit_diff_more(int, int);
+static int	magit_diff_less(int, int);
+static int	magit_diff_ws(int, int);
 
 /*
  * line -> {kind, hunk, path} map for the most recent render of *magit-status*.
@@ -210,6 +213,10 @@ static struct buffer	*magit_commit_bp;
 /* Paths whose diffs are currently expanded inline. */
 static char	magit_expanded[MAGIT_MAX_EXPANDED][PATH_MAX];
 static int	magit_expanded_count;
+
+/* Diff-view parameters for *magit-status* diffs. */
+static int	magit_diff_context = 3;   /* current -U<n>; default matches git */
+static int	magit_diff_ignore_ws;     /* 0/1: -w flag */
 
 /*
  * Per-line oid map shared by *magit-log* AND *magit-reflog*.  The map is
@@ -437,7 +444,10 @@ static PF magit_r[] = { magit_menu_rebase };			/* r -> rebase menu prefix */
 static PF magit_s[] = { magit_stage };
 static PF magit_t[] = { magit_menu_tag };			/* t -> tag menu prefix */
 static PF magit_u[] = { magit_unstage };
+static PF magit_w[]     = { magit_diff_ws };		/* w: toggle -w (ignore whitespace) */
 static PF magit_z[] = { magit_menu_stash };			/* z -> stash menu prefix */
+static PF magit_plus[]  = { magit_diff_more };		/* +: more diff context */
+static PF magit_minus[] = { magit_diff_less };		/* -: less diff context */
 
 /*
  * Tag menu: `t` prefixes into this. t=create (at HEAD), k=delete (the tag at
@@ -1019,9 +1029,9 @@ magit_conflict_theirs(int f, int n)
 }
 
 /* Entries MUST stay in ascending key order -- doscan() relies on it. */
-static struct KEYMAPE (32) magitmap = {
-	32,
-	32,
+static struct KEYMAPE (35) magitmap = {
+	35,
+	35,
 	rescan,
 	{
 		{ CCHR('I'), CCHR('I'), magit_tab, NULL },	/* TAB: expand/collapse */
@@ -1029,6 +1039,8 @@ static struct KEYMAPE (32) magitmap = {
 		{ CCHR('['), CCHR('['), magit_esc,		/* ESC: meta prefix */
 		    (KEYMAP *)&magit_metamap },
 		{ '$', '$', magit_dollar, NULL },		/* $: process log */
+		{ '+', '+', magit_plus, NULL },			/* +: more diff context */
+		{ '-', '-', magit_minus, NULL },		/* -: less diff context */
 		{ '?', '?', magit_qmark, NULL },		/* ?: key help */
 		{ 'A', 'A', magit_A, NULL },			/* A: cherry-pick */
 		{ 'B', 'B', magit_B, NULL },			/* B: blame file at point */
@@ -1056,6 +1068,7 @@ static struct KEYMAPE (32) magitmap = {
 		{ 's', 's', magit_s, NULL },
 		{ 't', 't', magit_t, NULL }, /* t: tag menu */
 		{ 'u', 'u', magit_u, NULL },
+		{ 'w', 'w', magit_w, NULL },			/* w: toggle -w (ignore whitespace) */
 		{ 'z', 'z', magit_z, NULL } /* z: stash menu */
 	}
 };
@@ -3713,7 +3726,12 @@ magit_stage(int f, int n)
 		return (FALSE);
 	/* With a mark spanning one hunk's diff lines, stage just that region. */
 	if (magit_region(&rhunk, &rpath, &first, &last)) {
-		if (mg_magit_stage_region(cwd, rpath, rhunk, first, last) != 1) {
+		int rc = mg_magit_stage_region(cwd, rpath, rhunk, first, last);
+		if (rc == -2) {
+			ewprintf("Turn off -w (w) to stage hunks");
+			return (FALSE);
+		}
+		if (rc != 1) {
 			ewprintf("Stage region failed");
 			return (FALSE);
 		}
@@ -3722,7 +3740,12 @@ magit_stage(int f, int n)
 	kind = magit_at_point(&path, &hunk);
 	/* On a hunk/diff line, stage just that hunk; on a file line, the file. */
 	if (kind == MG_LINE_HUNK || kind == MG_LINE_DIFF) {
-		if (mg_magit_stage_hunk(cwd, path, hunk) != 1) {
+		int rc = mg_magit_stage_hunk(cwd, path, hunk);
+		if (rc == -2) {
+			ewprintf("Turn off -w (w) to stage hunks");
+			return (FALSE);
+		}
+		if (rc != 1) {
 			ewprintf("Stage hunk failed");
 			return (FALSE);
 		}
@@ -3750,7 +3773,12 @@ magit_unstage(int f, int n)
 		return (FALSE);
 	/* With a mark spanning one hunk's diff lines, unstage just that region. */
 	if (magit_region(&rhunk, &rpath, &first, &last)) {
-		if (mg_magit_unstage_region(cwd, rpath, rhunk, first, last) != 1) {
+		int rc = mg_magit_unstage_region(cwd, rpath, rhunk, first, last);
+		if (rc == -2) {
+			ewprintf("Turn off -w (w) to stage hunks");
+			return (FALSE);
+		}
+		if (rc != 1) {
 			ewprintf("Unstage region failed");
 			return (FALSE);
 		}
@@ -3759,7 +3787,12 @@ magit_unstage(int f, int n)
 	kind = magit_at_point(&path, &hunk);
 	/* On a hunk/diff line, unstage just that hunk; on a file line, the file. */
 	if (kind == MG_LINE_HUNK || kind == MG_LINE_DIFF) {
-		if (mg_magit_unstage_hunk(cwd, path, hunk) != 1) {
+		int rc = mg_magit_unstage_hunk(cwd, path, hunk);
+		if (rc == -2) {
+			ewprintf("Turn off -w (w) to stage hunks");
+			return (FALSE);
+		}
+		if (rc != 1) {
 			ewprintf("Unstage hunk failed");
 			return (FALSE);
 		}
@@ -3849,7 +3882,12 @@ magit_discard(int f, int n)
 	if (magit_region(&rhunk, &rpath, &first, &last)) {
 		if (eyesno("Discard marked region") != TRUE)
 			return (FALSE);
-		if (mg_magit_discard_region(cwd, rpath, rhunk, first, last) != 1) {
+		int rc = mg_magit_discard_region(cwd, rpath, rhunk, first, last);
+		if (rc == -2) {
+			ewprintf("Turn off -w (w) to stage hunks");
+			return (FALSE);
+		}
+		if (rc != 1) {
 			ewprintf("Discard region failed");
 			return (FALSE);
 		}
@@ -4298,6 +4336,35 @@ magit_todo_abort(int f, int n)
 	magit_todo_leave(FALSE);
 	ewprintf("Interactive rebase aborted");
 	return (TRUE);
+}
+
+/* +: grow diff context by 1 (max 32), refresh the status diff. */
+static int
+magit_diff_more(int f, int n)
+{
+	if (magit_diff_context < 32)
+		magit_diff_context++;
+	mg_magit_set_diff_view(magit_diff_context, magit_diff_ignore_ws);
+	return (magit_refresh(f, n));
+}
+
+/* -: shrink diff context by 1 (min 0), refresh the status diff. */
+static int
+magit_diff_less(int f, int n)
+{
+	if (magit_diff_context > 0)
+		magit_diff_context--;
+	mg_magit_set_diff_view(magit_diff_context, magit_diff_ignore_ws);
+	return (magit_refresh(f, n));
+}
+
+/* w: toggle ignore-whitespace (-w) for status diffs. */
+static int
+magit_diff_ws(int f, int n)
+{
+	magit_diff_ignore_ws = !magit_diff_ignore_ws;
+	mg_magit_set_diff_view(magit_diff_context, magit_diff_ignore_ws);
+	return (magit_refresh(f, n));
 }
 
 #endif /* ENABLE_NATIVE_MAGIT */

@@ -496,6 +496,58 @@ TEST_CASE("M-1 collapses section bodies; M-2 restores files")
     CHECK(restored);
 }
 
+TEST_CASE("+ grows diff context; w blocks hunk staging with a warning")
+{
+    auto repo = make_repo(); // tracked.txt committed
+    // overwrite with a change on line 6, lines 1-10, so context controls matter
+    std::ofstream(repo / "tracked.txt") << "1\n2\n3\n4\n5\nSIX\n7\n8\n9\nTENLINE\n";
+    const std::string repofile = (repo / "tracked.txt").string();
+
+    winsize ws{}; ws.ws_row = 40; ws.ws_col = 100;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) {
+        ::chdir(fs::temp_directory_path().c_str());   // monitor-inert determinism
+        ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", repofile.c_str(), (char *)nullptr);
+        _exit(127);
+    }
+    bool grew = false, warned = false;
+    if (wait_for(master, "tracked.txt", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x1bxmagit-status\r", 15);
+        if (wait_for(master, "Unstaged changes", std::chrono::seconds(8))) {
+            (void)!::write(master, "\x18" "1", 2);     // C-x 1: only *magit-status*
+            // expand the file (TAB on its line) -- navigate to it first
+            (void)!::write(master, "\x1b" "3", 2);     // M-3: expand all (hunks)
+            (void)!::write(master, "\x0c", 1);
+            if (wait_for(master, "SIX", std::chrono::seconds(8))) {
+                // grow context: TENLINE (4 lines from the change) appears at -U6
+                (void)!::write(master, "+++", 3);       // context 3->6
+                (void)!::write(master, "\x0c", 1);
+                grew = wait_for(master, "TENLINE", std::chrono::seconds(8));
+                // turn on -w, then try to stage a hunk -> warn
+                (void)!::write(master, "w", 1);
+                (void)!::write(master, "\x0c", 1);
+                drain_str(master, std::chrono::milliseconds(1200));
+                // after w+refresh, cursor is at top; navigate down to the @@ hunk line.
+                // layout: On branch / Head: / Diff: / (blank) / Untracked(1) / file /
+                //         (blank) / Unstaged(1) / tracked.txt / @@ ...
+                // = 9 C-n presses from line 1 to reach line 10 (hunk header)
+                (void)!::write(master, "\x0e\x0e\x0e\x0e\x0e\x0e\x0e\x0e\x0e", 9);
+                (void)!::write(master, "s", 1);         // stage hunk at point
+                warned = wait_for(master, "Turn off -w", std::chrono::seconds(8));
+            }
+        }
+    }
+    const char quit[] = "\x18\x03"; (void)!::write(master, quit, sizeof quit - 1);
+    for (int i = 0; i < 20; ++i) { int st = 0; if (::waitpid(pid, &st, WNOHANG) == pid) break; usleep(100000); }
+    ::kill(pid, SIGKILL); ::waitpid(pid, nullptr, 0); ::close(master);
+    fs::remove_all(repo);
+    CHECK(grew);
+    CHECK(warned);
+}
+
 TEST_CASE("M-1 is a guarded no-op in *magit-reflog* (status-only)")
 {
     auto repo = make_repo();
