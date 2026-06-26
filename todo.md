@@ -281,22 +281,26 @@ Emacs + Magit — verified against the source on 2026-06-26 (0 source hits =
 absent). Keep this in sync with the README's "What it doesn't do (vs Magit)".
 
 ### High value (everyday polish Magit users feel)
-- [ ] **FM-REFLOG — reflog view + reflog-backed Undo.** No reflog browsing today
-  (the engine only *writes* reflog messages via `set_head_to`). Add a
-  `*magit-reflog*` buffer over libgit2 `git_reflog_read`/`_entrycount`/
-  `_entry_byindex` (oid + committer + message per entry), opened under the log
-  menu (Magit's `l h`/`l H`); plus a one-key **Undo** that resets `HEAD` to the
-  prior reflog entry (`git reset --hard HEAD@{1}` semantics). Highest-value gap —
-  Magit/Sublime's signature safety net.
-- [ ] **FM-SECTION-CYCLE — multi-level section visibility.** Today TAB does flat
-  per-section expand/collapse (`magit_tab` over `MG_LINE_SECTION`). Magit cycles
-  at every level and has a global `S-TAB` (`magit-section-cycle` /
-  `-cycle-global`: hide-body → show-children → show-all). Add a visibility state
-  per section + the two cycle commands.
-- [ ] **FM-DIFF-CTL — diff display controls.** No context/whitespace/refine
-  controls today. Add `+`/`-` to grow/shrink diff context (re-run with a larger/
-  smaller `git_diff_options.context_lines`); a whitespace toggle (`-w` →
-  `GIT_DIFF_IGNORE_WHITESPACE`); and word-level/refined intra-line highlighting.
+- [x] **FM-REFLOG — reflog view + reset-at-point.** ✅ DONE (landed on neomg):
+  `l h` → read-only `*magit-reflog*` (newest-first; RET shows an entry's diff);
+  `x s`/`x m`/`x h` resets HEAD to the entry at point (hard confirms), reusing
+  `reset_to`. Magit-faithful — no one-key destructive undo; the mode is always chosen.
+- [x] **FM-SECTION-CYCLE — global section visibility levels.** ✅ DONE (landed on
+  neomg): `M-1`/`M-2`/`M-3` (Magit's `magit-section-show-level-N-all`) collapse to
+  headers / show files / expand hunks, reusing the fold/expand state. (S-TAB isn't
+  receivable in mg's TUI, so M-1/2/3 is the binding.)
+- [~] **FM-DIFF-CTL — diff context + whitespace controls.** IN PROGRESS (branch
+  `fm-diff-ctl`): `+`/`-` grow/shrink `git_diff_options.context_lines` (applied to
+  display AND the staging ops so hunk indices stay aligned); `w` toggles `-w`
+  (`GIT_DIFF_IGNORE_WHITESPACE`, display-only — hunk staging disabled while on).
+  Spec: `docs/superpowers/specs/2026-06-26-fm-diff-ctl-design.md`.
+  - [ ] **FM-DIFF-REFINE (deferred from FM-DIFF-CTL)** — word-level / refined
+    intra-line diff highlighting. The ediff cell-highlight *display* infra
+    (`magit_cell_highlighted` / `magit_ediff_ref`) is reusable, but the per-hunk
+    word-diff *computation* is new — its own slice.
+  - [ ] **FM-DIFF-CTL-VIEWS (deferred from FM-DIFF-CTL)** — apply the context /
+    whitespace controls to the commit-view (`commit_diff`) and log diffs too;
+    v1 is the status buffer's expanded diffs (the shared `file_diff` path only).
 - [ ] **FM-TRANSIENT-DEPTH — deepen the argument menus.** The menu prefixes
   (`l`/`X`/`b`/`P`/…) cover common flags, not Magit's exhaustive infix set. Bring
   key ones closer: log (`-n`, `--author=`, `--grep=`, `--all`), push
