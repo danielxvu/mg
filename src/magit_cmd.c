@@ -1086,9 +1086,15 @@ static int
 magit_build(struct buffer *bp)
 {
 	struct mgwin	*wp;
-	char		 cwd[PATH_MAX];
+	const char	*cwd = bp->b_cwd;
 
-	if (getcwd(cwd, sizeof(cwd)) == NULL)
+	/*
+	 * Operate on the *buffer's* directory, not the process cwd. magit_status
+	 * sets b_cwd from the buffer you invoked it from (a dired dir, a visited
+	 * file's dir, ...), so magit-status works on that repo even when neomg was
+	 * launched elsewhere. libgit2 discovers the repo root from any path inside.
+	 */
+	if (cwd[0] == '\0')
 		return (FALSE);
 
 	bp->b_flag |= BFIGNDIRTY;	/* don't prompt when re-clearing */
@@ -1139,6 +1145,7 @@ magit_status(int f, int n)
 	static int	 initialized = 0;
 	struct buffer	*bp;
 	struct mgwin	*wp;
+	char		 repo[NFILEN];
 
 	if (!initialized) {
 		magit_assert_keymap_sorted();
@@ -1154,8 +1161,20 @@ magit_status(int f, int n)
 		initialized = 1;
 	}
 
+	/*
+	 * The repo to show is the directory of the buffer we're invoked from (a
+	 * dired dir, a visited file's dir, or the cwd) -- captured now, while curbp
+	 * is still that buffer (before popbuf switches to *magit-status*). Persist
+	 * it on *magit-status* so refresh (g) and the post-command rebuilds reuse
+	 * the same repo. This is why magit-status works after diring into a repo
+	 * from elsewhere, instead of always using the launch cwd.
+	 */
+	if (getbufcwd(repo, sizeof(repo)) != TRUE)
+		(void)strlcpy(repo, "/", sizeof(repo));
+
 	if ((bp = bfind("*magit-status*", TRUE)) == NULL)
 		return (FALSE);
+	(void)strlcpy(bp->b_cwd, repo, sizeof(bp->b_cwd));
 	if (magit_build(bp) != TRUE)
 		return (FALSE);
 	if ((wp = popbuf(bp, WNONE)) == NULL)
