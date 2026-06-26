@@ -32,9 +32,18 @@ jobs:
         with:
           usesh: true
           prepare: |
-            pkg install -y llvm cmake ninja git libgit2 utf8proc pkgconf
+            pkg install -y llvm cmake ninja git libgit2 utf8proc pkgconf curl
           run: |
             set -eux
+            # The FM-SYNTAX-HIGHLIGHT tokenizer is built with native-magit and
+            # needs zig 0.16 (not in pkg) -> fetch the official FreeBSD build.
+            ZT=zig-x86_64-freebsd-0.16.0.tar.xz
+            curl -fsSL -o "/tmp/$ZT" "https://ziglang.org/download/0.16.0/$ZT"
+            [ "$(sha256 -q /tmp/$ZT)" = "390379bfaf6b89b001c6bb4035b8fcbc5c12193fd9fd5048c3a0fe39e5d1cf72" ] \
+              || { echo "zig checksum mismatch"; exit 1; }
+            tar -xf "/tmp/$ZT" -C /usr/local
+            ln -sf /usr/local/zig-x86_64-freebsd-0.16.0/zig /usr/local/bin/zig
+            zig version
             # FreeBSD base `cc` is clang but ships no clang-scan-deps; the pkg
             # `llvm` does. Discover a clang that has a matching scan-deps so
             # CMake can scan the C++20 modules.
@@ -66,9 +75,15 @@ jobs:
         with:
           usesh: true
           prepare: |
-            pkg_add cmake ninja git libgit2 utf8proc llvm
+            pkg_add cmake ninja git libgit2 utf8proc llvm curl
           run: |
             set -eux
+            # zig 0.16 for the syntax tokenizer (official OpenBSD build).
+            ZT=zig-x86_64-openbsd-0.16.0.tar.xz
+            curl -fsSL -o "/tmp/$ZT" "https://ziglang.org/download/0.16.0/$ZT"
+            tar -xf "/tmp/$ZT" -C /usr/local
+            ln -sf /usr/local/zig-x86_64-openbsd-0.16.0/zig /usr/local/bin/zig
+            zig version
             SCANDEPS="$(command -v clang-scan-deps || ls /usr/local/bin/clang-scan-deps* 2>/dev/null | sort -V | tail -1)"
             cmake -S . -B build -G Ninja \
               -DENABLE_CPP_UPGRADES=ON -DENABLE_NATIVE_MAGIT=ON -DENABLE_ZIG_STATUS=OFF \
@@ -90,10 +105,16 @@ jobs:
         with:
           usesh: true
           prepare: |
-            /usr/sbin/pkg_add cmake ninja-build git libgit2 utf8proc clang || \
-              pkgin -y install cmake ninja-build git libgit2 utf8proc clang
+            /usr/sbin/pkg_add cmake ninja-build git libgit2 utf8proc clang curl || \
+              pkgin -y install cmake ninja-build git libgit2 utf8proc clang curl
           run: |
             set -eux
+            # zig 0.16 for the syntax tokenizer (official NetBSD build).
+            ZT=zig-x86_64-netbsd-0.16.0.tar.xz
+            curl -fsSL -o "/tmp/$ZT" "https://ziglang.org/download/0.16.0/$ZT"
+            tar -xf "/tmp/$ZT" -C /usr/local
+            ln -sf /usr/local/zig-x86_64-netbsd-0.16.0/zig /usr/local/bin/zig
+            zig version
             SCANDEPS="$(command -v clang-scan-deps || ls /usr/pkg/bin/clang-scan-deps* 2>/dev/null | sort -V | tail -1)"
             cmake -S . -B build -G Ninja \
               -DENABLE_CPP_UPGRADES=ON -DENABLE_NATIVE_MAGIT=ON -DENABLE_ZIG_STATUS=OFF \
