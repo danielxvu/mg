@@ -215,7 +215,9 @@ the shared `merge_annotated` helper); bridge `mg_magit_fetch/push/pull`; UI
 bare remotes (no network). ⚠ no credentials callback yet → authenticated
 ssh/https remotes are a follow-up; local/unauthenticated transports work.
 
-**🎉 FULL-MAGIT ROADMAP COMPLETE** (Phase A + Phase B). ✅ Follow-ups also done
+**🎉 EVERYDAY-WORKFLOW ROADMAP COMPLETE** (Phase A + Phase B) — this covers the
+daily Magit loop, but it is **NOT full Magit parity** (real gaps audited
+2026-06-26, tracked under "Magit-parity gaps vs real Magit" below). ✅ Follow-ups also done
 (PR #40, branch `fm-followups`): FM-S2 **region-discard** (`k` on a marked
 region → `discard_region` via a GIT_DIFF_REVERSE workdir patch); FM-Z
 **stash-show** (`RET` on a stash → `commit_diff "stash@{N}"` in the
@@ -225,8 +227,10 @@ registered in magit_status init, not lazily in `l`); FM-R **remote auth**
 follow-up). ✅ **Interactive HTTPS auth done too** (PR #41, branch `fm-auth`):
 prompt callback threaded C-core→bridge→engine; `magit_cred_prompt` (no-echo
 password read) answers libgit2's USERPASS; pure `resolve_userpass` unit-tested;
-proven end-to-end via a local 401 server (tmux). **Nothing magit-related
-outstanding** — the full Magit clone is feature-complete.
+proven end-to-end via a local 401 server (tmux). **The everyday workflow is
+covered — but this is not full Magit parity.** Real gaps remain (reflog, section
+cycling, diff controls, deeper transients, …), audited 2026-06-26 and tracked
+under "Magit-parity gaps vs real Magit" below.
 Per-slice TDD (test_git → test_bridge → magit_cmd.c → pty) + stacked PR.
 
 ---
@@ -268,7 +272,68 @@ Next slices (each `#ifdef`-gated, OFF unchanged):
 Build: `cmake --build --preset cpp && ctest --preset cpp` +
 `cmake --build --preset c-legacy` (0 warnings). Freeze next branch on `u1-utf8`.
 
+## Magit-parity gaps vs real Magit (audited 2026-06-26)
+
+The everyday-workflow roadmap above is done, and two recent additions landed
+since: staged-rename display (`orig_path`, PR #91) and the `*magit-process*`
+transparency buffer (`$`, PR #92). What follows is the honest delta vs GNU
+Emacs + Magit — verified against the source on 2026-06-26 (0 source hits =
+absent). Keep this in sync with the README's "What it doesn't do (vs Magit)".
+
+### High value (everyday polish Magit users feel)
+- [ ] **FM-REFLOG — reflog view + reflog-backed Undo.** No reflog browsing today
+  (the engine only *writes* reflog messages via `set_head_to`). Add a
+  `*magit-reflog*` buffer over libgit2 `git_reflog_read`/`_entrycount`/
+  `_entry_byindex` (oid + committer + message per entry), opened under the log
+  menu (Magit's `l h`/`l H`); plus a one-key **Undo** that resets `HEAD` to the
+  prior reflog entry (`git reset --hard HEAD@{1}` semantics). Highest-value gap —
+  Magit/Sublime's signature safety net.
+- [ ] **FM-SECTION-CYCLE — multi-level section visibility.** Today TAB does flat
+  per-section expand/collapse (`magit_tab` over `MG_LINE_SECTION`). Magit cycles
+  at every level and has a global `S-TAB` (`magit-section-cycle` /
+  `-cycle-global`: hide-body → show-children → show-all). Add a visibility state
+  per section + the two cycle commands.
+- [ ] **FM-DIFF-CTL — diff display controls.** No context/whitespace/refine
+  controls today. Add `+`/`-` to grow/shrink diff context (re-run with a larger/
+  smaller `git_diff_options.context_lines`); a whitespace toggle (`-w` →
+  `GIT_DIFF_IGNORE_WHITESPACE`); and word-level/refined intra-line highlighting.
+- [ ] **FM-TRANSIENT-DEPTH — deepen the argument menus.** The menu prefixes
+  (`l`/`X`/`b`/`P`/…) cover common flags, not Magit's exhaustive infix set. Bring
+  key ones closer: log (`-n`, `--author=`, `--grep=`, `--all`), push
+  (`--force-with-lease`/`-u` as live toggles), diff args. Magit's defining UX —
+  the single deepest gap.
+
+### Medium value
+- [ ] **FM-LOG-RICH — fuller log buffer.** No `--decorate` ref coloring; no
+  `--all` multi-ref graph (HEAD only); pickaxe is repo-wide with no per-file
+  prompt. Add ref decoration (oid → pointing refs), an `--all` graph mode, and a
+  per-file pickaxe entry point.
+- [ ] **FM-GIT-CMD — `:` run arbitrary git** (`magit-git-command`). Prompt for a
+  git command line, run it via the existing `run_git`/`git_terminal`, and surface
+  output in the `*magit-process*` buffer just added (its natural home).
+- [ ] **FM-SHOW-REFS — `y` refs overview** (`magit-show-refs`): a `*magit-refs*`
+  buffer of local branches, remotes, and tags with ahead/behind vs HEAD
+  (`git_branch_iterator` + `git_graph_ahead_behind`).
+- [ ] **FM-PROCLOG-2 — log hunk/region staging** (FM-PROCESS-LOG follow-up).
+  `stage_hunk`/`unstage_hunk`/`stage_region`/`unstage_region`/`discard_region`
+  log nothing today; the engine knows the path + hunk, so log them as
+  `≈ git apply --cached` / `git apply -R` and close that transparency seam.
+
+### Lower / niche
+- [ ] **FM-AM — `magit-am`** (apply mailbox/`.patch` series) + matching sequencer
+  states; plus the known interactive-rebase edge (a conflicting squash/fixup
+  resolves as a normal pick rather than folding — README "Edges remain").
+
+### Out of scope by design (NOT gaps to close — documented stance)
+- **`forge`** (GitHub/GitLab issues & PRs, Gerrit) — a separate Magit package,
+  not core porcelain. neomg targets local git, not host integrations.
+- **Elisp extensibility** — neomg is a compiled porcelain; the keymap and
+  sections are what's built in. Emacs-style scriptability is out of scope.
+
 ## Future goals (not yet scheduled)
+- **UTF-8 in the magit porcelain** — neomg is byte-oriented Latin-1; Emacs+Magit
+  are full Unicode. Editor display/nav UTF-8 landed (U1–U8), but the magit buffer
+  paths assume bytes — a real parity axis for non-Latin-1 repos.
 - **UTF-8 support** (user, 2026-06-20). mg is byte-oriented Latin-1 today (C1
   `mg.text` ships a faithful 256-byte table). Eventually needs codepoint-aware
   classification + display width in `mg.text` (a NEW API beside the byte table,
