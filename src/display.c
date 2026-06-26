@@ -30,6 +30,14 @@ int	magit_line_highlighted(struct buffer *, struct line *);
 /* True when character `col` (0-based) of `lp` of `bp` is a refined (word-level)
  * difference, so that one cell renders in standout (defined in magit_cmd.c). */
 int	magit_cell_highlighted(struct buffer *, struct line *, int);
+/* Syntax token kind (0-7) for character `ci` of a magit diff line; 0 = none.
+ * Called per cell from the vt-fill loop (defined in magit_cmd.c). */
+int	magit_cell_color(struct buffer *, struct line *, int);
+/* True only for the syntax-colored buffers (status, commit, and the three ediff
+ * panes: merged/ours/theirs). Gates the per-cell color hook so non-magit buffers
+ * pay one pointer-compare-class check instead of metadata lookups (defined in
+ * magit_cmd.c). */
+int	magit_is_color_buffer(struct buffer *);
 /* Set only while a *magit-ediff* session is open; gates the highlight lookups
  * so normal rendering pays a single int test, not a call per cell/line. */
 extern int magit_ediff_active;
@@ -39,6 +47,8 @@ extern int magit_ediff_active;
  * a cell for standout. uline() emits the cell in CMODE; ttputcell() strips it.
  */
 #define MG_HL_BIT 0x40000000
+#define MG_COLOR_SHIFT 24
+#define MG_COLOR_MASK  0x0F000000   /* bits 24-27: token kind (0 = none) */
 #endif
 
 /*
@@ -427,6 +437,9 @@ vt_render_line(struct line *lp, struct mgwin *wp)
 #ifdef ENABLE_NATIVE_MAGIT
 	struct video	*vp = vscreen[vtrow];
 	int		 ci = 0, k, start;
+	/* Once per line: is this a syntax-colored buffer? Non-magit buffers skip
+	 * the per-cell color lookup entirely (no metadata walk per cell). */
+	int		 color_buf = magit_is_color_buffer(wp->w_bufp);
 #endif
 
 	while (j < len) {
@@ -446,6 +459,15 @@ vt_render_line(struct line *lp, struct mgwin *wp)
 			for (k = start; k < vtcol && k < ncol; k++)
 				if (vp->v_text[k] != VT_CONT)
 					vp->v_text[k] |= MG_HL_BIT;
+		/* Syntax coloring: set kind bits for diff content lines (only in
+		 * the status/commit buffers; other buffers skip this entirely). */
+		if (color_buf) {
+			int kind = magit_cell_color(wp->w_bufp, lp, ci);
+			if (kind)
+				for (k = start; k < vtcol && k < ncol; k++)
+					if (vp->v_text[k] != VT_CONT)
+						vp->v_text[k] |= (kind << MG_COLOR_SHIFT);
+		}
 		ci++;
 #endif
 		j += n;
@@ -925,7 +947,7 @@ ttputcell(vtcell c)
 	if (c == VT_CONT)
 		return;
 #ifdef ENABLE_NATIVE_MAGIT
-	c &= ~MG_HL_BIT;		/* drop the standout marker before encoding */
+	c &= ~(MG_HL_BIT | MG_COLOR_MASK);	/* drop standout + color before encoding */
 #endif
 	if ((unsigned int)c < 0x80) {
 		ttputc((int)c);
@@ -936,14 +958,24 @@ ttputcell(vtcell c)
 		ttputc((unsigned char)buf[i]);
 }
 #ifdef ENABLE_NATIVE_MAGIT
-/* The color a cell should render in: CMODE (standout) when flagged, else the
- * line's base color; -1 for a continuation cell (no change, emits nothing). */
-static int
-cellcolor(vtcell c, int base)
+/* Emit the ANSI SGR foreground for a token kind (0 = reset to default). mg's
+ * ansi.c driver is ANSI-emulation, so we write SGR directly. */
+static void
+ttfgkind(int kind)
 {
-	if (c == VT_CONT)
-		return (-1);
-	return (c & MG_HL_BIT) ? CMODE : base;
+	static const char *code[8] = {
+		"\033[39m",	/* 0 NORMAL  -> default */
+		"\033[34m",	/* 1 KEYWORD -> blue    */
+		"\033[32m",	/* 2 STRING  -> green   */
+		"\033[90m",	/* 3 COMMENT -> bright black */
+		"\033[36m",	/* 4 NUMBER  -> cyan    */
+		"\033[33m",	/* 5 TYPE    -> yellow  */
+		"\033[35m",	/* 6 FUNCTION-> magenta */
+		"\033[39m",	/* 7 PUNCT   -> default */
+	};
+	const char *s = code[kind & 7];
+	while (*s)
+		ttputc((int)*s++);
 }
 #endif
 #else
@@ -960,7 +992,8 @@ uline(int row, struct video *vvp, struct video *pvp)
 	vtcell  *cp5;
 	int    nbflag;
 #ifdef ENABLE_NATIVE_MAGIT
-	int    cur, want;
+	int    cur;
+	int    curkind, curhl;
 #endif
 
 	if (vvp->v_color != pvp->v_color) {	/* Wrong color, do a	 */
@@ -985,20 +1018,33 @@ uline(int row, struct video *vvp, struct video *pvp)
 #endif
 #ifdef ENABLE_NATIVE_MAGIT
 		cur = vvp->v_color;
+		curkind = 0;
+		curhl = 0;
 #endif
 		while (cp1 != cp2) {
 #ifdef ENABLE_NATIVE_MAGIT
-			if (magit_ediff_active) {
-				want = cellcolor(*cp1, vvp->v_color);
-				if (want >= 0 && want != cur) {
-					ttcolor(want);
-					cur = want;
+			{
+				int wantkind = (*cp1 == VT_CONT) ? -1 :
+				    (int)((*cp1 & MG_COLOR_MASK) >> MG_COLOR_SHIFT);
+				int wanthl   = (*cp1 != VT_CONT) && (*cp1 & MG_HL_BIT);
+				if (wantkind >= 0 && wantkind != curkind) {
+					ttfgkind(wantkind);
+					curkind = wantkind;
+				}
+				if (wanthl != curhl) {
+					ttcolor(wanthl ? CMODE : vvp->v_color);
+					cur = wanthl ? CMODE : vvp->v_color;
+					curhl = wanthl;
 				}
 			}
 #endif
 			ttputcell(*cp1++);
 			++ttcol;
 		}
+#ifdef ENABLE_NATIVE_MAGIT
+		if (curkind != 0)
+			ttfgkind(0);
+#endif
 		ttcolor(CTEXT);
 		return;
 	}
@@ -1052,14 +1098,23 @@ uline(int row, struct video *vvp, struct video *pvp)
 		ttcolor(vvp->v_color);
 #ifdef ENABLE_NATIVE_MAGIT
 	cur = vvp->v_color;
+	curkind = 0;
+	curhl = 0;
 #endif
 	while (cp1 != cp5) {
 #ifdef ENABLE_NATIVE_MAGIT
-		if (magit_ediff_active) {
-			want = cellcolor(*cp1, vvp->v_color);
-			if (want >= 0 && want != cur) {
-				ttcolor(want);
-				cur = want;
+		{
+			int wantkind = (*cp1 == VT_CONT) ? -1 :
+			    (int)((*cp1 & MG_COLOR_MASK) >> MG_COLOR_SHIFT);
+			int wanthl   = (*cp1 != VT_CONT) && (*cp1 & MG_HL_BIT);
+			if (wantkind >= 0 && wantkind != curkind) {
+				ttfgkind(wantkind);
+				curkind = wantkind;
+			}
+			if (wanthl != curhl) {
+				ttcolor(wanthl ? CMODE : vvp->v_color);
+				cur = wanthl ? CMODE : vvp->v_color;
+				curhl = wanthl;
 			}
 		}
 #endif
@@ -1067,7 +1122,9 @@ uline(int row, struct video *vvp, struct video *pvp)
 		++ttcol;
 	}
 #ifdef ENABLE_NATIVE_MAGIT
-	if (magit_ediff_active && cur != vvp->v_color)	/* restore base for erase */
+	if (curkind != 0)
+		ttfgkind(0);
+	if (cur != vvp->v_color)	/* restore base color for erase */
 		ttcolor(vvp->v_color);
 #endif
 	if (cp5 != cp3)			/* Do erase.		 */

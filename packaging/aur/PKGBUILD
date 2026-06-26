@@ -20,7 +20,9 @@ arch=('x86_64' 'aarch64')
 url="https://github.com/danielxvu/mg"
 license=('custom:public-domain')   # mg is public domain (OpenBSD lineage)
 depends=('libgit2' 'libutf8proc' 'ncurses')
-makedepends=('git' 'cmake' 'ninja' 'clang' 'llvm' 'pkgconf')
+makedepends=('git' 'cmake' 'ninja' 'clang' 'llvm' 'pkgconf' 'zig')
+# zig (extra/zig) 0.16+ is required: the syntax/ Zig library is compiled by
+# CMake via `zig build-lib` and linked into mg_magit.  Arch ships 0.16.0.
 provides=('neomg')
 conflicts=('neomg')
 options=('!lto')   # C++23 named modules + LTO can mis-link on some clang builds

@@ -451,6 +451,24 @@ Build: `cmake --build --preset cpp && ctest --preset cpp` +
   (`l f`). The earlier "out of scope" list was an overclaim — all the
   libgit2-feasible items above are now done (#54–#61).
 
+  🎉 **FM-SYNTAX-HIGHLIGHT COMPLETE** (branch `fm-syntax-highlight`, stacked on
+  `fm-lp-log-extras`; spec `docs/superpowers/specs/2026-06-25-fm-syntax-highlight-diffs-design.md`):
+  Syntax-highlighted diffs across all surfaces — status inline hunks, commit
+  diff, and ediff panes. Four layers: (1) Zig 0.16.0 lite tokenizer
+  (`syntax/neomg_syntax.zig`, C ABI `neomg_syntax.h`, 9 languages + generic
+  fallback) compiled to a static lib via `build.zig`, linked into `mg_magit` by
+  CMake; (2) `vtcell` 4-bit color-index field + `ttfgcolor` (terminfo
+  `set_a_foreground`, 16-color palette) + `MG_COLOR_SHIFT`/`MG_COLOR_MASK` in
+  `display.c`; (3) `magit_cell_color` glue tokenizes each diff line after the
+  `+/-/space` gutter and ORs per-kind colors into cells; (4) ediff reconciliation
+  composes syntax foreground with `MG_HL_BIT` reverse-video — a syntax+active-
+  region cell emits both SGR attributes. `zig` added to Dockerfiles, bench.yml,
+  and PKGBUILD. Dockerfiles install `zig` from rolling distro repos
+  (0.16.0 at time of writing; a commented tarball fallback is provided for
+  hard-pin needs). OFF build: 0 magit/zig
+  symbols, no color escapes. macOS + Arch/Alpine green; docker gate left for CI
+  (cannot run from task-6 environment).
+
   🎉 **FM-LP log extras COMPLETE** (branch `fm-lp-log-extras`, stacked on
   `fm-git-cli-writes`; spec `docs/superpowers/specs/2026-06-25-fm-lp-log-extras-design.md`):
   `l g` graph, `l r` commit-range (A..B), `l s`/`l G` pickaxe (-S/-G). One
