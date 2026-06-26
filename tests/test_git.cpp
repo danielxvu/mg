@@ -3284,6 +3284,39 @@ TEST_CASE("hybrid_status mirrors repo_status on a split index (fail-closed)")
 
 #endif // MG_ZIG_STATUS
 
+TEST_CASE("reflog reports HEAD reflog entries newest-first with selectors")
+{
+    auto dir = make_repo_with_commit("first");   // commit #1 -> HEAD@{...}
+    set_test_config(dir);
+    commit_file(dir, "b.txt", "bee\n", "second"); // commit #2 = current HEAD
+
+    auto rl = mg::git::reflog(dir.string(), 100);
+    REQUIRE(rl.has_value());
+    REQUIRE(rl->size() >= 2);                     // at least the two commits
+
+    // Newest first: entry 0 is the current HEAD, selector HEAD@{0}.
+    CHECK(rl->front().selector == "HEAD@{0}");
+    CHECK(rl->at(1).selector == "HEAD@{1}");
+    CHECK(rl->front().oid.size() == 40);          // full hex oid
+    CHECK(rl->front().short_oid.size() == 8);
+    CHECK_FALSE(rl->front().message.empty());     // e.g. "commit: second"
+    // The newest entry's oid is the current HEAD commit.
+    auto head = mg::git::read_head(dir.string());
+    REQUIRE(head.has_value());
+    CHECK(rl->front().oid.rfind(head->short_oid, 0) == 0); // short_oid is a prefix
+
+    fs::remove_all(dir);
+}
+
+TEST_CASE("reflog caps at max and tolerates a brand-new repo")
+{
+    auto dir = make_repo_with_commit("only");
+    auto capped = mg::git::reflog(dir.string(), 1);
+    REQUIRE(capped.has_value());
+    CHECK(capped->size() <= 1);
+    fs::remove_all(dir);
+}
+
 // discover_workdir gates the status monitor: it must resolve a repo from any
 // subdirectory (search-up) but return nullopt outside a repo, so launching mg
 // outside a repository never starts a recursive watch (the fd-exhaustion bug).

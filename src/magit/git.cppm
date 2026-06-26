@@ -342,6 +342,18 @@ struct head_info {
     std::string summary;    // HEAD commit's first line; empty if unborn
 };
 
+// One HEAD reflog entry (the state HEAD pointed to AFTER the recorded op).
+struct reflog_entry {
+    std::string oid;        // full 40-char hex of the "new" oid
+    std::string short_oid;  // first 8 hex chars, for display
+    std::string selector;   // "HEAD@{i}"
+    std::string message;    // git_reflog_entry_message, trailing newline trimmed
+};
+
+// Read HEAD's reflog, newest-first, capped at `max` entries. A repo with no HEAD
+// reflog yet yields an empty vector (not an error).
+std::expected<std::vector<reflog_entry>, error> reflog(std::string repo, int max);
+
 struct commit_brief {
     std::string short_oid;
     std::string oid;       // full 40-char sha-1 hex (for lookups)
@@ -1192,6 +1204,48 @@ std::expected<head_info, error> read_head(std::string path)
         }
     }
     return hi;
+}
+
+std::expected<std::vector<reflog_entry>, error> reflog(std::string repo, int max)
+{
+    detail::init_guard guard;
+    git_repository *raw = nullptr;
+    if (git_repository_open_ext(&raw, repo.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr r(raw);
+
+    git_reflog *raw_rl = nullptr;
+    int rc = git_reflog_read(&raw_rl, r.get(), "HEAD");
+    if (rc == GIT_ENOTFOUND)
+        return std::vector<reflog_entry>{}; // no reflog yet -> empty, not error
+    if (rc != 0)
+        return std::unexpected(last_error());
+    std::unique_ptr<git_reflog, decltype(&git_reflog_free)> rl(raw_rl,
+                                                               git_reflog_free);
+
+    std::vector<reflog_entry> out;
+    const std::size_t n = git_reflog_entrycount(rl.get());
+    const std::size_t cap = max > 0 ? static_cast<std::size_t>(max) : n;
+    for (std::size_t i = 0; i < n && out.size() < cap; ++i) {
+        const git_reflog_entry *e = git_reflog_entry_byindex(rl.get(), i);
+        if (e == nullptr)
+            continue;
+        const git_oid *id = git_reflog_entry_id_new(e);
+        char hex[GIT_OID_HEXSZ + 1] = {0};
+        git_oid_fmt(hex, id);              // 40 hex chars, no NUL written by _fmt
+        hex[GIT_OID_HEXSZ] = '\0';
+        reflog_entry re;
+        re.oid.assign(hex, GIT_OID_HEXSZ);
+        re.short_oid = re.oid.substr(0, 8);
+        re.selector = "HEAD@{" + std::to_string(i) + "}";
+        const char *msg = git_reflog_entry_message(e);
+        re.message = msg ? msg : "";
+        while (!re.message.empty() &&
+               (re.message.back() == '\n' || re.message.back() == '\r'))
+            re.message.pop_back();
+        out.push_back(std::move(re));
+    }
+    return out;
 }
 
 std::expected<upstream_info, error> upstream_status(std::string path)
