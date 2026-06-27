@@ -40,14 +40,18 @@ int run_git_command(std::string repo, std::string cmdline);
   — identical to how `commit_via_cli` logs. Returns `run.code` (or -1 if the
   cmdline tokenizes to empty / spawn failed).
 
-### Runner = captured `run_git` (matches Magit's `:`)
+### Runner = captured `run_git` (synchronous, not async like Magit's `:`)
 All `:` commands run with captured stdout+stderr → the process log. **Interactive
 / network commands** (`: push` needing a password prompt, `: rebase -i` needing
-an editor, `: log` with a pager) do NOT get a tty, so they hang or fail — this is
-the documented limitation (Magit's `:` has the same shape). The status footer /
-docs steer users to the dedicated keys (`P` push, `F` pull, `f` fetch, `r`
-rebase, `l` log) for those. Auto-routing network subcommands to the tty-inherit
-path is deferred (see Out of scope → roadmap).
+an editor, `: log` with a pager) would freeze the UI — which is why `run_git`
+redirects stdin to `/dev/null` and passes `--no-pager`, giving commands an EOF
+instead of a terminal. Commands that still need a tty (credential prompts reading
+`/dev/tty` directly, pager fallbacks) will fail, not hang. This is the documented
+limitation. Note: Magit's `:` dispatches asynchronously; neomg's is
+synchronous-captured. The status footer / docs steer users to the dedicated keys
+(`P` push, `F` pull, `f` fetch, `r` rebase, `l` log) for interactive ops.
+Auto-routing network subcommands to the tty-inherit path is deferred (see Out of
+scope → roadmap).
 
 ### Bridge (C ABI)
 ```
@@ -83,9 +87,12 @@ the existing process-log rendering (no new render code).
   (close the quote at EOL) so a stray quote doesn't silently no-op.
 - A command that fails (non-zero exit): still logged (`ok=false`) with its output
   — the user sees the error in `*magit-process*`. That's the point.
-- Interactive/network command hangs: the documented limitation; the captured
-  `run_git` blocks until the child exits or EOFs its input — for a password
-  prompt that reads `/dev/tty` it will error out (no tty), not hang forever.
+- Interactive/network command safety: `run_git` redirects the child's stdin
+  to `/dev/null` and passes `--no-pager`, so pagers receive EOF immediately and
+  commands reading stdin get EOF instead of blocking. Commands that reach past
+  stdin and open `/dev/tty` directly (some credential helpers) may still fail,
+  but will not freeze the UI indefinitely. The documented limitation applies:
+  use the dedicated keys (`P`/`F`/`f`) for network ops that need a real tty.
 
 ## Testing
 

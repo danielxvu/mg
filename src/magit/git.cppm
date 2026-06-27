@@ -26,6 +26,7 @@ module;
 
 #include <git2.h>
 
+#include <fcntl.h>    // O_RDONLY -- redirect child stdin to /dev/null
 #include <spawn.h>    // posix_spawnp -- run the real `git` for hook/sign/auth ops
 #include <sys/wait.h> // waitpid
 #include <unistd.h>   // pipe, read, close
@@ -74,12 +75,13 @@ inline git_run run_git(const std::string &repo,
 
     posix_spawn_file_actions_t fa;
     posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0); // stdin -> /dev/null (no pager/prompt block)
     posix_spawn_file_actions_adddup2(&fa, pfd[1], 1); // child stdout -> pipe
     posix_spawn_file_actions_adddup2(&fa, pfd[1], 2); // child stderr -> pipe
     posix_spawn_file_actions_addclose(&fa, pfd[0]);
     posix_spawn_file_actions_addclose(&fa, pfd[1]);
 
-    std::vector<std::string> full{"git", "-C", repo};
+    std::vector<std::string> full{"git", "--no-pager", "-C", repo};
     full.insert(full.end(), args.begin(), args.end());
     std::vector<char *> argv;
     argv.reserve(full.size() + 1);

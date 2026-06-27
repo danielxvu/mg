@@ -321,6 +321,9 @@ absent). Keep this in sync with the README's "What it doesn't do (vs Magit)".
     network subcommands (`push`/`pull`/`fetch`/`rebase -i`) from `:` to the
     tty-inherit path (`git_terminal`); v1 is captured-only (use the dedicated keys
     for those).
+  - [ ] **FM-PROCLOG-CAP (deferred from FM-GIT-CMD)** — truncate a captured
+    entry's output at N KB with a "… (truncated)" marker so a `git log` or
+    `git diff` over a large repo doesn't blow up the `*magit-process*` buffer.
 - [ ] **FM-SHOW-REFS — `y` refs overview** (`magit-show-refs`): a `*magit-refs*`
   buffer of local branches, remotes, and tags with ahead/behind vs HEAD
   (`git_branch_iterator` + `git_graph_ahead_behind`).

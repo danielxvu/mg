@@ -3459,3 +3459,37 @@ TEST_CASE("run_git_command runs git and records a $ proclog entry")
     CHECK(mg::magit::proclog::snapshot().empty());
     fs::remove_all(dir);
 }
+
+// Pager-hang regression: run_git must not block on commands that produce output
+// (e.g. log --oneline), because --no-pager is injected into the exec argv and
+// stdin is redirected to /dev/null. Asserts: exit 0 + output non-empty.
+TEST_CASE("run_git_command log does not hang (--no-pager + stdin=/dev/null)")
+{
+    auto dir = make_repo_with_commit("initial commit for log");
+    set_test_config(dir);
+    // A second commit so log --oneline always has at least one line of output.
+    commit_file(dir, "b.txt", "bee\n", "second commit for log");
+
+    mg::magit::proclog::clear();
+    int rc = mg::git::run_git_command(dir.string(), "log --oneline");
+    CHECK(rc == 0);
+    auto snap = mg::magit::proclog::snapshot();
+    bool found = false;
+    for (auto &e : snap)
+        if (e.kind == '$' && e.command.find("log") != std::string::npos) {
+            CHECK(e.ok);
+            // The output must be non-empty: at least one commit subject.
+            CHECK_FALSE(e.output.empty());
+            // Both commit subjects must appear in the oneline output.
+            CHECK(e.output.find("initial commit for log") != std::string::npos);
+            found = true;
+        }
+    CHECK(found); // a $ log entry was recorded
+
+    // diff on a clean repo exits 0 and produces no output -- just confirm it
+    // returns promptly (no pager block).
+    mg::magit::proclog::clear();
+    CHECK(mg::git::run_git_command(dir.string(), "diff") == 0);
+
+    fs::remove_all(dir);
+}
