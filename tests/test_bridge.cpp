@@ -2398,3 +2398,19 @@ TEST_CASE("snapshot replay reflects current diff-view (not baked header)")
     mg_magit_set_diff_view(3, 0); // reset
     fs::remove_all(dir);
 }
+
+TEST_CASE("mg_magit_git_command runs git and logs a $ process entry")
+{
+    auto dir = make_repo_full();
+    mg::magit::proclog::clear();
+    CHECK(mg_magit_git_command(dir.string().c_str(), "status") == 0);
+    bool found = false;
+    for (auto &e : mg::magit::proclog::snapshot())
+        if (e.kind == '$' && e.command.find("git status") != std::string::npos)
+            found = true;
+    CHECK(found);
+    // null + empty guards
+    CHECK(mg_magit_git_command(dir.string().c_str(), "") == -1);
+    CHECK(mg_magit_git_command(nullptr, "status") == -1);
+    fs::remove_all(dir);
+}
