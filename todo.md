@@ -302,11 +302,17 @@ absent). Keep this in sync with the README's "What it doesn't do (vs Magit)".
   - [ ] **FM-DIFF-CTL-VIEWS (deferred from FM-DIFF-CTL)** — apply the context /
     whitespace controls to the commit-view (`commit_diff`) and log diffs too;
     v1 is the status buffer's expanded diffs (the shared `file_diff` path only).
-- [ ] **FM-TRANSIENT-DEPTH — deepen the argument menus.** The menu prefixes
-  (`l`/`X`/`b`/`P`/…) cover common flags, not Magit's exhaustive infix set. Bring
-  key ones closer: log (`-n`, `--author=`, `--grep=`, `--all`), push
-  (`--force-with-lease`/`-u` as live toggles), diff args. Magit's defining UX —
-  the single deepest gap.
+- [~] **FM-TRANSIENT-DEPTH — deepen the argument menus.** The infix infra is
+  built (`magit_transient` + `log_infixes -n` / `push_infixes -f -u`); this gap is
+  *extending* it. IN PROGRESS — **log slice** (branch `fm-transient-depth`): adds
+  `--author=` / `--grep=` / `--all` infixes to the `l` transient on top of `-n`.
+  Spec: `docs/superpowers/specs/2026-06-28-fm-transient-depth-design.md`.
+  - [ ] **FM-TRANSIENT-PUSH (deferred)** — more push infixes (`--tags`,
+    `--dry-run`) + a pull transient with args.
+  - [ ] **FM-TRANSIENT-DIFF (deferred)** — a diff-args transient wrapping the
+    FM-DIFF-CTL context/whitespace controls (currently the `+`/`-`/`w` keys).
+  - [ ] **FM-TRANSIENT-LOG-MORE (deferred)** — further log args (`--since`/
+    `--until`, `--reverse`, `--merges`/`--no-merges`); rebase/merge/reset transients.
 
 ### Medium value
 - [ ] **FM-LOG-RICH — fuller log buffer.** No `--decorate` ref coloring; no
