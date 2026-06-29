@@ -787,10 +787,17 @@ static struct KEYMAPE (4) magit_commitmenu = {
  * action key through the submap.
  */
 
-/* Push infixes: read by magit_push (index 0 = force, 1 = set-upstream). */
+/* Push infixes: read by magit_push (0=force, 1=set-upstream, 2=tags, 3=dry-run). */
 static struct magit_infix push_infixes[] = {
 	{ 'f', "-f --force-with-lease", MAGIT_INFIX_FLAG, 0, "", 0 },
-	{ 'u', "-u --set-upstream",     MAGIT_INFIX_FLAG, 0, "", 0 }
+	{ 'u', "-u --set-upstream",     MAGIT_INFIX_FLAG, 0, "", 0 },
+	{ 't', "--tags",                MAGIT_INFIX_FLAG, 0, "", 0 },
+	{ 'd', "--dry-run",             MAGIT_INFIX_FLAG, 0, "", 0 }
+};
+/* Pull infixes: read by magit_pull / magit_pull_rebase (0 = autostash, 1 = ff-only). */
+static struct magit_infix pull_infixes[] = {
+	{ 'a', "--autostash", MAGIT_INFIX_FLAG, 0, "", 0 },
+	{ 'f', "--ff-only",   MAGIT_INFIX_FLAG, 0, "", 0 }
 };
 /* Log infixes: [0]=-n [1]=--author [2]=--grep [3]=--all; read by magit_log_build. */
 static struct magit_infix log_infixes[] = {
@@ -846,7 +853,7 @@ static const struct magit_menu_item reflog_reset_items[] = {
 
 #define MENU_N(a) ((int)(sizeof(a) / sizeof((a)[0])))
 static struct magit_menu pull_menu = { "Pull", (KEYMAP *)&magit_pullmenu,
-	pull_items, MENU_N(pull_items), NULL, 0 };
+	pull_items, MENU_N(pull_items), pull_infixes, MENU_N(pull_infixes) };
 static struct magit_menu push_menu = { "Push", (KEYMAP *)&magit_pushmenu,
 	push_items, MENU_N(push_items), push_infixes, MENU_N(push_infixes) };
 static struct magit_menu reset_menu = { "Reset", (KEYMAP *)&magit_resetmenu,
@@ -3487,6 +3494,13 @@ magit_tty_pause_and_restore(void)
 
 enum magit_net_op { MNET_FETCH, MNET_PUSH, MNET_PULL, MNET_PULL_REBASE };
 
+/* magit_run_net flag bits (op-specific). */
+#define MNET_FORCE     0x01  /* push: --force-with-lease */
+#define MNET_UPSTREAM  0x02  /* push: -u */
+#define MNET_TAGS      0x04  /* push: --tags */
+#define MNET_AUTOSTASH 0x08  /* pull: --autostash */
+#define MNET_FF_ONLY   0x10  /* pull: --ff-only */
+
 /*
  * Run an interactive git network op with the terminal handed to git. `banner`
  * prints on the inherited tty first. Returns git's exit code (0 = success), -1
@@ -3495,7 +3509,7 @@ enum magit_net_op { MNET_FETCH, MNET_PUSH, MNET_PULL, MNET_PULL_REBASE };
  * mode with a repaint queued.
  */
 static int
-magit_run_net(enum magit_net_op op, const char *cwd, int a, int b,
+magit_run_net(enum magit_net_op op, const char *cwd, int flags,
     const char *banner)
 {
 	int	code;
@@ -3508,13 +3522,16 @@ magit_run_net(enum magit_net_op op, const char *cwd, int a, int b,
 
 	switch (op) {
 	case MNET_PUSH:
-		code = mg_magit_push_cli(cwd, a, b, /*tags*/0);
+		code = mg_magit_push_cli(cwd, (flags & MNET_FORCE) != 0,
+		    (flags & MNET_UPSTREAM) != 0, (flags & MNET_TAGS) != 0);
 		break;
 	case MNET_PULL:
-		code = mg_magit_pull_cli(cwd, 0, /*autostash*/0, /*ff_only*/0);
+		code = mg_magit_pull_cli(cwd, 0, (flags & MNET_AUTOSTASH) != 0,
+		    (flags & MNET_FF_ONLY) != 0);
 		break;
 	case MNET_PULL_REBASE:
-		code = mg_magit_pull_cli(cwd, 1, /*autostash*/0, /*ff_only*/0);
+		code = mg_magit_pull_cli(cwd, 1, (flags & MNET_AUTOSTASH) != 0,
+		    (flags & MNET_FF_ONLY) != 0);
 		break;
 	case MNET_FETCH:
 	default:
@@ -3538,7 +3555,7 @@ magit_fetch(int f, int n)
 
 	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
-	code = magit_run_net(MNET_FETCH, cwd, 0, 0, "Fetching from origin...");
+	code = magit_run_net(MNET_FETCH, cwd, 0, "Fetching from origin...");
 	if (code == -2)
 		return (FALSE);
 	if (code == -1) {			/* git unavailable -> libgit2 */
@@ -3567,7 +3584,9 @@ magit_pull(int f, int n)
 
 	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
-	code = magit_run_net(MNET_PULL, cwd, 0, 0, "Pulling from origin...");
+	int flags = (pull_infixes[0].on ? MNET_AUTOSTASH : 0) |
+	            (pull_infixes[1].on ? MNET_FF_ONLY : 0);
+	code = magit_run_net(MNET_PULL, cwd, flags, "Pulling from origin...");
 	if (code == -2)
 		return (FALSE);
 	if (code == -1)				/* git unavailable -> libgit2 */
@@ -3582,22 +3601,22 @@ magit_pull(int f, int n)
 	return (magit_refresh(f, n));
 }
 
-/* Shared push helper: `force` / `set_upstream` map to the engine flags. */
+/* Shared push helper: flags bitmask maps to CLI / libgit2 engine flags. */
 static int
-magit_do_push(int force, int set_upstream, int f, int n)
+magit_do_push(int flags, int f, int n)
 {
 	char	cwd[PATH_MAX];
 	int	code;
 
 	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
-	code = magit_run_net(MNET_PUSH, cwd, force, set_upstream,
-	    "Pushing to origin...");
+	code = magit_run_net(MNET_PUSH, cwd, flags, "Pushing to origin...");
 	if (code == -2)
 		return (FALSE);
-	if (code == -1) {			/* git unavailable -> libgit2 */
+	if (code == -1) {			/* git unavailable -> libgit2 (no --tags) */
 		ewprintf("Pushing to origin...");
-		if (mg_magit_push(cwd, "origin", force, set_upstream) != 1) {
+		if (mg_magit_push(cwd, "origin", (flags & MNET_FORCE) != 0,
+		    (flags & MNET_UPSTREAM) != 0) != 1) {
 			ewprintf("Push failed (no origin, non-fast-forward, or "
 			    "auth required)");
 			return (FALSE);
@@ -3613,12 +3632,27 @@ magit_do_push(int force, int set_upstream, int f, int n)
 	return (magit_refresh(f, n));
 }
 
-/* P p: push the current branch to origin, honoring the -f/-u transient
- * infixes (force-with-lease / set-upstream). */
+/* P p: push the current branch to origin, honoring the transient infixes
+ * (-f/-u/--tags/--dry-run). */
 static int
 magit_push(int f, int n)
 {
-	return (magit_do_push(push_infixes[0].on, push_infixes[1].on, f, n));
+	int	force = push_infixes[0].on;
+	int	upstream = push_infixes[1].on;
+	int	tags = push_infixes[2].on;
+	int	flags;
+
+	if (push_infixes[3].on) {	/* --dry-run: captured preview -> *magit-process* */
+		char	cwd[PATH_MAX];
+
+		if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
+			return (FALSE);
+		(void)mg_magit_push_dry_run(cwd, force, upstream, tags);
+		return (magit_process(f, n));
+	}
+	flags = (force ? MNET_FORCE : 0) | (upstream ? MNET_UPSTREAM : 0) |
+	    (tags ? MNET_TAGS : 0);
+	return (magit_do_push(flags, f, n));
 }
 
 /* F r: pull --rebase (fetch then rebase onto the upstream). */
@@ -3630,7 +3664,9 @@ magit_pull_rebase(int f, int n)
 
 	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
-	code = magit_run_net(MNET_PULL_REBASE, cwd, 0, 0,
+	int flags = (pull_infixes[0].on ? MNET_AUTOSTASH : 0) |
+	            (pull_infixes[1].on ? MNET_FF_ONLY : 0);
+	code = magit_run_net(MNET_PULL_REBASE, cwd, flags,
 	    "Pulling (rebase) from origin...");
 	if (code == -2)
 		return (FALSE);

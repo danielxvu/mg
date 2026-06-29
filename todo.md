@@ -347,6 +347,16 @@ absent). Keep this in sync with the README's "What it doesn't do (vs Magit)".
 - [ ] **FM-AM — `magit-am`** (apply mailbox/`.patch` series) + matching sequencer
   states; plus the known interactive-rebase edge (a conflicting squash/fixup
   resolves as a normal pick rather than folding — README "Edges remain").
+- [ ] **FM-FSEVENTS-EXIT-HANG (bug, macOS; found in FM-TRANSIENT-PUSH review)** —
+  the FSEvents fswatch backend's teardown blocks in an uninterruptible `mach_msg`
+  (`FSEventStreamStop` / `dispatch_sync_f`) during process exit when events are
+  in-flight (e.g. right after a `.git`-writing git op). `SIGKILL` can't reap the
+  process, so a pty test's `waitpid` hangs (exposed by an end-to-end `push
+  --dry-run` pty test, which is therefore omitted). Candidate fix: a watcher
+  `set_exit_mode()` that skips the blocking FSEvents calls on the exit path and
+  lets the OS reclaim Mach ports/dispatch queues at collection. Linux/inotify is
+  unaffected. Real user impact (neomg can hang on quit), so worth a dedicated,
+  carefully-reviewed fix — NOT a rider on an unrelated feature.
 
 ### Out of scope by design (NOT gaps to close — documented stance)
 - **`forge`** (GitHub/GitLab issues & PRs, Gerrit) — a separate Magit package,
