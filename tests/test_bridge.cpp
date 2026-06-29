@@ -905,6 +905,7 @@ TEST_CASE("mg_magit_log_query_buffer -S finds the introducing commit")
     int n = mg_magit_log_query_buffer(
         dir.string().c_str(), /*graph=*/0, /*range=*/nullptr, /*file=*/nullptr,
         /*pickaxe_kind=*/'S', /*pickaxe_term=*/"NEEDLE_XYZ", /*n=*/0,
+        /*author=*/nullptr, /*grep=*/nullptr, /*all=*/0,
         [](void *ctx, const char *line, int kind, const char *, int) {
             auto *p = static_cast<cap *>(ctx);
             p->lines.emplace_back(line);
@@ -2412,5 +2413,50 @@ TEST_CASE("mg_magit_git_command runs git and logs a $ process entry")
     // null + empty guards
     CHECK(mg_magit_git_command(dir.string().c_str(), "") == -1);
     CHECK(mg_magit_git_command(nullptr, "status") == -1);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("mg_magit_log_query_buffer threads --grep through")
+{
+    auto dir = make_repo_full();
+    std::string d = dir.string();
+    REQUIRE(std::system(("git -C '" + d +
+        "' commit --allow-empty -m FIND_ME_GREP >/dev/null 2>&1").c_str()) == 0);
+
+    struct row { std::string line; };
+    std::vector<row> rows;
+    mg_magit_log_query_buffer(d.c_str(), 0, nullptr, nullptr, 0, nullptr, 50,
+        nullptr, "FIND_ME_GREP", 0,      // author=NULL, grep set, all=0
+        [](void *c, const char *l, int kind, const char *, int) {
+            if (kind == MG_LINE_COMMIT)
+                static_cast<std::vector<row>*>(c)->push_back({l});
+        }, &rows);
+    REQUIRE_FALSE(rows.empty());
+    for (const auto &r : rows) CHECK(r.line.find("FIND_ME_GREP") != std::string::npos);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("mg_magit_log_query_buffer applies --author together with a file path")
+{
+    auto dir = make_repo_with_commit("base"); // a.txt, by "Test"
+    std::string d = dir.string();
+    auto run = [&](const std::string &c) {
+        return std::system(("git -C '" + d + "' " + c + " >/dev/null 2>&1").c_str());
+    };
+    std::ofstream(dir / "a.txt") << "content\nzoe line\n"; // second commit to a.txt, by Zoe
+    REQUIRE(run("add a.txt") == 0);
+    REQUIRE(run("-c user.name=Zoe -c user.email=z@example.com commit -m zoe_edit") == 0);
+
+    auto count = [&](const char *author) {
+        int n = 0;
+        mg_magit_log_query_buffer(d.c_str(), 0, nullptr, "a.txt", 0, nullptr, 50,
+            author, nullptr, 0,
+            [](void *c, const char *, int kind, const char *, int) {
+                if (kind == MG_LINE_COMMIT) (*static_cast<int*>(c))++;
+            }, &n);
+        return n;
+    };
+    CHECK(count(nullptr) == 2); // both commits touch a.txt (file path applied)
+    CHECK(count("Zoe") == 1);   // author AND file both applied (guards the file-passing fix)
     fs::remove_all(dir);
 }

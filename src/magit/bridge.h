@@ -101,6 +101,7 @@ int mg_magit_reflog_buffer(const char *repo, int n, mg_magit_emit_fn emit,
 int mg_magit_log_query_buffer(const char *repo_path, int graph,
         const char *range, const char *file, int pickaxe_kind,
         const char *pickaxe_term, int n,
+        const char *author, const char *grep, int all,
         mg_magit_emit_fn emit, void *ctx);
 
 /* --- Async per-file builds (FM-ASYNC-BLAME) --------------------------------

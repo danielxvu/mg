@@ -1517,7 +1517,9 @@ magit_log_build(struct buffer *bp)
 		(void)mg_magit_log_query_buffer(cwd, magit_log_graph,
 		    magit_log_range[0] ? magit_log_range : NULL, NULL,
 		    magit_log_pickaxe, magit_log_pickaxe_term,
-		    magit_log_limit, magit_log_emit, bp);
+		    magit_log_limit,
+		    NULL, NULL, 0,                 /* author/grep/all — wired in Task 3 */
+		    magit_log_emit, bp);
 	} else if (magit_log_file_path[0] != '\0') {
 		/*
 		 * Per-file log is slow (150-360ms); run it on the worker thread
