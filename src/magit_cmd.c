@@ -3581,11 +3581,12 @@ magit_pull(int f, int n)
 {
 	char	cwd[PATH_MAX];
 	int	code;
+	int	flags;
 
 	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
-	int flags = (pull_infixes[0].on ? MNET_AUTOSTASH : 0) |
-	            (pull_infixes[1].on ? MNET_FF_ONLY : 0);
+	flags = (pull_infixes[0].on ? MNET_AUTOSTASH : 0) |
+	    (pull_infixes[1].on ? MNET_FF_ONLY : 0);
 	code = magit_run_net(MNET_PULL, cwd, flags, "Pulling from origin...");
 	if (code == -2)
 		return (FALSE);
@@ -3661,11 +3662,12 @@ magit_pull_rebase(int f, int n)
 {
 	char	cwd[PATH_MAX];
 	int	code;
+	int	flags;
 
 	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
-	int flags = (pull_infixes[0].on ? MNET_AUTOSTASH : 0) |
-	            (pull_infixes[1].on ? MNET_FF_ONLY : 0);
+	flags = (pull_infixes[0].on ? MNET_AUTOSTASH : 0) |
+	    (pull_infixes[1].on ? MNET_FF_ONLY : 0);
 	code = magit_run_net(MNET_PULL_REBASE, cwd, flags,
 	    "Pulling (rebase) from origin...");
 	if (code == -2)

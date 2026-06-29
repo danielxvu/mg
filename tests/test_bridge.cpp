@@ -2464,8 +2464,9 @@ TEST_CASE("mg_magit_log_query_buffer applies --author together with a file path"
 
 TEST_CASE("mg_magit_push_cli appends --tags when requested")
 {
-    // No remote: the push fails fast (captured by git_terminal's child), but the
-    // proclog entry records the exact command we built -- which is what we assert.
+    // No remote: the push exits non-zero, but mg_magit_push_cli records the exact
+    // command it built to the proclog AFTER git_terminal returns -- that entry
+    // (with --tags) is what we assert, regardless of the push's success.
     auto dir = make_repo_with_commit("c1");
     std::string d = dir.string();
     mg::magit::proclog::clear();
@@ -2505,5 +2506,15 @@ TEST_CASE("mg_magit_pull_cli appends --autostash and --ff-only when requested")
             e.command.find("--ff-only") != std::string::npos)
             both = true;
     CHECK(both);
+
+    // Default-off (0, 0): neither flag appears in the built command.
+    mg::magit::proclog::clear();
+    (void)mg_magit_pull_cli(d.c_str(), /*rebase*/0, /*autostash*/0, /*ff_only*/0);
+    bool none = true;
+    for (auto &e : mg::magit::proclog::snapshot())
+        if (e.kind == '$' && (e.command.find("--autostash") != std::string::npos ||
+                              e.command.find("--ff-only") != std::string::npos))
+            none = false;
+    CHECK(none);
     fs::remove_all(dir);
 }

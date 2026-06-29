@@ -222,8 +222,10 @@ int mg_magit_pull_rebase(const char *repo_path, const char *remote);
  * (see spawncli) and restore raw mode + redraw after. Return git's exit code
  * (0 = success), or -1 if `git` could not be executed -- the signal to fall
  * back to the libgit2 path (mg_magit_fetch/push/pull*). push builds
- * `git push [--force-with-lease] [-u] origin HEAD`; pull builds
- * `git pull [--rebase] --no-edit origin`. */
+ * `git push [--force-with-lease] [-u] [--tags] origin HEAD`; pull builds
+ * `git pull [--rebase] [--autostash] [--ff-only] --no-edit origin`.
+ * mg_magit_push_dry_run runs `git push --dry-run [...]` CAPTURED (not via the
+ * terminal) and records its output to the process log for *magit-process*. */
 int mg_magit_fetch_cli(const char *repo_path);
 int mg_magit_push_cli(const char *repo_path, int force, int set_upstream, int tags);
 int mg_magit_push_dry_run(const char *repo_path, int force, int set_upstream, int tags);
