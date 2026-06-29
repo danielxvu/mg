@@ -2433,6 +2433,7 @@ TEST_CASE("mg_magit_log_query_buffer threads --grep through")
         }, &rows);
     REQUIRE_FALSE(rows.empty());
     for (const auto &r : rows) CHECK(r.line.find("FIND_ME_GREP") != std::string::npos);
+    CHECK(rows.size() == 1); // only the FIND_ME_GREP commit matched
     fs::remove_all(dir);
 }
 

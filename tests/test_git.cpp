@@ -2264,6 +2264,7 @@ TEST_CASE("log_query --grep filters by commit message")
     REQUIRE_FALSE(rows->empty());
     for (const auto &r : *rows)
         CHECK(r.text.find("FIXBUG") != std::string::npos); // every match has the term
+    CHECK(rows->size() == 1); // exactly the FIXBUG commit, nothing extra
     fs::remove_all(dir);
 }
 

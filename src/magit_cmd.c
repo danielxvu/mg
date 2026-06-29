@@ -1527,6 +1527,15 @@ magit_log_build(struct buffer *bp)
 	bp->b_flag |= BFREADONLY;
 
 	magit_log_count = 0;
+	/*
+	 * Any active filter (author/grep/all, or graph/range/pickaxe) routes
+	 * through the synchronous query path, which also threads
+	 * magit_log_file_path -- so a filtered per-file log runs as
+	 * `git log <filter> -- file`. Keep it here, NOT on the async worker path
+	 * below: that path's job snapshot carries no filter args, so re-routing a
+	 * filtered file log through it would silently drop the filter. Plain
+	 * `l f` (no filter) still takes the fast async path.
+	 */
 	if (magit_log_graph || magit_log_range[0] != '\0' ||
 	    magit_log_pickaxe != '\0' ||
 	    log_infixes[1].value[0] != '\0' ||   /* --author */
