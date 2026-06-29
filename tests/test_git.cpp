@@ -3565,3 +3565,42 @@ TEST_CASE("run_git_command log does not hang (--no-pager + stdin=/dev/null)")
 
     fs::remove_all(dir);
 }
+
+TEST_CASE("push_dry_run previews without mutating the remote and logs a $ entry")
+{
+    auto dir = make_repo_with_commit("c1"); // a.txt committed, HEAD on default branch
+    set_test_config(dir);
+    std::string d = dir.string();
+    auto bare = d + "-remote.git";
+    auto run = [&](const std::string &c) {
+        return std::system(c.c_str());
+    };
+    REQUIRE(run("git init --bare '" + bare + "' >/dev/null 2>&1") == 0);
+    REQUIRE(run("git -C '" + d + "' remote add origin '" + bare + "' >/dev/null 2>&1") == 0);
+    // initial real push so upstream + the remote branch exist
+    REQUIRE(run("git -C '" + d + "' push -u origin HEAD >/dev/null 2>&1") == 0);
+    // a new commit that a real push WOULD send
+    commit_file(dir, "b.txt", "bee\n", "c2 not yet pushed");
+    auto remote_tip = [&]() {
+        // capture the bare remote's branch tip before/after
+        std::string cmd = "git -C '" + bare + "' rev-parse --all 2>/dev/null";
+        FILE *p = ::popen(cmd.c_str(), "r");
+        std::string out; char buf[256]; size_t k;
+        while (p && (k = fread(buf, 1, sizeof buf, p)) > 0) out.append(buf, k);
+        if (p) ::pclose(p);
+        return out;
+    };
+    auto before = remote_tip();
+
+    mg::magit::proclog::clear();
+    int code = mg::git::push_dry_run(d, /*force*/false, /*set_upstream*/false, /*tags*/false);
+    CHECK(code == 0);                       // dry-run to a reachable local remote succeeds
+    CHECK(remote_tip() == before);          // remote tip UNCHANGED -- dry-run mutated nothing
+
+    bool logged = false;
+    for (auto &e : mg::magit::proclog::snapshot())
+        if (e.kind == '$' && e.command.find("push --dry-run") != std::string::npos)
+            logged = true;
+    CHECK(logged);
+    fs::remove_all(dir); fs::remove_all(bare);
+}

@@ -225,7 +225,8 @@ int mg_magit_pull_rebase(const char *repo_path, const char *remote);
  * `git push [--force-with-lease] [-u] origin HEAD`; pull builds
  * `git pull [--rebase] --no-edit origin`. */
 int mg_magit_fetch_cli(const char *repo_path);
-int mg_magit_push_cli(const char *repo_path, int force, int set_upstream);
+int mg_magit_push_cli(const char *repo_path, int force, int set_upstream, int tags);
+int mg_magit_push_dry_run(const char *repo_path, int force, int set_upstream, int tags);
 int mg_magit_pull_cli(const char *repo_path, int rebase);
 
 /* Reset HEAD to `rev` (mode 0=soft, 1=mixed, 2=hard): 1 ok, 0 fail.

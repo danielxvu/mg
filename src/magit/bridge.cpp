@@ -1431,15 +1431,14 @@ extern "C" int mg_magit_fetch_cli(const char *repo_path)
 }
 
 extern "C" int mg_magit_push_cli(const char *repo_path, int force,
-                                 int set_upstream)
+                                 int set_upstream, int tags)
 {
     if (repo_path == nullptr)
         return -1;
     std::vector<std::string> args{"push"};
-    if (force)
-        args.emplace_back("--force-with-lease");
-    if (set_upstream)
-        args.emplace_back("-u");
+    if (force)        args.emplace_back("--force-with-lease");
+    if (set_upstream) args.emplace_back("-u");
+    if (tags)         args.emplace_back("--tags");
     args.emplace_back("origin");
     args.emplace_back("HEAD");
     std::vector<std::string> cmd{"git"};
@@ -1448,6 +1447,15 @@ extern "C" int mg_magit_push_cli(const char *repo_path, int force,
     mg::magit::proclog::record('$', mg::magit::proclog::argv_to_command(cmd),
                                "(output shown in terminal)", rc == 0, 0);
     return rc;
+}
+
+extern "C" int mg_magit_push_dry_run(const char *repo_path, int force,
+                                     int set_upstream, int tags)
+{
+    if (repo_path == nullptr)
+        return -1;
+    return mg::git::push_dry_run(repo_path, force != 0, set_upstream != 0,
+                                 tags != 0);
 }
 
 extern "C" int mg_magit_pull_cli(const char *repo_path, int rebase)

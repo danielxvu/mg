@@ -2192,7 +2192,7 @@ TEST_CASE("a CLI push logs a $ entry with the terminal-output note")
     REQUIRE(std::system(("git -C '" + dir.string() + "' remote add origin '" + bare.string() + "' >/dev/null 2>&1").c_str()) == 0);
 
     mg::magit::proclog::clear();
-    mg_magit_push_cli(dir.string().c_str(), /*force=*/0, /*set_upstream=*/1);
+    mg_magit_push_cli(dir.string().c_str(), /*force=*/0, /*set_upstream=*/1, /*tags=*/0);
 
     auto s = mg::magit::proclog::snapshot();
     bool found = false;
@@ -2459,5 +2459,36 @@ TEST_CASE("mg_magit_log_query_buffer applies --author together with a file path"
     };
     CHECK(count(nullptr) == 2); // both commits touch a.txt (file path applied)
     CHECK(count("Zoe") == 1);   // author AND file both applied (guards the file-passing fix)
+    fs::remove_all(dir);
+}
+
+TEST_CASE("mg_magit_push_cli appends --tags when requested")
+{
+    // No remote: the push fails fast (captured by git_terminal's child), but the
+    // proclog entry records the exact command we built -- which is what we assert.
+    auto dir = make_repo_with_commit("c1");
+    std::string d = dir.string();
+    mg::magit::proclog::clear();
+    (void)mg_magit_push_cli(d.c_str(), /*force*/0, /*set_upstream*/0, /*tags*/1);
+    bool tagged = false;
+    for (auto &e : mg::magit::proclog::snapshot())
+        if (e.kind == '$' && e.command.find("push") != std::string::npos &&
+            e.command.find("--tags") != std::string::npos)
+            tagged = true;
+    CHECK(tagged);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("mg_magit_push_dry_run records a push --dry-run entry")
+{
+    auto dir = make_repo_with_commit("c1");
+    std::string d = dir.string();
+    mg::magit::proclog::clear();
+    (void)mg_magit_push_dry_run(d.c_str(), 0, 0, 0); // no remote -> fails, still logged
+    bool logged = false;
+    for (auto &e : mg::magit::proclog::snapshot())
+        if (e.kind == '$' && e.command.find("push --dry-run") != std::string::npos)
+            logged = true;
+    CHECK(logged);
     fs::remove_all(dir);
 }

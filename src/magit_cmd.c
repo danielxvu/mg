@@ -3508,7 +3508,7 @@ magit_run_net(enum magit_net_op op, const char *cwd, int a, int b,
 
 	switch (op) {
 	case MNET_PUSH:
-		code = mg_magit_push_cli(cwd, a, b);
+		code = mg_magit_push_cli(cwd, a, b, /*tags*/0);
 		break;
 	case MNET_PULL:
 		code = mg_magit_pull_cli(cwd, 0);
