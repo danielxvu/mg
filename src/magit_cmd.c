@@ -42,6 +42,7 @@ struct magit_infix {
 	enum magit_infix_kind	 kind;
 	int			 on;	/* FLAG: 0/1 toggle state */
 	char			 value[64];	/* VALUE: current text */
+	int			 clear_on_empty; /* VALUE: empty input unsets (vs keeps) */
 };
 struct magit_menu_item {
 	KCHAR		 key;
@@ -788,12 +789,15 @@ static struct KEYMAPE (4) magit_commitmenu = {
 
 /* Push infixes: read by magit_push (index 0 = force, 1 = set-upstream). */
 static struct magit_infix push_infixes[] = {
-	{ 'f', "-f --force-with-lease", MAGIT_INFIX_FLAG, 0, "" },
-	{ 'u', "-u --set-upstream",     MAGIT_INFIX_FLAG, 0, "" }
+	{ 'f', "-f --force-with-lease", MAGIT_INFIX_FLAG, 0, "", 0 },
+	{ 'u', "-u --set-upstream",     MAGIT_INFIX_FLAG, 0, "", 0 }
 };
-/* Log infix: -n max-count; mirrored into magit_log_limit on change. */
+/* Log infixes: [0]=-n [1]=--author [2]=--grep [3]=--all; read by magit_log_build. */
 static struct magit_infix log_infixes[] = {
-	{ 'n', "-n --max-count", MAGIT_INFIX_VALUE, 0, "100" }
+	{ 'n', "-n --max-count", MAGIT_INFIX_VALUE, 0, "100", 0 },
+	{ 'a', "--author",       MAGIT_INFIX_VALUE, 0, "",    1 },
+	{ 'm', "--grep",         MAGIT_INFIX_VALUE, 0, "",    1 },
+	{ 'A', "--all",          MAGIT_INFIX_FLAG,  0, "",    0 }
 };
 
 static const struct magit_menu_item pull_items[] = {
@@ -936,15 +940,26 @@ magit_transient(struct magit_menu *m, int f, int n)
 			if (m->infixes[i].kind == MAGIT_INFIX_FLAG) {
 				m->infixes[i].on = !m->infixes[i].on;
 			} else {
-				/* Empty input keeps the current value (shown in
-				 * the popup); a non-empty entry replaces it. */
+				/* Non-empty input replaces the value.  For
+				 * clear_on_empty infixes (--author/--grep) an
+				 * empty Enter clears; EFNUL lets eread return ""
+				 * rather than NULL so we can detect it.  For
+				 * other infixes (-n's limit) empty keeps the
+				 * current value (no EFNUL, NULL return → skip). */
+				int eflag = EFNEW | EFCR;
+				if (m->infixes[i].clear_on_empty)
+					eflag |= EFNUL;
 				val[0] = '\0';
 				if (eread("%s (%s): ", val, sizeof(val),
-				    EFNEW | EFCR, (char *)m->infixes[i].arg,
-				    m->infixes[i].value) != NULL &&
-				    val[0] != '\0')
-					(void)strlcpy(m->infixes[i].value, val,
-					    sizeof(m->infixes[i].value));
+				    eflag, (char *)m->infixes[i].arg,
+				    m->infixes[i].value) != NULL) {
+					if (val[0] != '\0')
+						(void)strlcpy(m->infixes[i].value,
+						    val,
+						    sizeof(m->infixes[i].value));
+					else if (m->infixes[i].clear_on_empty)
+						m->infixes[i].value[0] = '\0';
+				}
 				if (m == &log_menu)
 					magit_log_limit = (int)strtol(
 					    log_infixes[0].value, NULL, 10);
@@ -1513,12 +1528,18 @@ magit_log_build(struct buffer *bp)
 
 	magit_log_count = 0;
 	if (magit_log_graph || magit_log_range[0] != '\0' ||
-	    magit_log_pickaxe != '\0') {
+	    magit_log_pickaxe != '\0' ||
+	    log_infixes[1].value[0] != '\0' ||   /* --author */
+	    log_infixes[2].value[0] != '\0' ||   /* --grep */
+	    log_infixes[3].on) {                  /* --all */
 		(void)mg_magit_log_query_buffer(cwd, magit_log_graph,
-		    magit_log_range[0] ? magit_log_range : NULL, NULL,
+		    magit_log_range[0] ? magit_log_range : NULL,
+		    magit_log_file_path[0] ? magit_log_file_path : NULL,
 		    magit_log_pickaxe, magit_log_pickaxe_term,
 		    magit_log_limit,
-		    NULL, NULL, 0,                 /* author/grep/all — wired in Task 3 */
+		    log_infixes[1].value[0] ? log_infixes[1].value : NULL,
+		    log_infixes[2].value[0] ? log_infixes[2].value : NULL,
+		    log_infixes[3].on,
 		    magit_log_emit, bp);
 	} else if (magit_log_file_path[0] != '\0') {
 		/*
