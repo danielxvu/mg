@@ -3511,10 +3511,10 @@ magit_run_net(enum magit_net_op op, const char *cwd, int a, int b,
 		code = mg_magit_push_cli(cwd, a, b, /*tags*/0);
 		break;
 	case MNET_PULL:
-		code = mg_magit_pull_cli(cwd, 0);
+		code = mg_magit_pull_cli(cwd, 0, /*autostash*/0, /*ff_only*/0);
 		break;
 	case MNET_PULL_REBASE:
-		code = mg_magit_pull_cli(cwd, 1);
+		code = mg_magit_pull_cli(cwd, 1, /*autostash*/0, /*ff_only*/0);
 		break;
 	case MNET_FETCH:
 	default:

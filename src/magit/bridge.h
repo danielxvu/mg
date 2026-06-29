@@ -227,7 +227,7 @@ int mg_magit_pull_rebase(const char *repo_path, const char *remote);
 int mg_magit_fetch_cli(const char *repo_path);
 int mg_magit_push_cli(const char *repo_path, int force, int set_upstream, int tags);
 int mg_magit_push_dry_run(const char *repo_path, int force, int set_upstream, int tags);
-int mg_magit_pull_cli(const char *repo_path, int rebase);
+int mg_magit_pull_cli(const char *repo_path, int rebase, int autostash, int ff_only);
 
 /* Reset HEAD to `rev` (mode 0=soft, 1=mixed, 2=hard): 1 ok, 0 fail.
  * revert commit `rev` / merge local branch `name` into HEAD (ff or a merge

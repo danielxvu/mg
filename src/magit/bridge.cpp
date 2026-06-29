@@ -1458,13 +1458,15 @@ extern "C" int mg_magit_push_dry_run(const char *repo_path, int force,
                                  tags != 0);
 }
 
-extern "C" int mg_magit_pull_cli(const char *repo_path, int rebase)
+extern "C" int mg_magit_pull_cli(const char *repo_path, int rebase,
+                                 int autostash, int ff_only)
 {
     if (repo_path == nullptr)
         return -1;
     std::vector<std::string> args{"pull"};
-    if (rebase)
-        args.emplace_back("--rebase");
+    if (rebase)    args.emplace_back("--rebase");
+    if (autostash) args.emplace_back("--autostash");
+    if (ff_only)   args.emplace_back("--ff-only");
     args.emplace_back("--no-edit");
     args.emplace_back("origin");
     std::vector<std::string> cmd{"git"};

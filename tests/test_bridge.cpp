@@ -2492,3 +2492,18 @@ TEST_CASE("mg_magit_push_dry_run records a push --dry-run entry")
     CHECK(logged);
     fs::remove_all(dir);
 }
+
+TEST_CASE("mg_magit_pull_cli appends --autostash and --ff-only when requested")
+{
+    auto dir = make_repo_with_commit("c1"); // no remote -> pull fails fast, still logged
+    std::string d = dir.string();
+    mg::magit::proclog::clear();
+    (void)mg_magit_pull_cli(d.c_str(), /*rebase*/0, /*autostash*/1, /*ff_only*/1);
+    bool both = false;
+    for (auto &e : mg::magit::proclog::snapshot())
+        if (e.kind == '$' && e.command.find("--autostash") != std::string::npos &&
+            e.command.find("--ff-only") != std::string::npos)
+            both = true;
+    CHECK(both);
+    fs::remove_all(dir);
+}
