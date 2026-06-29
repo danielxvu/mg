@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <string>
 
 #include <csignal>
@@ -675,14 +676,18 @@ TEST_CASE("l transient --all includes a non-HEAD commit in *magit-log*")
     CHECK(with_all);
 }
 
-TEST_CASE("l transient --grep filters, then empty input clears it")
+// Two greppable commits + neomg launched on the repo; runs `body(master)`
+// after *magit-status* is up with a single window. Returns body's result.
+// Both --grep tests below share this; neither does a fragile *magit-log* ->
+// *magit-status* round-trip (l is only bound in status, and re-detecting that
+// switch is unreliable on Linux/musl). Each drives one transient session.
+static bool grep_repo_session(const std::function<bool(int)> &body)
 {
     auto repo = make_repo(); // tracked.txt committed
     std::string d = repo.string();
     auto run = [&](const std::string &c) {
         return std::system(("git -C '" + d + "' " + c + " >/dev/null 2>&1").c_str());
     };
-    // Two extra commits with distinct, greppable summaries.
     REQUIRE(run("-c user.name=T -c user.email=t@example.com "
                 "commit --allow-empty -m AAAA_FIRST") == 0);
     REQUIRE(run("-c user.name=T -c user.email=t@example.com "
@@ -698,39 +703,58 @@ TEST_CASE("l transient --grep filters, then empty input clears it")
         ::execl(NEOMG_BINARY, "neomg", repofile.c_str(), (char *)nullptr);
         _exit(127);
     }
-    bool filtered = false, cleared = false;
+    bool ok = false;
     if (wait_for(master, "tracked.txt", std::chrono::seconds(8))) {
         (void)!::write(master, "\x1bxmagit-status\r", 15);
         if (wait_for(master, "On branch", std::chrono::seconds(8))) {
-            (void)!::write(master, "\x18" "1", 2);            // C-x 1
-            (void)!::write(master, "l", 1);                    // transient
-            if (wait_for(master, "--grep", std::chrono::seconds(8))) {
-                (void)!::write(master, "m", 1);                // --grep infix
-                (void)!::write(master, "BBBB\r", 5);           // set grep=BBBB
-                (void)!::write(master, "l", 1);                // run
-                (void)!::write(master, "\x0c", 1);
-                filtered = wait_for(master, "BBBB_SECOND", std::chrono::seconds(8));
-                // Now clear it: empty input unsets --grep, so AAAA reappears.
-                // Switch back to *magit-status* first: l is only bound there.
-                (void)!::write(master, "\x1bxmagit-status\r", 15);
-                if (wait_for(master, "On branch", std::chrono::seconds(8))) {
-                    (void)!::write(master, "\x18" "1", 2);     // C-x 1
-                    (void)!::write(master, "l", 1);            // transient again
-                    if (wait_for(master, "--grep", std::chrono::seconds(8))) {
-                        (void)!::write(master, "m", 1);        // --grep
-                        (void)!::write(master, "\r", 1);       // empty -> clear
-                        (void)!::write(master, "l", 1);        // run
-                        (void)!::write(master, "\x0c", 1);
-                        cleared = wait_for(master, "AAAA_FIRST", std::chrono::seconds(8));
-                    }
-                }
-            }
+            (void)!::write(master, "\x18" "1", 2); // C-x 1
+            ok = body(master);
         }
     }
-    (void)!::write(master, "\x18\x03", 2);
+    (void)!::write(master, "\x18\x03", 2); // C-x C-c
     for (int i = 0; i < 20; ++i) { int st = 0; if (::waitpid(pid, &st, WNOHANG) == pid) break; usleep(100000); }
     ::kill(pid, SIGKILL); ::waitpid(pid, nullptr, 0); ::close(master);
     fs::remove_all(repo);
-    CHECK(filtered); // grep applied (BBBB shown)
-    CHECK(cleared);  // grep cleared (AAAA reappears — only possible if the BBBB filter was unset)
+    return ok;
+}
+
+TEST_CASE("l transient --grep routes the value into the log query")
+{
+    bool filtered = grep_repo_session([](int master) {
+        (void)!::write(master, "l", 1);               // open the log transient
+        if (!wait_for(master, "--grep", std::chrono::seconds(8)))
+            return false;
+        (void)!::write(master, "m", 1);               // --grep infix
+        (void)!::write(master, "BBBB\r", 5);          // set grep=BBBB
+        (void)!::write(master, "l", 1);               // l l: run the filtered log
+        (void)!::write(master, "\x0c", 1);            // force repaint
+        return wait_for(master, "BBBB_SECOND", std::chrono::seconds(8));
+    });
+    CHECK(filtered); // grep=BBBB routed into the log query; the match renders
+}
+
+TEST_CASE("l transient empty input clears a set --grep")
+{
+    // Set --grep, then clear it -- all within ONE transient session (the
+    // transient stays open across infix edits, so no buffer round-trip). The
+    // re-opened prompt echoes "(BBBB)", proving the set persisted; running with
+    // the value cleared shows AAAA_FIRST, which a live BBBB filter would hide --
+    // so its reappearance proves the empty input actually unset --grep.
+    bool set_persisted = false, cleared = false;
+    grep_repo_session([&](int master) {
+        (void)!::write(master, "l", 1);               // open the log transient
+        if (!wait_for(master, "--grep", std::chrono::seconds(8)))
+            return false;
+        (void)!::write(master, "m", 1);               // --grep infix
+        (void)!::write(master, "BBBB\r", 5);          // set grep=BBBB (transient stays open)
+        (void)!::write(master, "m", 1);               // re-open the --grep prompt
+        set_persisted = wait_for(master, "(BBBB)", std::chrono::seconds(8));
+        (void)!::write(master, "\r", 1);              // empty input -> clears --grep
+        (void)!::write(master, "l", 1);               // l l: run with grep cleared
+        (void)!::write(master, "\x0c", 1);            // force repaint
+        cleared = wait_for(master, "AAAA_FIRST", std::chrono::seconds(8));
+        return set_persisted && cleared;
+    });
+    CHECK(set_persisted); // the re-opened prompt echoed the stored BBBB
+    CHECK(cleared);       // empty input unset --grep -> AAAA_FIRST reappears
 }
