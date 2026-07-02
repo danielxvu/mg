@@ -1077,33 +1077,31 @@ extern "C" int mg_magit_log_file_buffer(const char *repo_path, const char *file,
     return n;
 }
 
-extern "C" int mg_magit_log_query_buffer(const char *repo_path, int graph,
-                                         const char *range, const char *file,
-                                         int pickaxe_kind,
-                                         const char *pickaxe_term, int n,
-                                         const char *author, const char *grep,
-                                         int all,
+extern "C" int mg_magit_log_query_buffer(const struct mg_log_query *q,
                                          mg_magit_emit_fn emit, void *ctx)
 {
-    if (repo_path == nullptr || emit == nullptr)
+    if (q == nullptr || q->repo == nullptr || emit == nullptr)
         return 0;
 
     mg::git::log_options opts;
-    opts.graph = graph != 0;
-    opts.max_count = n > 0 ? static_cast<std::size_t>(n) : 0;
-    if (range != nullptr)
-        opts.range = range;
-    if (file != nullptr)
-        opts.file = file;
-    if (pickaxe_kind == 'S' || pickaxe_kind == 'G') {
-        opts.pickaxe = static_cast<char>(pickaxe_kind);
-        opts.pickaxe_term = pickaxe_term ? pickaxe_term : "";
+    opts.graph = q->graph != 0;
+    opts.max_count = q->n > 0 ? static_cast<std::size_t>(q->n) : 0;
+    if (q->range) opts.range = q->range;
+    if (q->file)  opts.file = q->file;
+    if (q->pickaxe_kind == 'S' || q->pickaxe_kind == 'G') {
+        opts.pickaxe = static_cast<char>(q->pickaxe_kind);
+        opts.pickaxe_term = q->pickaxe_term ? q->pickaxe_term : "";
     }
-    if (author != nullptr) opts.author = author;
-    if (grep != nullptr)   opts.grep = grep;
-    opts.all = all != 0;
+    if (q->author) opts.author = q->author;
+    if (q->grep)   opts.grep = q->grep;
+    opts.all = q->all != 0;
+    if (q->since) opts.since = q->since;
+    if (q->until) opts.until = q->until;
+    opts.reverse = q->reverse != 0;
+    opts.merges = q->merges != 0;
+    opts.no_merges = q->no_merges != 0;
 
-    auto rows = mg::git::log_query(repo_path, std::move(opts));
+    auto rows = mg::git::log_query(q->repo, std::move(opts));
     if (!rows)
         return 0;
     int count = 0;

@@ -902,10 +902,13 @@ TEST_CASE("mg_magit_log_query_buffer -S finds the introducing commit")
     git_libgit2_shutdown();
 
     struct cap { std::vector<std::string> lines; int others = 0; } c;
+    std::string dpath = dir.string();
+    mg_log_query q{};
+    q.repo = dpath.c_str();
+    q.pickaxe_kind = 'S';
+    q.pickaxe_term = "NEEDLE_XYZ";
     int n = mg_magit_log_query_buffer(
-        dir.string().c_str(), /*graph=*/0, /*range=*/nullptr, /*file=*/nullptr,
-        /*pickaxe_kind=*/'S', /*pickaxe_term=*/"NEEDLE_XYZ", /*n=*/0,
-        /*author=*/nullptr, /*grep=*/nullptr, /*all=*/0,
+        &q,
         [](void *ctx, const char *line, int kind, const char *, int) {
             auto *p = static_cast<cap *>(ctx);
             p->lines.emplace_back(line);
@@ -2425,8 +2428,11 @@ TEST_CASE("mg_magit_log_query_buffer threads --grep through")
 
     struct row { std::string line; };
     std::vector<row> rows;
-    mg_magit_log_query_buffer(d.c_str(), 0, nullptr, nullptr, 0, nullptr, 50,
-        nullptr, "FIND_ME_GREP", 0,      // author=NULL, grep set, all=0
+    mg_log_query q{};
+    q.repo = d.c_str();
+    q.n = 50;
+    q.grep = "FIND_ME_GREP"; // author=NULL, grep set, all=0
+    mg_magit_log_query_buffer(&q,
         [](void *c, const char *l, int kind, const char *, int) {
             if (kind == MG_LINE_COMMIT)
                 static_cast<std::vector<row>*>(c)->push_back({l});
@@ -2450,8 +2456,12 @@ TEST_CASE("mg_magit_log_query_buffer applies --author together with a file path"
 
     auto count = [&](const char *author) {
         int n = 0;
-        mg_magit_log_query_buffer(d.c_str(), 0, nullptr, "a.txt", 0, nullptr, 50,
-            author, nullptr, 0,
+        mg_log_query q{};
+        q.repo = d.c_str();
+        q.file = "a.txt";
+        q.n = 50;
+        q.author = author;
+        mg_magit_log_query_buffer(&q,
             [](void *c, const char *, int kind, const char *, int) {
                 if (kind == MG_LINE_COMMIT) (*static_cast<int*>(c))++;
             }, &n);
@@ -2459,6 +2469,37 @@ TEST_CASE("mg_magit_log_query_buffer applies --author together with a file path"
     };
     CHECK(count(nullptr) == 2); // both commits touch a.txt (file path applied)
     CHECK(count("Zoe") == 1);   // author AND file both applied (guards the file-passing fix)
+    fs::remove_all(dir);
+}
+
+TEST_CASE("mg_magit_log_query_buffer (struct) threads --no-merges")
+{
+    auto dir = make_repo_with_commit("c0");
+    std::string d = dir.string();
+    auto run = [&](const std::string &c) {
+        return std::system(("git -C '" + d + "' " + c + " >/dev/null 2>&1").c_str());
+    };
+    REQUIRE(run("checkout -b side") == 0);
+    REQUIRE(run("-c user.name=T -c user.email=t@e commit --allow-empty -m SIDE") == 0);
+    REQUIRE(run("checkout -") == 0);
+    REQUIRE(run("-c user.name=T -c user.email=t@e merge --no-ff --no-edit -m MERGE_X side") == 0);
+
+    auto count_merge = [&](int no_merges) {
+        int m = 0;
+        mg_log_query q{};
+        q.repo = d.c_str();
+        q.n = 50;
+        q.no_merges = no_merges;
+        mg_magit_log_query_buffer(&q,
+            [](void *c, const char *l, int kind, const char *, int) {
+                if (kind == MG_LINE_COMMIT &&
+                    std::string(l).find("MERGE_X") != std::string::npos)
+                    (*static_cast<int*>(c))++;
+            }, &m);
+        return m;
+    };
+    CHECK(count_merge(1) == 0); // --no-merges excludes the merge commit
+    CHECK(count_merge(0) >= 1); // without it, the merge appears
     fs::remove_all(dir);
 }
 

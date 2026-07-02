@@ -1549,15 +1549,19 @@ magit_log_build(struct buffer *bp)
 	    log_infixes[1].value[0] != '\0' ||   /* --author */
 	    log_infixes[2].value[0] != '\0' ||   /* --grep */
 	    log_infixes[3].on) {                  /* --all */
-		(void)mg_magit_log_query_buffer(cwd, magit_log_graph,
-		    magit_log_range[0] ? magit_log_range : NULL,
-		    magit_log_file_path[0] ? magit_log_file_path : NULL,
-		    magit_log_pickaxe, magit_log_pickaxe_term,
-		    magit_log_limit,
-		    log_infixes[1].value[0] ? log_infixes[1].value : NULL,
-		    log_infixes[2].value[0] ? log_infixes[2].value : NULL,
-		    log_infixes[3].on,
-		    magit_log_emit, bp);
+		struct mg_log_query q = {0};
+		q.repo = cwd;
+		q.graph = magit_log_graph;
+		q.range = magit_log_range[0] ? magit_log_range : NULL;
+		q.file = magit_log_file_path[0] ? magit_log_file_path : NULL;
+		q.pickaxe_kind = magit_log_pickaxe;
+		q.pickaxe_term = magit_log_pickaxe_term;
+		q.n = magit_log_limit;
+		q.author = log_infixes[1].value[0] ? log_infixes[1].value : NULL;
+		q.grep = log_infixes[2].value[0] ? log_infixes[2].value : NULL;
+		q.all = log_infixes[3].on;
+		/* since/until/reverse/merges/no_merges wired in Task 3 */
+		(void)mg_magit_log_query_buffer(&q, magit_log_emit, bp);
 	} else if (magit_log_file_path[0] != '\0') {
 		/*
 		 * Per-file log is slow (150-360ms); run it on the worker thread

@@ -98,11 +98,25 @@ int mg_magit_reflog_buffer(const char *repo, int n, mg_magit_emit_fn emit,
  * 0 none / 'S' / 'G' with pickaxe_term. n = -n limit (0 = none). Commit rows
  * emit as MG_LINE_COMMIT (path = full oid); graph connector lines emit as
  * MG_LINE_OTHER (path = NULL). Returns the line count, 0 on failure. */
-int mg_magit_log_query_buffer(const char *repo_path, int graph,
-        const char *range, const char *file, int pickaxe_kind,
-        const char *pickaxe_term, int n,
-        const char *author, const char *grep, int all,
-        mg_magit_emit_fn emit, void *ctx);
+struct mg_log_query {
+    const char *repo;
+    int         graph;
+    const char *range;         /* NULL/"" = HEAD */
+    const char *file;          /* NULL/"" = repo-wide */
+    int         pickaxe_kind;  /* 0 / 'S' / 'G' */
+    const char *pickaxe_term;
+    int         n;             /* -n limit, 0 = none */
+    const char *author;        /* NULL = none */
+    const char *grep;          /* NULL = none */
+    int         all;
+    const char *since;         /* NULL = none */
+    const char *until;         /* NULL = none */
+    int         reverse;
+    int         merges;
+    int         no_merges;
+};
+int mg_magit_log_query_buffer(const struct mg_log_query *q,
+                              mg_magit_emit_fn emit, void *ctx);
 
 /* --- Async per-file builds (FM-ASYNC-BLAME) --------------------------------
  * blame / log-file are slow (0.3-1.2s / 150-360ms) and ran synchronously on the
