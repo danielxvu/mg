@@ -148,6 +148,29 @@ static std::string drain_str(int fd, std::chrono::milliseconds timeout, int quie
     }
     return acc;
 }
+
+// Send C-x C-c and reap neomg, DRAINING the pty while we wait. neomg keeps
+// redrawing on the way out; if the test stops reading the master fd, those
+// exit-time writes fill the pty's kernel buffer and neomg blocks in write(),
+// never processing the quit (the harness bug behind the old "FSEvents exit
+// hang" -- a real terminal always drains, so this only bites a non-draining
+// test consumer). Draining lets neomg exit cleanly; SIGKILL is only a fallback.
+static void quit_neomg(int master, pid_t pid)
+{
+    (void)!::write(master, "\x07", 1);     // C-g: cancel an open transient/prompt
+    (void)!::write(master, "\x18\x03", 2); // C-x C-c: quit
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+    while (std::chrono::steady_clock::now() < deadline) {
+        int st = 0;
+        if (::waitpid(pid, &st, WNOHANG) == pid) { ::close(master); return; }
+        fd_set r; FD_ZERO(&r); FD_SET(master, &r);
+        timeval tv{0, 50 * 1000};
+        if (::select(master + 1, &r, nullptr, nullptr, &tv) > 0) {
+            char b[8192]; (void)!::read(master, b, sizeof b); // drain
+        }
+    }
+    ::kill(pid, SIGKILL); ::waitpid(pid, nullptr, 0); ::close(master); // fallback
+}
 } // namespace
 
 TEST_CASE("magit-status renders on the buffer's repo when neomg is launched outside it")
@@ -180,17 +203,7 @@ TEST_CASE("magit-status renders on the buffer's repo when neomg is launched outs
         rendered = wait_for(master, "On branch", std::chrono::seconds(8));
     }
 
-    const char quit[] = "\x18\x03"; // C-x C-c
-    (void)!::write(master, quit, sizeof quit - 1);
-    for (int i = 0; i < 20; ++i) {
-        int st = 0;
-        if (::waitpid(pid, &st, WNOHANG) == pid)
-            break;
-        usleep(100 * 1000);
-    }
-    ::kill(pid, SIGKILL);
-    ::waitpid(pid, nullptr, 0);
-    ::close(master);
+    quit_neomg(master, pid);
     fs::remove_all(repo);
     fs::remove_all(nonrepo);
 
@@ -222,10 +235,7 @@ TEST_CASE("l h opens the *magit-reflog* buffer from magit-status")
             ok = wait_for(master, "HEAD@{0}", std::chrono::seconds(8));
         }
     }
-    const char quit[] = "\x18\x03";
-    (void)!::write(master, quit, sizeof quit - 1);
-    for (int i = 0; i < 20; ++i) { int st = 0; if (::waitpid(pid, &st, WNOHANG) == pid) break; usleep(100000); }
-    ::kill(pid, SIGKILL); ::waitpid(pid, nullptr, 0); ::close(master);
+    quit_neomg(master, pid);
     fs::remove_all(repo);
     CHECK(ok);
 }
@@ -321,10 +331,7 @@ TEST_CASE("RET in *magit-log* after switching from *magit-reflog* shows Not on a
             }
         }
     }
-    const char quit[] = "\x18\x03";
-    (void)!::write(master, quit, sizeof quit - 1);
-    for (int i = 0; i < 20; ++i) { int st = 0; if (::waitpid(pid, &st, WNOHANG) == pid) break; usleep(100000); }
-    ::kill(pid, SIGKILL); ::waitpid(pid, nullptr, 0); ::close(master);
+    quit_neomg(master, pid);
     fs::remove_all(repo);
     CHECK(ok);
 }
@@ -356,10 +363,7 @@ TEST_CASE("$ opens the *magit-process* buffer from magit-status")
         }
     }
 
-    const char quit[] = "\x18\x03"; // C-x C-c
-    (void)!::write(master, quit, sizeof quit - 1);
-    for (int i = 0; i < 20; ++i) { int st = 0; if (::waitpid(pid, &st, WNOHANG) == pid) break; usleep(100000); }
-    ::kill(pid, SIGKILL); ::waitpid(pid, nullptr, 0); ::close(master);
+    quit_neomg(master, pid);
     fs::remove_all(repo);
     CHECK(ok);
 }
@@ -392,10 +396,7 @@ TEST_CASE("x m in *magit-reflog* resets HEAD to the entry at point")
             }
         }
     }
-    const char quit[] = "\x18\x03";
-    (void)!::write(master, quit, sizeof quit - 1);
-    for (int i = 0; i < 20; ++i) { int st = 0; if (::waitpid(pid, &st, WNOHANG) == pid) break; usleep(100000); }
-    ::kill(pid, SIGKILL); ::waitpid(pid, nullptr, 0); ::close(master);
+    quit_neomg(master, pid);
     fs::remove_all(repo);
     CHECK(ok);
 }
@@ -435,10 +436,7 @@ TEST_CASE("M-3 expands all files to hunks in *magit-status*")
             ok = wait_for(master, "ALPHA_LINE", std::chrono::seconds(8)); // hunk line
         }
     }
-    const char quit[] = "\x18\x03";
-    (void)!::write(master, quit, sizeof quit - 1);
-    for (int i = 0; i < 20; ++i) { int st = 0; if (::waitpid(pid, &st, WNOHANG) == pid) break; usleep(100000); }
-    ::kill(pid, SIGKILL); ::waitpid(pid, nullptr, 0); ::close(master);
+    quit_neomg(master, pid);
     fs::remove_all(repo);
     CHECK(ok);
 }
@@ -488,10 +486,7 @@ TEST_CASE("M-1 collapses section bodies; M-2 restores files")
             }
         }
     }
-    const char quit[] = "\x18\x03";
-    (void)!::write(master, quit, sizeof quit - 1);
-    for (int i = 0; i < 20; ++i) { int st = 0; if (::waitpid(pid, &st, WNOHANG) == pid) break; usleep(100000); }
-    ::kill(pid, SIGKILL); ::waitpid(pid, nullptr, 0); ::close(master);
+    quit_neomg(master, pid);
     fs::remove_all(repo);
     CHECK(collapsed);
     CHECK(restored);
@@ -549,9 +544,7 @@ TEST_CASE("+ grows diff context; w blocks hunk staging with a warning")
             }
         }
     }
-    const char quit[] = "\x18\x03"; (void)!::write(master, quit, sizeof quit - 1);
-    for (int i = 0; i < 20; ++i) { int st = 0; if (::waitpid(pid, &st, WNOHANG) == pid) break; usleep(100000); }
-    ::kill(pid, SIGKILL); ::waitpid(pid, nullptr, 0); ::close(master);
+    quit_neomg(master, pid);
     fs::remove_all(repo);
     CHECK(grew);
     CHECK(warned);
@@ -586,9 +579,7 @@ TEST_CASE(": runs a git command and shows it in *magit-process*")
                           std::chrono::seconds(8));
         }
     }
-    const char quit[] = "\x18\x03"; (void)!::write(master, quit, sizeof quit - 1);
-    for (int i = 0; i < 20; ++i) { int st = 0; if (::waitpid(pid, &st, WNOHANG) == pid) break; usleep(100000); }
-    ::kill(pid, SIGKILL); ::waitpid(pid, nullptr, 0); ::close(master);
+    quit_neomg(master, pid);
     fs::remove_all(repo);
     CHECK(ok);
 }
@@ -625,10 +616,7 @@ TEST_CASE("M-1 is a guarded no-op in *magit-reflog* (status-only)")
             }
         }
     }
-    const char quit[] = "\x18\x03";
-    (void)!::write(master, quit, sizeof quit - 1);
-    for (int i = 0; i < 20; ++i) { int st = 0; if (::waitpid(pid, &st, WNOHANG) == pid) break; usleep(100000); }
-    ::kill(pid, SIGKILL); ::waitpid(pid, nullptr, 0); ::close(master);
+    quit_neomg(master, pid);
     fs::remove_all(repo);
     CHECK(guarded);
 }
@@ -669,9 +657,7 @@ TEST_CASE("l transient --all includes a non-HEAD commit in *magit-log*")
             }
         }
     }
-    (void)!::write(master, "\x18\x03", 2); // C-x C-c
-    for (int i = 0; i < 20; ++i) { int st = 0; if (::waitpid(pid, &st, WNOHANG) == pid) break; usleep(100000); }
-    ::kill(pid, SIGKILL); ::waitpid(pid, nullptr, 0); ::close(master);
+    quit_neomg(master, pid);
     fs::remove_all(repo);
     CHECK(with_all);
 }
@@ -711,9 +697,7 @@ static bool grep_repo_session(const std::function<bool(int)> &body)
             ok = body(master);
         }
     }
-    (void)!::write(master, "\x18\x03", 2); // C-x C-c
-    for (int i = 0; i < 20; ++i) { int st = 0; if (::waitpid(pid, &st, WNOHANG) == pid) break; usleep(100000); }
-    ::kill(pid, SIGKILL); ::waitpid(pid, nullptr, 0); ::close(master);
+    quit_neomg(master, pid);
     fs::remove_all(repo);
     return ok;
 }
@@ -778,24 +762,39 @@ TEST_CASE("P transient lists --tags and --dry-run infixes")
             listed = wait_for(master, "--dry-run", std::chrono::seconds(8)); // infix rendered
         }
     }
-    (void)!::write(master, "\x18\x03", 2);
-    for (int i=0;i<20;++i){int st=0;if(::waitpid(pid,&st,WNOHANG)==pid)break;usleep(100000);}
-    ::kill(pid, SIGKILL); ::waitpid(pid, nullptr, 0); ::close(master);
+    quit_neomg(master, pid);
     fs::remove_all(repo);
     CHECK(listed);
 }
 
-// NOTE: an end-to-end "P d p -> *magit-process* shows push --dry-run" pty test is
-// intentionally OMITTED. Running a real `git push --dry-run` writes to .git, which
-// leaves FSEvents events in-flight; neomg's FSEvents watcher then blocks in an
-// uninterruptible mach_msg during exit teardown, so SIGKILL can't reap it and the
-// test's waitpid hangs (macOS only; a pre-existing teardown bug, NOT introduced by
-// the push transient -- see the FM-FSEVENTS-EXIT-HANG gap in todo.md). The --dry-run
-// path is covered without spawning neomg: the engine test (push_dry_run mutates
-// nothing, logs a $ entry) and the bridge test (mg_magit_push_dry_run records the
-// proclog entry). The "P transient lists ... --dry-run" test above proves the infix
-// is wired into the transient; magit_push's dry-run branch is a direct read of
-// push_infixes[3].on + the already-tested mg_magit_push_dry_run + magit_process.
+TEST_CASE("P transient --dry-run opens *magit-process* with a push --dry-run entry")
+{
+    auto repo = make_repo(); // no origin -> the dry-run push fails fast but is still logged
+    const std::string repofile = (repo / "tracked.txt").string();
+    winsize ws{}; ws.ws_row = 40; ws.ws_col = 100;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) { ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", repofile.c_str(), (char *)nullptr); _exit(127); }
+    bool shown = false;
+    if (wait_for(master, "tracked.txt", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x1bxmagit-status\r", 15);
+        if (wait_for(master, "On branch", std::chrono::seconds(8))) {
+            (void)!::write(master, "\x18" "1", 2);   // C-x 1
+            (void)!::write(master, "P", 1);           // push transient
+            if (wait_for(master, "--dry-run", std::chrono::seconds(8))) {
+                (void)!::write(master, "d", 1);       // toggle --dry-run
+                (void)!::write(master, "p", 1);       // P p: run the captured dry-run
+                (void)!::write(master, "\x0c", 1);    // force repaint
+                shown = wait_for(master, "push --dry-run", std::chrono::seconds(8));
+            }
+        }
+    }
+    quit_neomg(master, pid); // drains the pty so the verbose exit doesn't wedge write()
+    fs::remove_all(repo);
+    CHECK(shown); // *magit-process* shows the captured "push --dry-run" command
+}
 
 TEST_CASE("F transient lists --autostash and --ff-only infixes")
 {
@@ -816,9 +815,7 @@ TEST_CASE("F transient lists --autostash and --ff-only infixes")
             listed = wait_for(master, "--autostash", std::chrono::seconds(8));
         }
     }
-    (void)!::write(master, "\x18\x03", 2);
-    for (int i=0;i<20;++i){int st=0;if(::waitpid(pid,&st,WNOHANG)==pid)break;usleep(100000);}
-    ::kill(pid, SIGKILL); ::waitpid(pid, nullptr, 0); ::close(master);
+    quit_neomg(master, pid);
     fs::remove_all(repo);
     CHECK(listed);
 }

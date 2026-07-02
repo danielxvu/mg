@@ -347,16 +347,19 @@ absent). Keep this in sync with the README's "What it doesn't do (vs Magit)".
 - [ ] **FM-AM — `magit-am`** (apply mailbox/`.patch` series) + matching sequencer
   states; plus the known interactive-rebase edge (a conflicting squash/fixup
   resolves as a normal pick rather than folding — README "Edges remain").
-- [ ] **FM-FSEVENTS-EXIT-HANG (bug, macOS; found in FM-TRANSIENT-PUSH review)** —
-  the FSEvents fswatch backend's teardown blocks in an uninterruptible `mach_msg`
-  (`FSEventStreamStop` / `dispatch_sync_f`) during process exit when events are
-  in-flight (e.g. right after a `.git`-writing git op). `SIGKILL` can't reap the
-  process, so a pty test's `waitpid` hangs (exposed by an end-to-end `push
-  --dry-run` pty test, which is therefore omitted). Candidate fix: a watcher
-  `set_exit_mode()` that skips the blocking FSEvents calls on the exit path and
-  lets the OS reclaim Mach ports/dispatch queues at collection. Linux/inotify is
-  unaffected. Real user impact (neomg can hang on quit), so worth a dedicated,
-  carefully-reviewed fix — NOT a rider on an unrelated feature.
+- [x] **FM-FSEVENTS-EXIT-HANG — MISDIAGNOSED; real cause was a pty-test harness bug.**
+  ✅ FIXED (branch `fm-pty-exit-drain`). The "FSEvents teardown hang" was a wrong
+  guess (made by a stalled implementer). A sampled backtrace of the hung neomg
+  proved it: the MAIN thread was blocked in `ttflush -> write()` to the pty, and
+  the monitor thread was idle in a normal `wait()` — teardown was never reached,
+  `FSEventStreamStop`/`dispatch_sync_f` never called. Root cause: the pty tests
+  stop reading the master fd after `C-x C-c`, so neomg's exit-time redraws fill
+  the pty kernel buffer and `write()` blocks, so neomg never processes the quit.
+  A differential repro confirmed it (no-drain → wedges; drain → clean exit,
+  status 0, in-flight FSEvent and all). There is NO neomg bug (a real terminal
+  always drains). Fix: a `quit_neomg()` harness helper that drains the master
+  while reaping (SIGKILL only as fallback), used by every pty test; the omitted
+  end-to-end `push --dry-run` test is restored and passes.
 
 ### Out of scope by design (NOT gaps to close — documented stance)
 - **`forge`** (GitHub/GitLab issues & PRs, Gerrit) — a separate Magit package,
