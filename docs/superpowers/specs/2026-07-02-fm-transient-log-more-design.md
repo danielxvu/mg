@@ -27,6 +27,7 @@ Two parts:
 Add to `bridge.h` a POD, all fields explicit:
 ```c
 struct mg_log_query {
+    const char *repo;          /* the repo path (was the old ABI's 1st param) */
     int         graph;
     const char *range;         /* NULL/"" = HEAD */
     const char *file;          /* NULL/"" = repo-wide */
