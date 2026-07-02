@@ -800,12 +800,19 @@ static struct magit_infix pull_infixes[] = {
 	{ 'a', "--autostash", MAGIT_INFIX_FLAG, 0, "", 0 },
 	{ 'f', "--ff-only",   MAGIT_INFIX_FLAG, 0, "", 0 }
 };
-/* Log infixes: [0]=-n [1]=--author [2]=--grep [3]=--all; read by magit_log_build. */
+/* Log infixes: [0]=-n [1]=--author [2]=--grep [3]=--all [4]=--since
+ * [5]=--until [6]=--reverse [7]=--merges [8]=--no-merges; read by
+ * magit_log_build. */
 static struct magit_infix log_infixes[] = {
 	{ 'n', "-n --max-count", MAGIT_INFIX_VALUE, 0, "100", 0 },
 	{ 'a', "--author",       MAGIT_INFIX_VALUE, 0, "",    1 },
 	{ 'm', "--grep",         MAGIT_INFIX_VALUE, 0, "",    1 },
-	{ 'A', "--all",          MAGIT_INFIX_FLAG,  0, "",    0 }
+	{ 'A', "--all",          MAGIT_INFIX_FLAG,  0, "",    0 },
+	{ 'S', "--since",        MAGIT_INFIX_VALUE, 0, "",    1 },
+	{ 'U', "--until",        MAGIT_INFIX_VALUE, 0, "",    1 },
+	{ 'v', "--reverse",      MAGIT_INFIX_FLAG,  0, "",    0 },
+	{ 'M', "--merges",       MAGIT_INFIX_FLAG,  0, "",    0 },
+	{ 'N', "--no-merges",    MAGIT_INFIX_FLAG,  0, "",    0 }
 };
 
 static const struct magit_menu_item pull_items[] = {
@@ -1548,7 +1555,10 @@ magit_log_build(struct buffer *bp)
 	    magit_log_pickaxe != '\0' ||
 	    log_infixes[1].value[0] != '\0' ||   /* --author */
 	    log_infixes[2].value[0] != '\0' ||   /* --grep */
-	    log_infixes[3].on) {                  /* --all */
+	    log_infixes[3].on ||                  /* --all */
+	    log_infixes[4].value[0] != '\0' ||   /* --since */
+	    log_infixes[5].value[0] != '\0' ||   /* --until */
+	    log_infixes[6].on || log_infixes[7].on || log_infixes[8].on) {
 		struct mg_log_query q = {0};
 		q.repo = cwd;
 		q.graph = magit_log_graph;
@@ -1560,7 +1570,11 @@ magit_log_build(struct buffer *bp)
 		q.author = log_infixes[1].value[0] ? log_infixes[1].value : NULL;
 		q.grep = log_infixes[2].value[0] ? log_infixes[2].value : NULL;
 		q.all = log_infixes[3].on;
-		/* since/until/reverse/merges/no_merges wired in Task 3 */
+		q.since = log_infixes[4].value[0] ? log_infixes[4].value : NULL;
+		q.until = log_infixes[5].value[0] ? log_infixes[5].value : NULL;
+		q.reverse = log_infixes[6].on;
+		q.merges = log_infixes[7].on;
+		q.no_merges = log_infixes[8].on;
 		(void)mg_magit_log_query_buffer(&q, magit_log_emit, bp);
 	} else if (magit_log_file_path[0] != '\0') {
 		/*
