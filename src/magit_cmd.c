@@ -482,9 +482,9 @@ static PF maglog_V[] = { magit_log_revert };
 static PF maglog_g[] = { magit_log_refresh };
 static PF maglog_q[] = { delwind };
 
-static struct KEYMAPE (6) maglogmap = {
-	6,
-	6,
+static struct KEYMAPE (7) maglogmap = {
+	7,
+	7,
 	rescan,
 	{
 		{ CCHR('M'), CCHR('M'), maglog_ret, NULL },	/* RET: show commit */
@@ -492,6 +492,7 @@ static struct KEYMAPE (6) maglogmap = {
 		{ 'T', 'T', maglog_T, NULL },			/* T: set/remove note */
 		{ 'V', 'V', maglog_V, NULL },			/* V: revert commit */
 		{ 'g', 'g', maglog_g, NULL },			/* g: refresh */
+		{ 'l', 'l', magit_l, NULL },			/* l: log transient (tweak args in place) */
 		{ 'q', 'q', maglog_q, NULL }			/* q: close */
 	}
 };

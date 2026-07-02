@@ -314,10 +314,12 @@ absent). Keep this in sync with the README's "What it doesn't do (vs Magit)".
     FM-DIFF-CTL context/whitespace controls (currently the `+`/`-`/`w` keys).
   - [ ] **FM-TRANSIENT-LOG-MORE (deferred)** — further log args (`--since`/
     `--until`, `--reverse`, `--merges`/`--no-merges`); rebase/merge/reset transients.
-  - [ ] **FM-LOG-TRANSIENT-KEY (deferred, found in FM-TRANSIENT-DEPTH review)** —
-    `*magit-log*` (`maglogmap`) doesn't bind `l` to re-open the log transient the
-    way Magit does; you currently re-open it from `*magit-status*`. Bind the log
-    transient in the log buffer so args can be tweaked without leaving it.
+  - [x] **FM-LOG-TRANSIENT-KEY (found in FM-TRANSIENT-DEPTH review)** — ✅ DONE
+    (branch `fm-log-transient-key`): `l` in `*magit-log*` (`maglogmap`) now opens
+    the log transient (bound to `magit_l` / `magit_menu_log`, the same command as
+    in `*magit-status*`), so `--author`/`--grep`/`--all`/`-n` and `l l`/`f`/`g`/`r`
+    can be tweaked without leaving the log buffer. Matches Magit (`l` overrides
+    line-down). Scope: `*magit-log*` only.
 
 ### Medium value
 - [ ] **FM-LOG-RICH — fuller log buffer.** No `--decorate` ref coloring; no
