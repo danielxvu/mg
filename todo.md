@@ -314,8 +314,11 @@ absent). Keep this in sync with the README's "What it doesn't do (vs Magit)".
     *magit-status* opens a live diff-view popup over FM-DIFF-CTL's context /
     whitespace controls (`+`/`-`/`w` inside the popup apply immediately, popup
     stays open; `q` closes). The bare `+`/`-`/`w` keys still work.
-  - [ ] **FM-TRANSIENT-LOG-MORE (deferred)** — further log args (`--since`/
-    `--until`, `--reverse`, `--merges`/`--no-merges`); rebase/merge/reset transients.
+  - [x] **FM-TRANSIENT-LOG-MORE** — ✅ DONE (branch `fm-transient-log-more`):
+    `--since`/`--until`/`--reverse`/`--merges`/`--no-merges` infixes in the `l`
+    transient (keys S/U/v/M/N). Also did the deferred C-ABI cleanup —
+    `mg_magit_log_query_buffer` takes a `struct mg_log_query *` instead of 12
+    positional params. (Rebase/merge/reset transients remain — separate items.)
   - [x] **FM-LOG-TRANSIENT-KEY (found in FM-TRANSIENT-DEPTH review)** — ✅ DONE
     (branch `fm-log-transient-key`): `l` in `*magit-log*` (`maglogmap`) now opens
     the log transient (bound to `magit_l` / `magit_menu_log`, the same command as

@@ -905,3 +905,27 @@ TEST_CASE("f opens the fetch transient with --prune/--tags/--all")
     fs::remove_all(repo);
     CHECK(listed); // f now opens the fetch transient (renders --prune)
 }
+
+TEST_CASE("l transient lists the extra log args (--since/--reverse/--no-merges)")
+{
+    auto repo = make_repo();
+    const std::string repofile = (repo / "tracked.txt").string();
+    winsize ws{}; ws.ws_row = 40; ws.ws_col = 100;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) { ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", repofile.c_str(), (char *)nullptr); _exit(127); }
+    bool listed = false;
+    if (wait_for(master, "tracked.txt", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x1bxmagit-status\r", 15);
+        if (wait_for(master, "On branch", std::chrono::seconds(8))) {
+            (void)!::write(master, "\x18" "1", 2);   // C-x 1
+            (void)!::write(master, "l", 1);           // log transient
+            listed = wait_for(master, "--no-merges", std::chrono::seconds(8));
+        }
+    }
+    quit_neomg(master, pid);
+    fs::remove_all(repo);
+    CHECK(listed); // the new infixes render in the l transient
+}
