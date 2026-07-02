@@ -226,7 +226,7 @@ int mg_magit_pull_rebase(const char *repo_path, const char *remote);
  * `git pull [--rebase] [--autostash] [--ff-only] --no-edit origin`.
  * mg_magit_push_dry_run runs `git push --dry-run [...]` CAPTURED (not via the
  * terminal) and records its output to the process log for *magit-process*. */
-int mg_magit_fetch_cli(const char *repo_path);
+int mg_magit_fetch_cli(const char *repo_path, int prune, int tags, int all);
 int mg_magit_push_cli(const char *repo_path, int force, int set_upstream, int tags);
 int mg_magit_push_dry_run(const char *repo_path, int force, int set_upstream, int tags);
 int mg_magit_pull_cli(const char *repo_path, int rebase, int autostash, int ff_only);

@@ -3536,7 +3536,7 @@ magit_run_net(enum magit_net_op op, const char *cwd, int flags,
 		break;
 	case MNET_FETCH:
 	default:
-		code = mg_magit_fetch_cli(cwd);
+		code = mg_magit_fetch_cli(cwd, /*prune*/0, /*tags*/0, /*all*/0);
 		break;
 	}
 

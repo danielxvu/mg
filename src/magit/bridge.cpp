@@ -1417,11 +1417,16 @@ extern "C" int mg_magit_pull_rebase(const char *repo_path, const char *remote)
 
 // FM-GIT-CLI-WRITES P3: the CLI (terminal-inherit) variants. The caller puts
 // the tty in cooked mode first; these just build the argv and run real git.
-extern "C" int mg_magit_fetch_cli(const char *repo_path)
+extern "C" int mg_magit_fetch_cli(const char *repo_path, int prune, int tags,
+                                  int all)
 {
     if (repo_path == nullptr)
         return -1;
-    std::vector<std::string> args{"fetch", "origin"};
+    std::vector<std::string> args{"fetch"};
+    if (all)   args.emplace_back("--all");
+    if (prune) args.emplace_back("--prune");
+    if (tags)  args.emplace_back("--tags");
+    if (!all)  args.emplace_back("origin"); // --all fetches every remote
     std::vector<std::string> cmd{"git"};
     cmd.insert(cmd.end(), args.begin(), args.end());
     int rc = mg::git::git_terminal(repo_path, std::move(args));
