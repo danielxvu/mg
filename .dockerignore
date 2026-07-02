@@ -10,3 +10,6 @@ build*/
 **/zig-out/
 **/.zig-cache/
 .git/
+
+# SDD scratch (briefs, reports, review diffs, ledger) — never part of a build
+.superpowers/

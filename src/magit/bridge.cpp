@@ -1081,6 +1081,8 @@ extern "C" int mg_magit_log_query_buffer(const char *repo_path, int graph,
                                          const char *range, const char *file,
                                          int pickaxe_kind,
                                          const char *pickaxe_term, int n,
+                                         const char *author, const char *grep,
+                                         int all,
                                          mg_magit_emit_fn emit, void *ctx)
 {
     if (repo_path == nullptr || emit == nullptr)
@@ -1097,6 +1099,9 @@ extern "C" int mg_magit_log_query_buffer(const char *repo_path, int graph,
         opts.pickaxe = static_cast<char>(pickaxe_kind);
         opts.pickaxe_term = pickaxe_term ? pickaxe_term : "";
     }
+    if (author != nullptr) opts.author = author;
+    if (grep != nullptr)   opts.grep = grep;
+    opts.all = all != 0;
 
     auto rows = mg::git::log_query(repo_path, std::move(opts));
     if (!rows)

@@ -536,6 +536,9 @@ struct log_options {
     std::string file;            // "" = repo-wide; else restrict to a path
     char        pickaxe   = 0;   // 0 = none, 'S' = occurrence-count, 'G' = regex
     std::string pickaxe_term;
+    std::string author;          // --author=<x>  ("" = none)
+    std::string grep;            // --grep=<x>     ("" = none)
+    bool        all       = false; // --all
 };
 
 // Run `git log` with the requested options and parse it into rows. graph +
@@ -1569,6 +1572,12 @@ log_query(std::string repo, log_options opts)
         args.emplace_back("-S" + opts.pickaxe_term);
     else if (opts.pickaxe == 'G')
         args.emplace_back("-G" + opts.pickaxe_term);
+    if (opts.all)
+        args.emplace_back("--all");
+    if (!opts.author.empty())
+        args.emplace_back("--author=" + opts.author);
+    if (!opts.grep.empty())
+        args.emplace_back("--grep=" + opts.grep);
     // Leading %x1f so --graph's art lands in field[0] and the same parser
     // handles graph + non-graph lines uniformly.
     args.emplace_back("--format=%x1f%H%x1f%h%x1f%s");

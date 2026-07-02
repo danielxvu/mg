@@ -2251,6 +2251,78 @@ TEST_CASE("log_query graph emits connector lines and tags commits")
     fs::remove_all(dir);
 }
 
+TEST_CASE("log_query --grep filters by commit message")
+{
+    auto dir = make_repo_with_commit("base"); // a.txt, by "Test"
+    set_test_config(dir);
+    commit_file(dir, "b.txt", "bee\n", "FIXBUG in parser");
+    commit_file(dir, "c.txt", "cee\n", "unrelated change");
+
+    mg::git::log_options opts; opts.grep = "FIXBUG";
+    auto rows = mg::git::log_query(dir.string(), opts);
+    REQUIRE(rows.has_value());
+    REQUIRE_FALSE(rows->empty());
+    for (const auto &r : *rows)
+        CHECK(r.text.find("FIXBUG") != std::string::npos); // every match has the term
+    CHECK(rows->size() == 1); // exactly the FIXBUG commit, nothing extra
+    fs::remove_all(dir);
+}
+
+TEST_CASE("log_query --author filters by author")
+{
+    auto dir = make_repo_with_commit("base"); // a.txt, by "Test"
+    set_test_config(dir);
+    std::string d = dir.string();
+    auto run = [&](const std::string &c) {
+        return std::system(("git -C '" + d + "' " + c + " >/dev/null 2>&1").c_str());
+    };
+    // A second commit authored by someone other than "Test".
+    REQUIRE(run("-c user.name='Zoe Zed' -c user.email=z@example.com "
+                "commit --allow-empty -m zed_work") == 0);
+
+    mg::git::log_options za; za.author = "Zoe";
+    auto z = mg::git::log_query(d, za);
+    REQUIRE(z.has_value());
+    CHECK(z->size() == 1);
+    for (const auto &r : *z) CHECK(r.text.find("zed_work") != std::string::npos);
+
+    mg::git::log_options ta; ta.author = "Test";
+    auto t = mg::git::log_query(d, ta);
+    REQUIRE(t.has_value());
+    CHECK_FALSE(t->empty());
+    for (const auto &r : *t) CHECK(r.text.find("zed_work") == std::string::npos);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("log_query --all includes a commit on a non-HEAD branch")
+{
+    auto dir = make_repo_with_commit("on main"); // HEAD on its default branch
+    std::string d = dir.string();
+    auto run = [&](const std::string &c) {
+        return std::system(("git -C '" + d + "' " + c + " >/dev/null 2>&1").c_str());
+    };
+    REQUIRE(run("checkout -b side") == 0);
+    REQUIRE(run("-c user.name=T -c user.email=t@example.com "
+                "commit --allow-empty -m SIDE_ONLY_COMMIT") == 0);
+    REQUIRE(run("checkout -") == 0); // back to the original branch; side commit now off-HEAD
+
+    auto has_side = [](const auto &rows) { // generic: avoids naming the row type
+        for (const auto &r : rows)
+            if (r.text.find("SIDE_ONLY_COMMIT") != std::string::npos) return true;
+        return false;
+    };
+    mg::git::log_options head; // HEAD-only
+    auto h = mg::git::log_query(d, head);
+    REQUIRE(h.has_value());
+    CHECK_FALSE(has_side(*h));
+
+    mg::git::log_options all; all.all = true;
+    auto a = mg::git::log_query(d, all);
+    REQUIRE(a.has_value());
+    CHECK(has_side(*a));
+    fs::remove_all(dir);
+}
+
 TEST_CASE("submodules lists each registered submodule's name and path")
 {
     auto parent = make_repo_with_commit("base");
