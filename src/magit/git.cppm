@@ -539,6 +539,11 @@ struct log_options {
     std::string author;          // --author=<x>  ("" = none)
     std::string grep;            // --grep=<x>     ("" = none)
     bool        all       = false; // --all
+    std::string since;           // --since=<date>  ("" = none)
+    std::string until;           // --until=<date>  ("" = none)
+    bool        reverse   = false; // --reverse
+    bool        merges    = false; // --merges (only merge commits)
+    bool        no_merges = false; // --no-merges
 };
 
 // Run `git log` with the requested options and parse it into rows. graph +
@@ -1582,6 +1587,16 @@ log_query(std::string repo, log_options opts)
         args.emplace_back("--author=" + opts.author);
     if (!opts.grep.empty())
         args.emplace_back("--grep=" + opts.grep);
+    if (opts.reverse)
+        args.emplace_back("--reverse");
+    if (opts.merges)
+        args.emplace_back("--merges");
+    if (opts.no_merges)
+        args.emplace_back("--no-merges");
+    if (!opts.since.empty())
+        args.emplace_back("--since=" + opts.since);
+    if (!opts.until.empty())
+        args.emplace_back("--until=" + opts.until);
     // Leading %x1f so --graph's art lands in field[0] and the same parser
     // handles graph + non-graph lines uniformly.
     args.emplace_back("--format=%x1f%H%x1f%h%x1f%s");

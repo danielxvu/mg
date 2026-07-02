@@ -2323,6 +2323,57 @@ TEST_CASE("log_query --all includes a commit on a non-HEAD branch")
     fs::remove_all(dir);
 }
 
+TEST_CASE("log_query --since/--until/--reverse/--no-merges/--merges")
+{
+    auto dir = make_repo_with_commit("c0"); // a.txt @ ~now (default sig)
+    set_test_config(dir);
+    std::string d = dir.string();
+    auto run = [&](const std::string &c) {
+        return std::system(("git -C '" + d + "' " + c + " >/dev/null 2>&1").c_str());
+    };
+    // An old dated commit. --since/--until filter on committer date, so force
+    // both author and committer date via env vars (more reliable across git
+    // versions than --date alone, which only sets the author date).
+    REQUIRE(std::system(("GIT_AUTHOR_DATE='2001-01-01T00:00:00' "
+        "GIT_COMMITTER_DATE='2001-01-01T00:00:00' git -C '" + d +
+        "' -c user.name=T -c user.email=t@e -c commit.gpgsign=false "
+        "commit --allow-empty -m OLD_COMMIT >/dev/null 2>&1").c_str()) == 0);
+    REQUIRE(run("checkout -b side") == 0);
+    commit_file(dir, "s.txt", "s\n", "SIDE_COMMIT");
+    REQUIRE(run("checkout -") == 0);
+    REQUIRE(run("-c user.name=T -c user.email=t@e merge --no-ff --no-edit "
+                "-m MERGE_COMMIT side") == 0);
+
+    auto has = [](const std::vector<mg::git::log_row> &rows, const char *needle) {
+        for (auto &r : rows) if (r.text.find(needle) != std::string::npos) return true;
+        return false;
+    };
+    // --no-merges excludes the merge; --merges returns only merge commits.
+    mg::git::log_options nom; nom.no_merges = true;
+    auto rn = mg::git::log_query(d, nom); REQUIRE(rn.has_value());
+    CHECK_FALSE(has(*rn, "MERGE_COMMIT"));
+    mg::git::log_options mo; mo.merges = true;
+    auto rm = mg::git::log_query(d, mo); REQUIRE(rm.has_value());
+    CHECK(has(*rm, "MERGE_COMMIT"));
+    for (auto &r : *rm) CHECK(r.text.find("OLD_COMMIT") == std::string::npos);
+    // --until excludes commits after a date; the 2001 commit predates it.
+    mg::git::log_options un; un.until = "2001-06-01";
+    auto ru = mg::git::log_query(d, un); REQUIRE(ru.has_value());
+    CHECK(has(*ru, "OLD_COMMIT"));
+    CHECK_FALSE(has(*ru, "MERGE_COMMIT")); // merge is @ ~now, after 2001-06
+    // --since after 2001 drops the old commit.
+    mg::git::log_options si; si.since = "2010-01-01";
+    auto rs = mg::git::log_query(d, si); REQUIRE(rs.has_value());
+    CHECK_FALSE(has(*rs, "OLD_COMMIT"));
+    // --reverse flips order: oldest (OLD_COMMIT / c0) first.
+    mg::git::log_options base, rev; rev.reverse = true;
+    auto rb = mg::git::log_query(d, base); auto rr = mg::git::log_query(d, rev);
+    REQUIRE(rb.has_value()); REQUIRE(rr.has_value());
+    REQUIRE(!rb->empty()); REQUIRE(!rr->empty());
+    CHECK(rb->front().oid != rr->front().oid); // newest-first vs oldest-first
+    fs::remove_all(dir);
+}
+
 TEST_CASE("submodules lists each registered submodule's name and path")
 {
     auto parent = make_repo_with_commit("base");
