@@ -3341,6 +3341,51 @@ TEST_CASE("reflog caps at max")
     fs::remove_all(dir);
 }
 
+TEST_CASE("set_diff_view controls context lines and whitespace in file_diff")
+{
+    // a committed file, then an unstaged change with far-apart context
+    auto dir = make_repo_with_commit("base"); // commits a.txt? use commit_file below
+    set_test_config(dir);
+    commit_file(dir, "f.txt", "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n", "add f");
+    std::ofstream(dir / "f.txt") << "1\n2\n3\n4\n5\nSIX\n7\n8\n9\n10\n"; // change line 6
+
+    // default context 3: line "10" (4 away from the change) is NOT in the hunk
+    mg::git::set_diff_view(3, false);
+    auto d3 = mg::git::file_diff(dir.string(), "f.txt", /*staged=*/false);
+    REQUIRE(d3.has_value());
+    bool has10_ctx3 = false;
+    for (auto &h : *d3) for (auto &l : h.lines) if (l.content.find("10") != std::string::npos) has10_ctx3 = true;
+    CHECK_FALSE(has10_ctx3);
+
+    // context 6: now line "10" (4 away) IS within the widened context
+    mg::git::set_diff_view(6, false);
+    auto d6 = mg::git::file_diff(dir.string(), "f.txt", false);
+    REQUIRE(d6.has_value());
+    bool has10_ctx6 = false;
+    for (auto &h : *d6) for (auto &l : h.lines) if (l.content.find("10") != std::string::npos) has10_ctx6 = true;
+    CHECK(has10_ctx6);
+
+    CHECK(mg::git::diff_view_context() == 6);
+    mg::git::set_diff_view(3, false); // reset for other tests
+    fs::remove_all(dir);
+}
+
+TEST_CASE("set_diff_view ignore-whitespace hides a whitespace-only change")
+{
+    auto dir = make_repo_with_commit("base");
+    set_test_config(dir);
+    commit_file(dir, "w.txt", "alpha\nbravo\n", "add w");
+    std::ofstream(dir / "w.txt") << "alpha \nbravo\n"; // trailing space on line 1 only
+
+    mg::git::set_diff_view(3, true);  // ignore whitespace
+    auto d = mg::git::file_diff(dir.string(), "w.txt", false);
+    REQUIRE(d.has_value());
+    CHECK(d->empty());                // whitespace-only change -> no hunks
+    CHECK(mg::git::diff_view_ignore_ws());
+    mg::git::set_diff_view(3, false);
+    fs::remove_all(dir);
+}
+
 // discover_workdir gates the status monitor: it must resolve a repo from any
 // subdirectory (search-up) but return nullopt outside a repo, so launching mg
 // outside a repository never starts a recursive watch (the fd-exhaustion bug).

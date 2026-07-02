@@ -131,6 +131,11 @@ int mg_magit_async_take(mg_magit_emit_fn emit, void *ctx);
 int mg_magit_commit_diff(const char *repo_path, const char *rev,
                          mg_magit_emit_fn emit, void *ctx);
 
+/* Set the diff-view config for *magit-status* expanded diffs: context lines
+ * (clamped 0..32) and ignore-whitespace (0/1). While ignore_ws is on, the
+ * hunk/region staging calls return -2 (blocked). */
+void mg_magit_set_diff_view(int context, int ignore_ws);
+
 /* Stage / unstage / discard a single file (path relative to the repo root).
  * Returns 1 on success, 0 on failure. Discard deletes an untracked file or
  * reverts a tracked one to HEAD. */
