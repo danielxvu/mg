@@ -556,6 +556,42 @@ TEST_CASE("+ grows diff context; w blocks hunk staging with a warning")
     CHECK(warned);
 }
 
+TEST_CASE(": runs a git command and shows it in *magit-process*")
+{
+    auto repo = make_repo(); // tracked.txt committed + untracked.txt
+    const std::string repofile = (repo / "tracked.txt").string();
+
+    winsize ws{}; ws.ws_row = 40; ws.ws_col = 100;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) {
+        ::chdir(fs::temp_directory_path().c_str()); // monitor-inert determinism
+        ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", repofile.c_str(), (char *)nullptr);
+        _exit(127);
+    }
+    bool ok = false;
+    if (wait_for(master, "tracked.txt", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x1bxmagit-status\r", 15);
+        if (wait_for(master, "On branch", std::chrono::seconds(8))) {
+            (void)!::write(master, "\x18" "1", 2);       // C-x 1
+            (void)!::write(master, ":", 1);               // git-command prompt
+            const char gc[] = "rev-parse --abbrev-ref HEAD\r";
+            (void)!::write(master, gc, sizeof gc - 1);    // robust: no manual count
+            (void)!::write(master, "\x0c", 1);            // force repaint
+            // *magit-process* shows the "$ git rev-parse …" entry
+            ok = wait_for(master, "git rev-parse --abbrev-ref HEAD",
+                          std::chrono::seconds(8));
+        }
+    }
+    const char quit[] = "\x18\x03"; (void)!::write(master, quit, sizeof quit - 1);
+    for (int i = 0; i < 20; ++i) { int st = 0; if (::waitpid(pid, &st, WNOHANG) == pid) break; usleep(100000); }
+    ::kill(pid, SIGKILL); ::waitpid(pid, nullptr, 0); ::close(master);
+    fs::remove_all(repo);
+    CHECK(ok);
+}
+
 TEST_CASE("M-1 is a guarded no-op in *magit-reflog* (status-only)")
 {
     auto repo = make_repo();

@@ -181,6 +181,7 @@ static int	magit_todo_abort(int, int);
 static int	magit_diff_more(int, int);
 static int	magit_diff_less(int, int);
 static int	magit_diff_ws(int, int);
+static int	magit_git_command(int, int);
 
 /*
  * line -> {kind, hunk, path} map for the most recent render of *magit-status*.
@@ -448,6 +449,7 @@ static PF magit_w[]     = { magit_diff_ws };		/* w: toggle -w (ignore whitespace
 static PF magit_z[] = { magit_menu_stash };			/* z -> stash menu prefix */
 static PF magit_plus[]  = { magit_diff_more };		/* +: more diff context */
 static PF magit_minus[] = { magit_diff_less };		/* -: less diff context */
+static PF magit_colon[] = { magit_git_command };	/* :: run a git command */
 
 /*
  * Tag menu: `t` prefixes into this. t=create (at HEAD), k=delete (the tag at
@@ -1029,9 +1031,9 @@ magit_conflict_theirs(int f, int n)
 }
 
 /* Entries MUST stay in ascending key order -- doscan() relies on it. */
-static struct KEYMAPE (35) magitmap = {
-	35,
-	35,
+static struct KEYMAPE (36) magitmap = {
+	36,
+	36,
 	rescan,
 	{
 		{ CCHR('I'), CCHR('I'), magit_tab, NULL },	/* TAB: expand/collapse */
@@ -1041,6 +1043,7 @@ static struct KEYMAPE (35) magitmap = {
 		{ '$', '$', magit_dollar, NULL },		/* $: process log */
 		{ '+', '+', magit_plus, NULL },			/* +: more diff context */
 		{ '-', '-', magit_minus, NULL },		/* -: less diff context */
+		{ ':', ':', magit_colon, NULL },		/* :: run a git command */
 		{ '?', '?', magit_qmark, NULL },		/* ?: key help */
 		{ 'A', 'A', magit_A, NULL },			/* A: cherry-pick */
 		{ 'B', 'B', magit_B, NULL },			/* B: blame file at point */
@@ -4365,6 +4368,22 @@ magit_diff_ws(int f, int n)
 	magit_diff_ignore_ws = !magit_diff_ignore_ws;
 	mg_magit_set_diff_view(magit_diff_context, magit_diff_ignore_ws);
 	return (magit_refresh(f, n));
+}
+
+/* `:` -- run an arbitrary git command; output goes to *magit-process*. */
+static int
+magit_git_command(int f, int n)
+{
+	char	cwd[PATH_MAX], cmdline[PATH_MAX];
+
+	if (eread("git: ", cmdline, sizeof(cmdline), EFNEW | EFCR) == NULL ||
+	    cmdline[0] == '\0')
+		return (ABORT);
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
+		return (FALSE);
+	(void)mg_magit_git_command(cwd, cmdline);
+	(void)magit_refresh(f, n);     /* reflect any mutation in *magit-status* */
+	return (magit_process(f, n));  /* land on the command's output */
 }
 
 #endif /* ENABLE_NATIVE_MAGIT */

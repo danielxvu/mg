@@ -1862,3 +1862,10 @@ extern "C" int mg_magit_branch_rename(const char *repo_path, const char *from,
     proc_eq(std::string("git branch -m ") + from + " " + to, ok);
     return ok ? 1 : 0;
 }
+
+extern "C" int mg_magit_git_command(const char *repo, const char *cmdline)
+{
+    if (repo == nullptr || cmdline == nullptr || cmdline[0] == '\0')
+        return -1;
+    return mg::git::run_git_command(repo, cmdline);
+}

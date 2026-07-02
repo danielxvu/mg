@@ -26,6 +26,7 @@ module;
 
 #include <git2.h>
 
+#include <fcntl.h>    // O_RDONLY -- redirect child stdin to /dev/null
 #include <spawn.h>    // posix_spawnp -- run the real `git` for hook/sign/auth ops
 #include <sys/wait.h> // waitpid
 #include <unistd.h>   // pipe, read, close
@@ -74,12 +75,13 @@ inline git_run run_git(const std::string &repo,
 
     posix_spawn_file_actions_t fa;
     posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0); // stdin -> /dev/null (no pager/prompt block)
     posix_spawn_file_actions_adddup2(&fa, pfd[1], 1); // child stdout -> pipe
     posix_spawn_file_actions_adddup2(&fa, pfd[1], 2); // child stderr -> pipe
     posix_spawn_file_actions_addclose(&fa, pfd[0]);
     posix_spawn_file_actions_addclose(&fa, pfd[1]);
 
-    std::vector<std::string> full{"git", "-C", repo};
+    std::vector<std::string> full{"git", "--no-pager", "-C", repo};
     full.insert(full.end(), args.begin(), args.end());
     std::vector<char *> argv;
     argv.reserve(full.size() + 1);
@@ -854,6 +856,17 @@ discard_region(std::string repo, std::string path, std::size_t hunk_index,
 void set_diff_view(int context, bool ignore_ws);
 int  diff_view_context();
 bool diff_view_ignore_ws();
+
+// Tokenize a git command line: split on unquoted whitespace, honouring
+// single- and double-quotes (literal content, no escapes/expansion, no shell).
+// An unterminated quote runs to end-of-line (lenient).
+std::vector<std::string> tokenize_cmdline(const std::string &line);
+
+// Run an arbitrary git command line (e.g. "status" or "git log --oneline")
+// captured, recording a '$' process-log entry via proclog::record.
+// A leading "git" token is stripped so both forms are accepted.
+// Returns the git exit code, or -1 if the line is empty after tokenizing.
+int run_git_command(std::string repo, std::string cmdline);
 
 } // namespace mg::git
 
@@ -3524,6 +3537,49 @@ commit_via_cli(const std::string &repo, std::vector<std::string> args)
     while (!oid.empty() && (oid.back() == '\n' || oid.back() == '\r'))
         oid.pop_back();
     return oid;
+}
+
+std::vector<std::string> tokenize_cmdline(const std::string &line)
+{
+    std::vector<std::string> out;
+    std::string cur;
+    bool in_tok = false;
+    char quote = 0; // 0 = none; else the open quote char
+    for (char c : line) {
+        if (quote) {
+            if (c == quote) quote = 0;     // close quote (keeps in_tok)
+            else { cur += c; in_tok = true; }
+        } else if (c == '\'' || c == '"') {
+            quote = c; in_tok = true;      // open quote ("" yields an empty arg)
+        } else if (c == ' ' || c == '\t') {
+            if (in_tok) { out.push_back(cur); cur.clear(); in_tok = false; }
+        } else {
+            cur += c; in_tok = true;
+        }
+    }
+    if (in_tok)
+        out.push_back(cur);                // lenient: unterminated quote -> EOL
+    return out;
+}
+
+int run_git_command(std::string repo, std::string cmdline)
+{
+    auto args = tokenize_cmdline(cmdline);
+    if (!args.empty() && args.front() == "git")
+        args.erase(args.begin());          // accept "git status" or "status"
+    if (args.empty())
+        return -1;
+    std::vector<std::string> cmd;          // for the log line: "git <args>"
+    cmd.reserve(args.size() + 1);
+    cmd.push_back("git");
+    for (const auto &a : args) cmd.push_back(a);
+    auto t0 = std::chrono::steady_clock::now();
+    auto run = detail::run_git(repo, args); // run_git runs `git -C <repo> <args>`
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                  std::chrono::steady_clock::now() - t0).count();
+    mg::magit::proclog::record('$', mg::magit::proclog::argv_to_command(cmd),
+                               run.output, run.code == 0, ms);
+    return run.code;
 }
 
 std::expected<std::string, error> commit(std::string repo, std::string message)

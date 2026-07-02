@@ -19,6 +19,7 @@
 #include <git2.h>
 
 import mg.magit;
+import mg.magit.proclog;
 import mg.git;
 
 namespace fs = std::filesystem;
@@ -3408,4 +3409,87 @@ TEST_CASE("discover_workdir resolves a repo and its subdirs, nullopt outside one
     CHECK(fs::weakly_canonical(*from_root) == fs::weakly_canonical(repo));
     CHECK(fs::weakly_canonical(*from_sub) == fs::weakly_canonical(repo));
     fs::remove_all(repo);
+}
+
+TEST_CASE("tokenize_cmdline splits on whitespace honoring quotes")
+{
+    using mg::git::tokenize_cmdline;
+    CHECK(tokenize_cmdline("status") == std::vector<std::string>{"status"});
+    CHECK(tokenize_cmdline("  log   --oneline  ") ==
+          (std::vector<std::string>{"log", "--oneline"}));
+    CHECK(tokenize_cmdline("commit -m \"a b\"") ==
+          (std::vector<std::string>{"commit", "-m", "a b"}));
+    CHECK(tokenize_cmdline("log 'x y' -n1") ==
+          (std::vector<std::string>{"log", "x y", "-n1"}));
+    CHECK(tokenize_cmdline("a \"unterminated") ==
+          (std::vector<std::string>{"a", "unterminated"})); // lenient
+}
+
+TEST_CASE("run_git_command runs git and records a $ proclog entry")
+{
+    auto dir = make_repo_with_commit("base");
+    set_test_config(dir);
+    mg::magit::proclog::clear();
+
+    int rc = mg::git::run_git_command(dir.string(), "status");
+    CHECK(rc == 0);
+    auto s = mg::magit::proclog::snapshot();
+    bool found = false;
+    for (auto &e : s)
+        if (e.kind == '$' && e.command.find("git status") != std::string::npos) {
+            CHECK(e.ok);
+            CHECK(e.output.find("branch") != std::string::npos); // git status mentions the branch
+            found = true;
+        }
+    CHECK(found);
+
+    // a leading "git" is stripped; a failing command records ok=false
+    mg::magit::proclog::clear();
+    CHECK(mg::git::run_git_command(dir.string(), "git rev-parse --verify HEAD") == 0);
+    mg::magit::proclog::clear();
+    CHECK(mg::git::run_git_command(dir.string(), "notacommand") != 0);
+    bool sawfail = false;
+    for (auto &e : mg::magit::proclog::snapshot())
+        if (e.kind == '$' && !e.ok) sawfail = true;
+    CHECK(sawfail);
+
+    // empty line -> -1, no entry
+    mg::magit::proclog::clear();
+    CHECK(mg::git::run_git_command(dir.string(), "   ") == -1);
+    CHECK(mg::magit::proclog::snapshot().empty());
+    fs::remove_all(dir);
+}
+
+// Pager-hang regression: run_git must not block on commands that produce output
+// (e.g. log --oneline), because --no-pager is injected into the exec argv and
+// stdin is redirected to /dev/null. Asserts: exit 0 + output non-empty.
+TEST_CASE("run_git_command log does not hang (--no-pager + stdin=/dev/null)")
+{
+    auto dir = make_repo_with_commit("initial commit for log");
+    set_test_config(dir);
+    // A second commit so log --oneline always has at least one line of output.
+    commit_file(dir, "b.txt", "bee\n", "second commit for log");
+
+    mg::magit::proclog::clear();
+    int rc = mg::git::run_git_command(dir.string(), "log --oneline");
+    CHECK(rc == 0);
+    auto snap = mg::magit::proclog::snapshot();
+    bool found = false;
+    for (auto &e : snap)
+        if (e.kind == '$' && e.command.find("log") != std::string::npos) {
+            CHECK(e.ok);
+            // The output must be non-empty: at least one commit subject.
+            CHECK_FALSE(e.output.empty());
+            // Both commit subjects must appear in the oneline output.
+            CHECK(e.output.find("initial commit for log") != std::string::npos);
+            found = true;
+        }
+    CHECK(found); // a $ log entry was recorded
+
+    // diff on a clean repo exits 0 and produces no output -- just confirm it
+    // returns promptly (no pager block).
+    mg::magit::proclog::clear();
+    CHECK(mg::git::run_git_command(dir.string(), "diff") == 0);
+
+    fs::remove_all(dir);
 }

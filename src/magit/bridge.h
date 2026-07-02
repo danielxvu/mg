@@ -351,6 +351,10 @@ int mg_magit_bisect_mark(const char *repo_path, int is_bad, char *out,
 int mg_magit_bisect_reset(const char *repo_path);
 int mg_magit_bisect_active(const char *repo_path);
 
+/* Run an arbitrary `git <cmdline>` (captured) and record it in the process log.
+ * Returns the git exit code, or -1 (null/empty). Output goes to *magit-process*. */
+int mg_magit_git_command(const char *repo, const char *cmdline);
+
 #ifdef __cplusplus
 }
 #endif
