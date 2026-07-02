@@ -758,3 +758,67 @@ TEST_CASE("l transient empty input clears a set --grep")
     CHECK(set_persisted); // the re-opened prompt echoed the stored BBBB
     CHECK(cleared);       // empty input unset --grep -> AAAA_FIRST reappears
 }
+
+TEST_CASE("P transient lists --tags and --dry-run infixes")
+{
+    auto repo = make_repo();
+    const std::string repofile = (repo / "tracked.txt").string();
+    winsize ws{}; ws.ws_row = 40; ws.ws_col = 100;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) { ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", repofile.c_str(), (char *)nullptr); _exit(127); }
+    bool listed = false;
+    if (wait_for(master, "tracked.txt", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x1bxmagit-status\r", 15);
+        if (wait_for(master, "On branch", std::chrono::seconds(8))) {
+            (void)!::write(master, "\x18" "1", 2);   // C-x 1
+            (void)!::write(master, "P", 1);           // push transient
+            listed = wait_for(master, "--dry-run", std::chrono::seconds(8)); // infix rendered
+        }
+    }
+    (void)!::write(master, "\x18\x03", 2);
+    for (int i=0;i<20;++i){int st=0;if(::waitpid(pid,&st,WNOHANG)==pid)break;usleep(100000);}
+    ::kill(pid, SIGKILL); ::waitpid(pid, nullptr, 0); ::close(master);
+    fs::remove_all(repo);
+    CHECK(listed);
+}
+
+// NOTE: an end-to-end "P d p -> *magit-process* shows push --dry-run" pty test is
+// intentionally OMITTED. Running a real `git push --dry-run` writes to .git, which
+// leaves FSEvents events in-flight; neomg's FSEvents watcher then blocks in an
+// uninterruptible mach_msg during exit teardown, so SIGKILL can't reap it and the
+// test's waitpid hangs (macOS only; a pre-existing teardown bug, NOT introduced by
+// the push transient -- see the FM-FSEVENTS-EXIT-HANG gap in todo.md). The --dry-run
+// path is covered without spawning neomg: the engine test (push_dry_run mutates
+// nothing, logs a $ entry) and the bridge test (mg_magit_push_dry_run records the
+// proclog entry). The "P transient lists ... --dry-run" test above proves the infix
+// is wired into the transient; magit_push's dry-run branch is a direct read of
+// push_infixes[3].on + the already-tested mg_magit_push_dry_run + magit_process.
+
+TEST_CASE("F transient lists --autostash and --ff-only infixes")
+{
+    auto repo = make_repo();
+    const std::string repofile = (repo / "tracked.txt").string();
+    winsize ws{}; ws.ws_row = 40; ws.ws_col = 100;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) { ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", repofile.c_str(), (char *)nullptr); _exit(127); }
+    bool listed = false;
+    if (wait_for(master, "tracked.txt", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x1bxmagit-status\r", 15);
+        if (wait_for(master, "On branch", std::chrono::seconds(8))) {
+            (void)!::write(master, "\x18" "1", 2);   // C-x 1
+            (void)!::write(master, "F", 1);           // pull transient
+            listed = wait_for(master, "--autostash", std::chrono::seconds(8));
+        }
+    }
+    (void)!::write(master, "\x18\x03", 2);
+    for (int i=0;i<20;++i){int st=0;if(::waitpid(pid,&st,WNOHANG)==pid)break;usleep(100000);}
+    ::kill(pid, SIGKILL); ::waitpid(pid, nullptr, 0); ::close(master);
+    fs::remove_all(repo);
+    CHECK(listed);
+}

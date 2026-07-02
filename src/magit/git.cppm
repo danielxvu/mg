@@ -871,6 +871,10 @@ std::vector<std::string> tokenize_cmdline(const std::string &line);
 // Returns the git exit code, or -1 if the line is empty after tokenizing.
 int run_git_command(std::string repo, std::string cmdline);
 
+// Captured `git push --dry-run [flags] origin HEAD`: previews the push (no
+// mutation), records a '$' proclog entry with the output, returns the exit code.
+int push_dry_run(std::string repo, bool force, bool set_upstream, bool tags);
+
 } // namespace mg::git
 
 // ---- definition -----------------------------------------------------------
@@ -3584,6 +3588,25 @@ int run_git_command(std::string repo, std::string cmdline)
     for (const auto &a : args) cmd.push_back(a);
     auto t0 = std::chrono::steady_clock::now();
     auto run = detail::run_git(repo, args); // run_git runs `git -C <repo> <args>`
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                  std::chrono::steady_clock::now() - t0).count();
+    mg::magit::proclog::record('$', mg::magit::proclog::argv_to_command(cmd),
+                               run.output, run.code == 0, ms);
+    return run.code;
+}
+
+int push_dry_run(std::string repo, bool force, bool set_upstream, bool tags)
+{
+    std::vector<std::string> args{"push", "--dry-run"};
+    if (force)        args.emplace_back("--force-with-lease");
+    if (set_upstream) args.emplace_back("-u");
+    if (tags)         args.emplace_back("--tags");
+    args.emplace_back("origin");
+    args.emplace_back("HEAD");
+    std::vector<std::string> cmd{"git"};
+    cmd.insert(cmd.end(), args.begin(), args.end());
+    auto t0 = std::chrono::steady_clock::now();
+    auto run = detail::run_git(repo, args);
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                   std::chrono::steady_clock::now() - t0).count();
     mg::magit::proclog::record('$', mg::magit::proclog::argv_to_command(cmd),
