@@ -93,11 +93,11 @@ int mg_magit_log_file_buffer(const char *repo_path, const char *file, int n,
 int mg_magit_reflog_buffer(const char *repo, int n, mg_magit_emit_fn emit,
                            void *ctx);
 
-/* FM-LP: CLI-backed log with graph / range / pickaxe. graph: 0/1. range: ""
- * or NULL = HEAD; else "A..B". file: "" or NULL = repo-wide. pickaxe_kind:
- * 0 none / 'S' / 'G' with pickaxe_term. n = -n limit (0 = none). Commit rows
- * emit as MG_LINE_COMMIT (path = full oid); graph connector lines emit as
- * MG_LINE_OTHER (path = NULL). Returns the line count, 0 on failure. */
+/* FM-LP: CLI-backed log configured by mg_log_query (per-field semantics are
+ * documented inline below; NULL/"" string fields and 0/false ints mean "unset",
+ * yielding a plain `git log`). Commit rows emit as MG_LINE_COMMIT (path = full
+ * oid); graph connector lines emit as MG_LINE_OTHER (path = NULL). Returns the
+ * line count, 0 on failure. */
 struct mg_log_query {
     const char *repo;
     int         graph;
