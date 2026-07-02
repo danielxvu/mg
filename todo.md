@@ -310,8 +310,10 @@ absent). Keep this in sync with the README's "What it doesn't do (vs Magit)".
   Spec: `docs/superpowers/specs/2026-06-28-fm-transient-depth-design.md`.
   - [ ] **FM-TRANSIENT-PUSH (deferred)** — more push infixes (`--tags`,
     `--dry-run`) + a pull transient with args.
-  - [ ] **FM-TRANSIENT-DIFF (deferred)** — a diff-args transient wrapping the
-    FM-DIFF-CTL context/whitespace controls (currently the `+`/`-`/`w` keys).
+  - [x] **FM-TRANSIENT-DIFF** — ✅ DONE (branch `fm-transient-diff`): `d` in
+    *magit-status* opens a live diff-view popup over FM-DIFF-CTL's context /
+    whitespace controls (`+`/`-`/`w` inside the popup apply immediately, popup
+    stays open; `q` closes). The bare `+`/`-`/`w` keys still work.
   - [ ] **FM-TRANSIENT-LOG-MORE (deferred)** — further log args (`--since`/
     `--until`, `--reverse`, `--merges`/`--no-merges`); rebase/merge/reset transients.
   - [x] **FM-LOG-TRANSIENT-KEY (found in FM-TRANSIENT-DEPTH review)** — ✅ DONE

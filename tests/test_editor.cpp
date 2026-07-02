@@ -849,3 +849,35 @@ TEST_CASE("l in *magit-log* re-opens the log transient")
     fs::remove_all(repo);
     CHECK(reopened); // pressing l in *magit-log* rendered the log transient
 }
+
+TEST_CASE("d opens the diff-view popup and + applies live to *magit-status*")
+{
+    auto repo = make_repo();
+    const std::string repofile = (repo / "tracked.txt").string();
+    winsize ws{}; ws.ws_row = 40; ws.ws_col = 100;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) { ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", repofile.c_str(), (char *)nullptr); _exit(127); }
+    bool opened = false, applied = false;
+    if (wait_for(master, "tracked.txt", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x1bxmagit-status\r", 15);
+        if (wait_for(master, "On branch", std::chrono::seconds(8))) {
+            (void)!::write(master, "\x18" "1", 2);   // C-x 1
+            (void)!::write(master, "d", 1);           // open the diff-view popup
+            opened = wait_for(master, "Diff view", std::chrono::seconds(8));
+            if (opened) {
+                (void)!::write(master, "+", 1);       // more context -> -U4
+                // "Diff:" (colon) is emitted ONLY by *magit-status* when
+                // context != 3 -- so it proves the live refresh, not just the
+                // popup's re-render (the popup title is "Diff view").
+                applied = wait_for(master, "Diff:", std::chrono::seconds(8));
+            }
+        }
+    }
+    quit_neomg(master, pid); // C-g closes the popup, then quits
+    fs::remove_all(repo);
+    CHECK(opened);  // d opened the diff-view popup
+    CHECK(applied); // + applied live: *magit-status* re-rendered with the Diff: header
+}

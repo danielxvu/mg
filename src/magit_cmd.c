@@ -182,6 +182,7 @@ static int	magit_todo_abort(int, int);
 static int	magit_diff_more(int, int);
 static int	magit_diff_less(int, int);
 static int	magit_diff_ws(int, int);
+static int	magit_diff_transient(int, int);
 static int	magit_git_command(int, int);
 
 /*
@@ -450,6 +451,7 @@ static PF magit_w[]     = { magit_diff_ws };		/* w: toggle -w (ignore whitespace
 static PF magit_z[] = { magit_menu_stash };			/* z -> stash menu prefix */
 static PF magit_plus[]  = { magit_diff_more };		/* +: more diff context */
 static PF magit_minus[] = { magit_diff_less };		/* -: less diff context */
+static PF magit_d[]     = { magit_diff_transient };	/* d: diff-view popup */
 static PF magit_colon[] = { magit_git_command };	/* :: run a git command */
 
 /*
@@ -1054,9 +1056,9 @@ magit_conflict_theirs(int f, int n)
 }
 
 /* Entries MUST stay in ascending key order -- doscan() relies on it. */
-static struct KEYMAPE (36) magitmap = {
-	36,
-	36,
+static struct KEYMAPE (37) magitmap = {
+	37,
+	37,
 	rescan,
 	{
 		{ CCHR('I'), CCHR('I'), magit_tab, NULL },	/* TAB: expand/collapse */
@@ -1082,6 +1084,7 @@ static struct KEYMAPE (36) magitmap = {
 		{ 'a', 'a', magit_a, NULL },			/* a: apply stash */
 		{ 'b', 'b', magit_b, NULL }, /* b: branch menu */
 		{ 'c', 'c', magit_c, NULL }, /* c: commit menu */
+		{ 'd', 'd', magit_d, NULL },			/* d: diff-view popup */
 		{ 'e', 'e', magit_e, NULL },			/* e: resolve conflict */
 		{ 'f', 'f', magit_f, NULL },			/* f: fetch */
 		{ 'g', 'g', magit_g, NULL },
@@ -4439,6 +4442,67 @@ magit_diff_ws(int f, int n)
 	magit_diff_ignore_ws = !magit_diff_ignore_ws;
 	mg_magit_set_diff_view(magit_diff_context, magit_diff_ignore_ws);
 	return (magit_refresh(f, n));
+}
+
+/* Render the live diff-view popup: current context + whitespace + keys. */
+static void
+magit_diff_transient_render(struct buffer *bp)
+{
+	(void)bclear(bp);
+	(void)addlinef(bp, "Diff view");
+	(void)addlinef(bp, " +/-  context      -U%d", magit_diff_context);
+	(void)addlinef(bp, " w    whitespace   %s",
+	    magit_diff_ignore_ws ? "ignored" : "shown");
+	(void)addlinef(bp, " q    close");
+}
+
+/* d: a live diff-view popup. +/- adjust context, w toggles -w; each applies
+ * immediately (set_diff_view + refresh *magit-status*) and the popup stays open.
+ * q / C-g / ESC close. Reuses magit_transient's popup scaffolding. */
+static int
+magit_diff_transient(int f, int n)
+{
+	struct buffer	*bp, *stbp;
+	struct mgwin	*wp, *stwp;
+	int		 k;
+
+	stwp = curwp;
+	stbp = curbp;
+	if ((bp = bfind("*magit-transient*", TRUE)) == NULL)
+		return (FALSE);
+	if ((wp = popbuf(bp, WNONE)) == NULL)
+		return (FALSE);
+
+	for (;;) {
+		magit_diff_transient_render(bp);
+		wp->w_dotp = bfirstlp(bp);
+		wp->w_doto = 0;
+		wp->w_rflag |= WFFULL;
+		update(CMODE);
+		k = getkey(FALSE);
+		if (k == CCHR('G') || k == CCHR('[') || k == 'q') /* C-g / ESC / q */
+			break;
+		if (k == '+' || k == '-' || k == 'w') {
+			if (k == '+' && magit_diff_context < 32)
+				magit_diff_context++;
+			else if (k == '-' && magit_diff_context > 0)
+				magit_diff_context--;
+			else if (k == 'w')
+				magit_diff_ignore_ws = !magit_diff_ignore_ws;
+			mg_magit_set_diff_view(magit_diff_context,
+			    magit_diff_ignore_ws);
+			(void)magit_refresh(f, n); /* rebuilds *magit-status* by name */
+			stwp->w_rflag |= WFFULL;   /* force the status window redraw */
+		}
+		/* any other key: ignored; loop re-renders */
+	}
+
+	curwp = wp;
+	curbp = wp->w_bufp;
+	(void)delwind(f, n);
+	curwp = stwp;
+	curbp = stbp;
+	return (TRUE);
 }
 
 /* `:` -- run an arbitrary git command; output goes to *magit-process*. */
