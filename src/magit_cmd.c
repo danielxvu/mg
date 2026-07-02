@@ -108,6 +108,7 @@ static int	magit_ediff_sc_pgdn(int, int);
 static int	magit_ediff_sc_pgup(int, int);
 static int	magit_ediff_quit(int, int);
 static int	magit_menu_pull(int, int);
+static int	magit_menu_fetch(int, int);
 static int	magit_menu_push(int, int);
 static int	magit_menu_reset(int, int);
 static int	magit_menu_worktree(int, int);
@@ -344,7 +345,7 @@ static PF magit_S[] = { magit_stage_all };
 static PF magit_U[] = { magit_unstage_all };
 static PF magit_V[] = { magit_revert };
 static PF magit_e[] = { magit_menu_conflict };	/* e -> conflict menu */
-static PF magit_f[] = { magit_fetch };
+static PF magit_f[] = { magit_menu_fetch };	/* f -> fetch menu prefix */
 static PF magit_W[] = { magit_menu_worktree };			/* W -> worktree menu prefix */
 static PF magit_X[] = { magit_menu_reset };			/* X -> reset menu prefix */
 static PF magit_Z[] = { magit_menu_bisect };			/* Z -> bisect menu prefix */
@@ -857,6 +858,27 @@ static const struct magit_menu_item reflog_reset_items[] = {
 #define MENU_N(a) ((int)(sizeof(a) / sizeof((a)[0])))
 static struct magit_menu pull_menu = { "Pull", (KEYMAP *)&magit_pullmenu,
 	pull_items, MENU_N(pull_items), pull_infixes, MENU_N(pull_infixes) };
+
+/* Fetch menu: the single action f f fetch; --prune/--tags/--all are infixes. */
+static PF fetch_f[] = { magit_fetch };			/* f f: do the fetch */
+static struct KEYMAPE (1) magit_fetchmenu = {
+	1,
+	1,
+	rescan,
+	{
+		{ 'f', 'f', fetch_f, NULL }	/* f f: fetch */
+	}
+};
+static struct magit_infix fetch_infixes[] = {
+	{ 'p', "--prune", MAGIT_INFIX_FLAG, 0, "", 0 },
+	{ 't', "--tags",  MAGIT_INFIX_FLAG, 0, "", 0 },
+	{ 'a', "--all",   MAGIT_INFIX_FLAG, 0, "", 0 }
+};
+static const struct magit_menu_item fetch_items[] = {
+	{ 'f', "fetch" }
+};
+static struct magit_menu fetch_menu = { "Fetch", (KEYMAP *)&magit_fetchmenu,
+	fetch_items, MENU_N(fetch_items), fetch_infixes, MENU_N(fetch_infixes) };
 static struct magit_menu push_menu = { "Push", (KEYMAP *)&magit_pushmenu,
 	push_items, MENU_N(push_items), push_infixes, MENU_N(push_infixes) };
 static struct magit_menu reset_menu = { "Reset", (KEYMAP *)&magit_resetmenu,
@@ -995,6 +1017,7 @@ magit_transient(struct magit_menu *m, int f, int n)
 
 static int magit_menu_pull(int f, int n)   { return (magit_transient(&pull_menu, f, n)); }
 static int magit_menu_push(int f, int n)   { return (magit_transient(&push_menu, f, n)); }
+static int magit_menu_fetch(int f, int n)  { return (magit_transient(&fetch_menu, f, n)); }
 static int magit_menu_reset(int f, int n)  { return (magit_transient(&reset_menu, f, n)); }
 static int magit_menu_worktree(int f, int n){ return (magit_transient(&worktree_menu, f, n)); }
 static int magit_menu_bisect(int f, int n) { return (magit_transient(&bisect_menu, f, n)); }
@@ -1164,9 +1187,9 @@ static void
 magit_assert_menus_consistent(void)
 {
 	static struct magit_menu *const all[] = {
-		&pull_menu, &push_menu, &reset_menu, &worktree_menu, &bisect_menu,
-		&branch_menu, &commit_menu, &log_menu, &rebase_menu, &tag_menu,
-		&stash_menu, &conflict_menu, &reflog_reset_menu
+		&pull_menu, &push_menu, &fetch_menu, &reset_menu, &worktree_menu,
+		&bisect_menu, &branch_menu, &commit_menu, &log_menu, &rebase_menu,
+		&tag_menu, &stash_menu, &conflict_menu, &reflog_reset_menu
 	};
 	size_t	m;
 	int	i;
@@ -3504,6 +3527,8 @@ enum magit_net_op { MNET_FETCH, MNET_PUSH, MNET_PULL, MNET_PULL_REBASE };
 #define MNET_TAGS      0x04  /* push: --tags */
 #define MNET_AUTOSTASH 0x08  /* pull: --autostash */
 #define MNET_FF_ONLY   0x10  /* pull: --ff-only */
+#define MNET_PRUNE     0x20  /* fetch: --prune */
+#define MNET_ALL       0x40  /* fetch: --all */
 
 /*
  * Run an interactive git network op with the terminal handed to git. `banner`
@@ -3539,7 +3564,8 @@ magit_run_net(enum magit_net_op op, const char *cwd, int flags,
 		break;
 	case MNET_FETCH:
 	default:
-		code = mg_magit_fetch_cli(cwd);
+		code = mg_magit_fetch_cli(cwd, (flags & MNET_PRUNE) != 0,
+		    (flags & MNET_TAGS) != 0, (flags & MNET_ALL) != 0);
 		break;
 	}
 
@@ -3556,10 +3582,14 @@ magit_fetch(int f, int n)
 {
 	char	cwd[PATH_MAX];
 	int	code;
+	int	flags;
 
 	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
-	code = magit_run_net(MNET_FETCH, cwd, 0, "Fetching from origin...");
+	flags = (fetch_infixes[0].on ? MNET_PRUNE : 0) |
+	    (fetch_infixes[1].on ? MNET_TAGS : 0) |
+	    (fetch_infixes[2].on ? MNET_ALL : 0);
+	code = magit_run_net(MNET_FETCH, cwd, flags, "Fetching from origin...");
 	if (code == -2)
 		return (FALSE);
 	if (code == -1) {			/* git unavailable -> libgit2 */

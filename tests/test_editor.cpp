@@ -881,3 +881,27 @@ TEST_CASE("d opens the diff-view popup and + applies live to *magit-status*")
     CHECK(opened);  // d opened the diff-view popup
     CHECK(applied); // + applied live: *magit-status* re-rendered with the Diff: header
 }
+
+TEST_CASE("f opens the fetch transient with --prune/--tags/--all")
+{
+    auto repo = make_repo();
+    const std::string repofile = (repo / "tracked.txt").string();
+    winsize ws{}; ws.ws_row = 40; ws.ws_col = 100;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) { ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", repofile.c_str(), (char *)nullptr); _exit(127); }
+    bool listed = false;
+    if (wait_for(master, "tracked.txt", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x1bxmagit-status\r", 15);
+        if (wait_for(master, "On branch", std::chrono::seconds(8))) {
+            (void)!::write(master, "\x18" "1", 2);   // C-x 1
+            (void)!::write(master, "f", 1);           // open the fetch transient
+            listed = wait_for(master, "--prune", std::chrono::seconds(8));
+        }
+    }
+    quit_neomg(master, pid);
+    fs::remove_all(repo);
+    CHECK(listed); // f now opens the fetch transient (renders --prune)
+}

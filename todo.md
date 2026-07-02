@@ -322,6 +322,10 @@ absent). Keep this in sync with the README's "What it doesn't do (vs Magit)".
     in `*magit-status*`), so `--author`/`--grep`/`--all`/`-n` and `l l`/`f`/`g`/`r`
     can be tweaked without leaving the log buffer. Matches Magit (`l` overrides
     line-down). Scope: `*magit-log*` only.
+  - [x] **FM-TRANSIENT-FETCH** — ✅ DONE (branch `fm-transient-fetch`): `f` opens
+    a fetch transient (`--prune`/`--tags`/`--all` infixes); `f f` fetches with the
+    toggled args. Completes the network-op trio (P push, F pull, f fetch). Plain
+    fetch is now `f f`. `--all` fetches all remotes (argv omits origin).
 
 ### Medium value
 - [ ] **FM-LOG-RICH — fuller log buffer.** No `--decorate` ref coloring; no

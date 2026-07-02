@@ -2518,3 +2518,31 @@ TEST_CASE("mg_magit_pull_cli appends --autostash and --ff-only when requested")
     CHECK(none);
     fs::remove_all(dir);
 }
+
+TEST_CASE("mg_magit_fetch_cli threads --prune/--tags and omits origin for --all")
+{
+    auto dir = make_repo_with_commit("c1"); // no remote -> fails fast, still logged
+    std::string d = dir.string();
+
+    mg::magit::proclog::clear();
+    (void)mg_magit_fetch_cli(d.c_str(), /*prune*/1, /*tags*/1, /*all*/0);
+    bool flagged = false;
+    for (auto &e : mg::magit::proclog::snapshot())
+        if (e.kind == '$' && e.command.find("fetch") != std::string::npos &&
+            e.command.find("--prune") != std::string::npos &&
+            e.command.find("--tags") != std::string::npos &&
+            e.command.find("origin") != std::string::npos)
+            flagged = true;
+    CHECK(flagged);
+
+    mg::magit::proclog::clear();
+    (void)mg_magit_fetch_cli(d.c_str(), /*prune*/0, /*tags*/0, /*all*/1);
+    bool allNoOrigin = false;
+    for (auto &e : mg::magit::proclog::snapshot())
+        if (e.kind == '$' && e.command.find("fetch") != std::string::npos &&
+            e.command.find("--all") != std::string::npos &&
+            e.command.find("origin") == std::string::npos) // --all omits origin
+            allNoOrigin = true;
+    CHECK(allNoOrigin);
+    fs::remove_all(dir);
+}
