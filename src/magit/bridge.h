@@ -93,6 +93,14 @@ int mg_magit_log_file_buffer(const char *repo_path, const char *file, int n,
 int mg_magit_reflog_buffer(const char *repo, int n, mg_magit_emit_fn emit,
                            void *ctx);
 
+/* Compose the *magit-refs* overview: Branches/Remotes (MG_LINE_BRANCH) and
+ * Tags (MG_LINE_TAG) sections with ahead/behind vs HEAD. NOTE: here `path` is
+ * the ref's full TIP OID (tags peeled) so RET can show the commit -- unlike
+ * the status buffer's branch rows, whose `path` is the branch NAME (their RET
+ * checks out). Returns the line count, 0 when the repo can't be read. */
+int mg_magit_refs_buffer(const char *repo_path, mg_magit_emit_fn emit,
+                         void *ctx);
+
 /* FM-LP: CLI-backed log configured by mg_log_query (per-field semantics are
  * documented inline below; NULL/"" string fields and 0/false ints mean "unset",
  * yielding a plain `git log`). Commit rows emit as MG_LINE_COMMIT (path = full

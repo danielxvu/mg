@@ -2298,6 +2298,35 @@ TEST_CASE("mg_magit_reflog_buffer emits MG_LINE_COMMIT lines with oids + HEAD@{N
     fs::remove_all(dir);
 }
 
+TEST_CASE("mg_magit_refs_buffer emits sections and oid-carrying branch rows")
+{
+    auto dir = make_repo_with_commit("c0");
+    std::string d = dir.string();
+    struct row { std::string line, path; int kind; };
+    std::vector<row> rows;
+    int n = mg_magit_refs_buffer(d.c_str(),
+        [](void *c, const char *l, int kind, const char *p, int) {
+            static_cast<std::vector<row>*>(c)->push_back(
+                {l, p ? p : "", kind});
+        }, &rows);
+    REQUIRE(n >= 3); // header + Branches section + >=1 branch row
+    bool section = false, starred = false, oid_path = false;
+    for (const auto &r : rows) {
+        if (r.kind == MG_LINE_SECTION &&
+            r.line.find("Branches (") != std::string::npos)
+            section = true;
+        if (r.kind == MG_LINE_BRANCH && r.line.rfind("* ", 0) == 0)
+            starred = true;
+        if (r.kind == MG_LINE_BRANCH && r.path.size() == 40 &&
+            r.path.find_first_not_of("0123456789abcdef") == std::string::npos)
+            oid_path = true;
+    }
+    CHECK(section);  // the Branches (N) header emitted
+    CHECK(starred);  // the checked-out branch is starred
+    CHECK(oid_path); // branch rows carry the tip OID (not the name)
+    fs::remove_all(dir);
+}
+
 TEST_CASE("resetting HEAD to a reflog oid moves HEAD there (reset-at-point path)")
 {
     // make_repo_full has one commit; add a second so HEAD@{1} != HEAD@{0}.
