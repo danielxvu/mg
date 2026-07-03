@@ -3703,3 +3703,51 @@ TEST_CASE("push_dry_run previews without mutating the remote and logs a $ entry"
     CHECK(logged);
     fs::remove_all(dir); fs::remove_all(bare);
 }
+
+TEST_CASE("refs_overview lists locals with ahead/behind vs HEAD, remotes absent, tags peeled")
+{
+    auto dir = make_repo_with_commit("base");
+    std::string d = dir.string();
+    auto run = [&](const std::string &c) {
+        return std::system(("git -C '" + d + "' " + c + " >/dev/null 2>&1").c_str());
+    };
+    // feature branches off base; then one commit on EACH side -> feature is
+    // ahead 1 (its commit) and behind 1 (HEAD's commit) of HEAD.
+    REQUIRE(run("branch feature") == 0);
+    REQUIRE(run("-c user.name=T -c user.email=t@e commit --allow-empty -m on-head") == 0);
+    REQUIRE(run("checkout -q feature") == 0);
+    REQUIRE(run("-c user.name=T -c user.email=t@e commit --allow-empty -m on-feature") == 0);
+    REQUIRE(run("checkout -q -") == 0); // back to the original branch (HEAD)
+    REQUIRE(run("-c user.name=T -c user.email=t@e tag -a v1 -m msg") == 0); // annotated
+
+    auto r = mg::git::refs_overview(d);
+    REQUIRE(r.has_value());
+    CHECK(!r->head_name.empty());
+    CHECK(r->head_oid.size() == 40);
+
+    const mg::git::ref_row *head = nullptr, *feat = nullptr;
+    for (const auto &b : r->locals) {
+        if (b.is_head) head = &b;
+        if (b.name == "feature") feat = &b;
+    }
+    REQUIRE(head != nullptr);
+    CHECK(head->name == r->head_name);
+    REQUIRE(feat != nullptr);
+    CHECK(feat->ahead == 1);  // on-feature
+    CHECK(feat->behind == 1); // on-head
+    CHECK(feat->oid.size() == 40);
+
+    CHECK(r->remotes.empty()); // no remotes configured
+    REQUIRE(r->tags.size() == 1);
+    CHECK(r->tags[0].name == "v1");
+    CHECK(r->tags[0].oid == r->head_oid); // annotated tag PEELED to the commit
+
+    // Detached HEAD: head_name empties, rows still listed.
+    REQUIRE(run("checkout -q --detach") == 0);
+    auto rd = mg::git::refs_overview(d);
+    REQUIRE(rd.has_value());
+    CHECK(rd->head_name.empty());
+    CHECK(!rd->head_oid.empty());
+    CHECK(rd->locals.size() == 2);
+    fs::remove_all(dir);
+}
