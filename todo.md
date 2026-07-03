@@ -331,10 +331,20 @@ absent). Keep this in sync with the README's "What it doesn't do (vs Magit)".
     fetch is now `f f`. `--all` fetches all remotes (argv omits origin).
 
 ### Medium value
-- [ ] **FM-LOG-RICH — fuller log buffer.** No `--decorate` ref coloring; no
-  `--all` multi-ref graph (HEAD only); pickaxe is repo-wide with no per-file
-  prompt. Add ref decoration (oid → pointing refs), an `--all` graph mode, and a
-  per-file pickaxe entry point.
+- [x] **FM-LOG-RICH — ref decoration + coloring.** ✅ DONE (branch
+  `fm-log-rich`): log rows show `(HEAD -> master, origin/main, tag: v1)` colored
+  by ref kind (HEAD cyan, local green, remote blue, tag yellow) on ALL log paths
+  — `%d` on the CLI query path, an engine `decorations()` oid→refs map (libgit2,
+  annotated tags peeled) on the default/per-file paths, and a grammar-based
+  colorizer joining `*magit-log*` to the per-cell color system. (The entry's old
+  "`--all` graph" claim was stale — `--all` + `--graph` already combined since
+  FM-TRANSIENT-DEPTH/FM-LP.)
+  Spec: `docs/superpowers/specs/2026-07-03-fm-log-rich-design.md`.
+  - [ ] **FM-LOG-PICKAXE-FILE (deferred)** — per-file pickaxe UX: `l s`/`l G`
+    prompt for an optional file scope (the engine already supports
+    `-S<term> -- <file>`).
+  - [ ] **FM-LOG-DECORATE-TOGGLE (deferred)** — a `--decorate` on/off infix in
+    the `l` transient (decoration is always-on today, like git's default).
 - [~] **FM-GIT-CMD — `:` run arbitrary git** (`magit-git-command`). IN PROGRESS
   (branch `fm-git-cmd`): `:` prompts (`eread`), tokenizes (quote-aware, no shell),
   runs captured via the existing `detail::run_git`, records a `$` `proclog` entry,
