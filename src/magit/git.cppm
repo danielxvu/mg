@@ -1740,11 +1740,8 @@ std::expected<std::map<std::string, std::string>, error> decorations(std::string
             detail::ref_ptr head(raw_head);
             const git_oid *o = git_reference_target(head.get());
             if (git_repository_head_detached(repo.get()) == 1) {
-                if (o != nullptr) {
-                    char hex[GIT_OID_HEXSZ + 1] = {0};
-                    git_oid_fmt(hex, o);
-                    by_oid[hex].head = "HEAD";
-                }
+                if (o != nullptr)
+                    by_oid[detail::full_oid(o)].head = "HEAD";
             } else if (const char *sh = git_reference_shorthand(head.get())) {
                 head_branch = sh; // its segment renders "HEAD -> <name>" below
             }
@@ -1766,13 +1763,13 @@ std::expected<std::map<std::string, std::string>, error> decorations(std::string
             const char *sh = git_reference_shorthand(ref.get());
             git_reference *raw_res = nullptr;
             if (sh == nullptr || git_reference_resolve(&raw_res, ref.get()) != 0)
-                continue; // symbolic remote HEAD (origin/HEAD) etc.: skip
+                continue; // unresolvable ref only; origin/HEAD resolves and
+                          // decorates, matching git --decorate
             detail::ref_ptr res(raw_res);
             const git_oid *o = git_reference_target(res.get());
             if (o == nullptr)
                 continue;
-            char hex[GIT_OID_HEXSZ + 1] = {0};
-            git_oid_fmt(hex, o);
+            std::string hex = detail::full_oid(o);
             if (type == GIT_BRANCH_LOCAL && sh == head_branch)
                 by_oid[hex].head = std::string("HEAD -> ") + sh;
             else if (type == GIT_BRANCH_LOCAL)
@@ -1802,11 +1799,9 @@ std::expected<std::map<std::string, std::string>, error> decorations(std::string
             if (sh == nullptr ||
                 git_reference_peel(&raw_obj, ref.get(), GIT_OBJECT_COMMIT) != 0)
                 continue; // tag of a non-commit (blob/tree): skip
-            std::unique_ptr<git_object,
-                decltype([](git_object *o) { git_object_free(o); })> obj(raw_obj);
-            char hex[GIT_OID_HEXSZ + 1] = {0};
-            git_oid_fmt(hex, git_object_id(obj.get()));
-            by_oid[hex].tag.emplace_back(std::string("tag: ") + sh);
+            detail::object_ptr obj(raw_obj);
+            by_oid[detail::full_oid(git_object_id(obj.get()))].tag.emplace_back(
+                std::string("tag: ") + sh);
         }
         if (rc != GIT_ITEROVER)
             return std::unexpected(last_error());
