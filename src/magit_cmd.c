@@ -149,6 +149,9 @@ static int	magit_log_note(int, int);
 static int	magit_reflog(int, int);
 static int	magit_reflog_refresh(int, int);
 static int	magit_reflog_build(struct buffer *);
+static int	magit_refs_build(struct buffer *);
+static int	magit_show_refs(int, int);
+static int	magit_refs_refresh(int, int);
 static int	magit_reflog_reset_soft(int, int);
 static int	magit_reflog_reset_mixed(int, int);
 static int	magit_reflog_reset_hard(int, int);
@@ -225,12 +228,13 @@ static int	magit_diff_context = 3;   /* current -U<n>; default matches git */
 static int	magit_diff_ignore_ws;     /* 0/1: -w flag */
 
 /*
- * Per-line oid map shared by *magit-log* AND *magit-reflog*.  The map is
- * rebuilt by magit_log_build(), magit_reflog_build(), and the async log-file
- * wake (MG_ASYNC_LOG_FILE).  magit_log_oid_bp records which buffer owns the
- * current map; magit_log_oid_at_point() returns NULL when curbp differs from
- * that owner so a stale map can never yield a wrong commit oid on a buffer
- * switch (C-x b / C-x o) without a rebuild.
+ * Per-line oid map shared by *magit-log*, *magit-reflog*, AND *magit-refs*.
+ * The map is rebuilt by magit_log_build(), magit_reflog_build(),
+ * magit_refs_build(), and the async log-file wake (MG_ASYNC_LOG_FILE).
+ * magit_log_oid_bp records which buffer owns the current map;
+ * magit_log_oid_at_point() returns NULL when curbp differs from that owner
+ * so a stale map can never yield a wrong commit oid on a buffer switch
+ * (C-x b / C-x o) without a rebuild.
  */
 #define MAGIT_OID_LEN 64
 static char		 magit_log_oid[MAGIT_MAX_LINES][MAGIT_OID_LEN];
@@ -451,6 +455,7 @@ static PF magit_s[] = { magit_stage };
 static PF magit_t[] = { magit_menu_tag };			/* t -> tag menu prefix */
 static PF magit_u[] = { magit_unstage };
 static PF magit_w[]     = { magit_diff_ws };		/* w: toggle -w (ignore whitespace) */
+static PF magit_y[]     = { magit_show_refs };		/* y: refs overview */
 static PF magit_z[] = { magit_menu_stash };			/* z -> stash menu prefix */
 static PF magit_plus[]  = { magit_diff_more };		/* +: more diff context */
 static PF magit_minus[] = { magit_diff_less };		/* -: less diff context */
@@ -641,6 +646,30 @@ static struct KEYMAPE (5) magit_reflogmap = {
 		{ 'g', 'g', reflog_g, NULL },			/* g: refresh */
 		{ 'q', 'q', reflog_q, NULL },			/* q: close */
 		{ 'x', 'x', reflog_x, NULL }			/* x: reset transient */
+	}
+};
+
+/*
+ * *magit-refs* keymap: RET shows the ref's tip commit (reuses magit_log_visit
+ * via the shared oid map), b opens the branch menu (checkout lives there),
+ * g refreshes, q closes. ESC prefix forwards to magit_metamap (M-n/M-p).
+ * Entries MUST be ascending: CCHR('M')=13, CCHR('[')=27, 'b'=98, 'g'=103,
+ * 'q'=113.
+ */
+static PF refs_ret[] = { magit_log_visit };	/* RET: show tip commit */
+static PF refs_b[]   = { magit_menu_branch };	/* b: branch menu */
+static PF refs_g[]   = { magit_refs_refresh };	/* g: refresh */
+static struct KEYMAPE (5) magrefsmap = {
+	5,
+	5,
+	rescan,
+	{
+		{ CCHR('M'), CCHR('M'), refs_ret, NULL },
+		{ CCHR('['), CCHR('['), reflog_esc,	/* ESC: meta prefix */
+		    (KEYMAP *)&magit_metamap },
+		{ 'b', 'b', refs_b, NULL },
+		{ 'g', 'g', refs_g, NULL },
+		{ 'q', 'q', reflog_q, NULL }
 	}
 };
 
@@ -1088,9 +1117,9 @@ magit_conflict_theirs(int f, int n)
 }
 
 /* Entries MUST stay in ascending key order -- doscan() relies on it. */
-static struct KEYMAPE (37) magitmap = {
-	37,
-	37,
+static struct KEYMAPE (38) magitmap = {
+	38,
+	38,
 	rescan,
 	{
 		{ CCHR('I'), CCHR('I'), magit_tab, NULL },	/* TAB: expand/collapse */
@@ -1130,6 +1159,7 @@ static struct KEYMAPE (37) magitmap = {
 		{ 't', 't', magit_t, NULL }, /* t: tag menu */
 		{ 'u', 'u', magit_u, NULL },
 		{ 'w', 'w', magit_w, NULL },			/* w: toggle -w (ignore whitespace) */
+		{ 'y', 'y', magit_y, NULL },			/* y: refs overview */
 		{ 'z', 'z', magit_z, NULL } /* z: stash menu */
 	}
 };
@@ -1352,6 +1382,7 @@ magit_status(int f, int n)
 		 * the commit-view buffer without ever going through `l`. */
 		maps_add((KEYMAP *)&maglogmap, "magit-log-mode");
 		maps_add((KEYMAP *)&magit_reflogmap, "magit-reflog-mode");
+		maps_add((KEYMAP *)&magrefsmap, "magit-refs-mode");
 		maps_add((KEYMAP *)&magcommitmap, "magit-commit-view-mode");
 		maps_add((KEYMAP *)&magprocessmap, "magit-process-mode");
 		maps_add((KEYMAP *)&magit_todomap, "magit-rebase-todo-mode");
@@ -1494,7 +1525,8 @@ magit_log_emit(void *ctx, const char *line, int kind, const char *path,
     int hunk)
 {
 	if (magit_log_count < MAGIT_MAX_LINES) {
-		if (kind == MG_LINE_COMMIT && path != NULL)
+		if ((kind == MG_LINE_COMMIT || kind == MG_LINE_BRANCH ||
+		    kind == MG_LINE_TAG) && path != NULL)
 			(void)strlcpy(magit_log_oid[magit_log_count], path,
 			    MAGIT_OID_LEN);
 		else
@@ -2560,6 +2592,69 @@ magit_reflog_refresh(int f, int n)
 	if ((bp = bfind("*magit-reflog*", FALSE)) == NULL)
 		return (FALSE);
 	return (magit_reflog_build(bp));
+}
+
+/* (Re)build the *magit-refs* buffer + the shared per-line oid map. */
+static int
+magit_refs_build(struct buffer *bp)
+{
+	struct mgwin	*wp;
+	char		 cwd[PATH_MAX];
+
+	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
+		return (FALSE);
+	(void)strlcpy(bp->b_cwd, cwd, sizeof(bp->b_cwd));
+	bp->b_flag |= BFIGNDIRTY;
+	if (bclear(bp) != TRUE)
+		return (FALSE);
+	bp->b_flag |= BFREADONLY;
+	magit_log_count = 0;	/* magit_log_emit refills the oid map */
+	(void)mg_magit_refs_buffer(cwd, magit_log_emit, bp);
+	bp->b_dotp = bfirstlp(bp);
+	bp->b_doto = 0;
+	for (wp = wheadp; wp != NULL; wp = wp->w_wndp)
+		if (wp->w_bufp == bp) {
+			wp->w_dotp = bp->b_dotp;
+			wp->w_doto = 0;
+			wp->w_markp = NULL;
+			wp->w_marko = 0;
+			wp->w_rflag |= WFFULL;
+		}
+	magit_log_oid_bp = bp;
+	return (TRUE);
+}
+
+/* y: open the refs overview in a read-only *magit-refs* buffer. */
+static int
+magit_show_refs(int f, int n)
+{
+	struct buffer	*bp;
+	struct mgwin	*wp;
+
+	if ((bp = bfind("*magit-refs*", TRUE)) == NULL)
+		return (FALSE);
+	if (magit_refs_build(bp) != TRUE)
+		return (FALSE);
+	if ((wp = popbuf(bp, WNONE)) == NULL)
+		return (FALSE);
+	curwp = wp;
+	curbp = bp;
+	wp->w_dotp = bp->b_dotp;
+	wp->w_doto = bp->b_doto;
+	bp->b_modes[1] = name_mode("magit-refs-mode");
+	bp->b_nmodes = 1;
+	return (TRUE);
+}
+
+/* g in *magit-refs*: rebuild in place. */
+static int
+magit_refs_refresh(int f, int n)
+{
+	struct buffer	*bp;
+
+	if ((bp = bfind("*magit-refs*", FALSE)) == NULL)
+		return (FALSE);
+	return (magit_refs_build(bp));
 }
 
 /* B: blame the file at point in a read-only *magit-blame* buffer. */

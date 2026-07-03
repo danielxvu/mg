@@ -240,6 +240,30 @@ TEST_CASE("l h opens the *magit-reflog* buffer from magit-status")
     CHECK(ok);
 }
 
+TEST_CASE("y opens the *magit-refs* overview")
+{
+    auto repo = make_repo();
+    const std::string repofile = (repo / "tracked.txt").string();
+    winsize ws{}; ws.ws_row = 40; ws.ws_col = 100;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) { ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", repofile.c_str(), (char *)nullptr); _exit(127); }
+    bool opened = false;
+    if (wait_for(master, "tracked.txt", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x1bxmagit-status\r", 15);
+        if (wait_for(master, "On branch", std::chrono::seconds(8))) {
+            (void)!::write(master, "\x18" "1", 2); // C-x 1
+            (void)!::write(master, "y", 1);        // open the refs overview
+            opened = wait_for(master, "Branches (", std::chrono::seconds(8));
+        }
+    }
+    quit_neomg(master, pid);
+    fs::remove_all(repo);
+    CHECK(opened); // y rendered *magit-refs* with the Branches section
+}
+
 /*
  * Regression test for the shared oid-map wrong-oid hazard (FM-REFLOG review):
  * open *magit-log* (builds oid map for that buffer), then open *magit-reflog*
