@@ -53,7 +53,8 @@ int mg_magit_modeline(char *buf, size_t buflen);
 #define MG_LINE_BRANCH    7   /* a local branch */
 #define MG_LINE_SECTION   8   /* a section header line (for M-n/M-p nav) */
 #define MG_LINE_COMMIT    9   /* a commit line in the log (path = full oid) */
-#define MG_LINE_TAG       10  /* a tag entry (path = tag name) */
+#define MG_LINE_TAG       10  /* a tag entry (path = name in status; peeled
+                                 * tip oid in *magit-refs* -- per-buffer) */
 #define MG_LINE_WORKTREE  11  /* a worktree entry (path = worktree name) */
 #define MG_LINE_SUBMODULE 12  /* a submodule entry (path = submodule path) */
 #define MG_LINE_CONFLICT  13  /* an unmerged path (path = file path) */
