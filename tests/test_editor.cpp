@@ -929,3 +929,40 @@ TEST_CASE("l transient lists the extra log args (--since/--reverse/--no-merges)"
     fs::remove_all(repo);
     CHECK(listed); // the new infixes render in the l transient
 }
+
+TEST_CASE("*magit-log* shows colored ref decoration on the HEAD row")
+{
+    auto repo = make_repo();
+    const std::string repofile = (repo / "tracked.txt").string();
+    winsize ws{}; ws.ws_row = 40; ws.ws_col = 100;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) { ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", repofile.c_str(), (char *)nullptr); _exit(127); }
+    bool decorated = false, colored = false;
+    if (wait_for(master, "tracked.txt", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x1bxmagit-status\r", 15);
+        if (wait_for(master, "On branch", std::chrono::seconds(8))) {
+            (void)!::write(master, "\x18" "1", 2); // C-x 1
+            (void)!::write(master, "ll", 2);       // l l: open *magit-log*
+            // The strict two-wait_for form (wait for "(HEAD -> ", then
+            // separately wait for the ESC[36m+HEAD run) is unreliable here:
+            // the colorizer emits the SGR switch exactly between '(' and 'H',
+            // so "(HEAD -> " is never a contiguous byte run once colored, and
+            // a single read() of the repaint can swallow the SGR bytes before
+            // the first wait_for returns, starving the second. Instead, drain
+            // the whole repaint into one buffer and search it for both
+            // needles. "HEAD ->" (no leading paren, no trailing space) is the
+            // exact 7-byte span the colorizer keeps as one uninterrupted run,
+            // so it survives coloring; ESC[36m immediately precedes it.
+            std::string out = drain_str(master, std::chrono::seconds(8));
+            decorated = out.find("HEAD ->") != std::string::npos;
+            colored = out.find("\x1b[36mHEAD") != std::string::npos;
+        }
+    }
+    quit_neomg(master, pid);
+    fs::remove_all(repo);
+    CHECK(decorated); // the log row carries (HEAD -> ...
+    CHECK(colored);   // ...and the colorizer painted HEAD cyan
+}
