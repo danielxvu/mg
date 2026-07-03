@@ -559,6 +559,11 @@ std::expected<std::vector<stash_entry>, error> stashes(std::string path);
 // The repository's local branches; one entry has is_head == true.
 std::expected<std::vector<branch_entry>, error> branches(std::string path);
 
+// FM-LOG-RICH: full oid -> composed ref decoration (no parens), e.g.
+// "HEAD -> master, origin/main, tag: v1". Segment order: the checked-out
+// branch (HEAD ->) first, then local branches, remote branches, tags.
+std::expected<std::map<std::string, std::string>, error> decorations(std::string repo);
+
 // Reapply stash `index` to the working tree, keeping it in the stash list.
 // Stash the working-tree + index changes away with `message` (magit's z z).
 std::expected<void, error> stash_push(std::string repo, std::string message);
@@ -1598,8 +1603,10 @@ log_query(std::string repo, log_options opts)
     if (!opts.until.empty())
         args.emplace_back("--until=" + opts.until);
     // Leading %x1f so --graph's art lands in field[0] and the same parser
-    // handles graph + non-graph lines uniformly.
-    args.emplace_back("--format=%x1f%H%x1f%h%x1f%s");
+    // handles graph + non-graph lines uniformly. %d = ref decoration
+    // (" (HEAD -> master, tag: v1)" or empty), its own field so the parser
+    // composes git-oneline order and skips it cleanly when empty.
+    args.emplace_back("--format=%x1f%H%x1f%h%x1f%d%x1f%s");
     if (!opts.range.empty())
         args.emplace_back(opts.range);
     if (!opts.file.empty()) {
@@ -1639,10 +1646,16 @@ log_query(std::string repo, log_options opts)
             f.push_back(line.substr(p, s - p));
             p = s + 1;
         }
-        if (f.size() >= 4) {
-            // f[0]=graph art, f[1]=full, f[2]=short, f[3]=summary
+        if (f.size() >= 5) {
+            // f[0]=graph art, f[1]=full, f[2]=short, f[3]=decoration, f[4]=summary
             log_row row;
-            row.text = f[0] + f[2] + " " + f[3];
+            // %d renders " (refs)" with a leading space, or "". Compose
+            // git-oneline order; undecorated rows stay byte-identical.
+            std::string dec = f[3];
+            if (!dec.empty() && dec.front() == ' ')
+                dec.erase(0, 1);
+            row.text = dec.empty() ? f[0] + f[2] + " " + f[4]
+                                   : f[0] + f[2] + " " + dec + " " + f[4];
             row.oid = f[1];
             rows.push_back(std::move(row));
         } else if (!line.empty()) {
@@ -1703,6 +1716,115 @@ std::expected<std::vector<branch_entry>, error> branches(std::string path)
     }
     if (rc != GIT_ITEROVER)
         return std::unexpected(last_error());
+    return out;
+}
+
+std::expected<std::map<std::string, std::string>, error> decorations(std::string path)
+{
+    detail::init_guard guard;
+    git_repository *raw_repo = nullptr;
+    if (git_repository_open_ext(&raw_repo, path.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr repo(raw_repo);
+
+    // Collect per-oid segments grouped by kind so composition order is
+    // head-branch, locals, remotes, tags regardless of iterator order.
+    struct segs { std::string head; std::vector<std::string> local, remote, tag; };
+    std::map<std::string, segs> by_oid;
+
+    // HEAD: symbolic -> remember the checked-out branch; detached -> "HEAD".
+    std::string head_branch;
+    {
+        git_reference *raw_head = nullptr;
+        if (git_repository_head(&raw_head, repo.get()) == 0) {
+            detail::ref_ptr head(raw_head);
+            const git_oid *o = git_reference_target(head.get());
+            if (git_repository_head_detached(repo.get()) == 1) {
+                if (o != nullptr) {
+                    char hex[GIT_OID_HEXSZ + 1] = {0};
+                    git_oid_fmt(hex, o);
+                    by_oid[hex].head = "HEAD";
+                }
+            } else if (const char *sh = git_reference_shorthand(head.get())) {
+                head_branch = sh; // its segment renders "HEAD -> <name>" below
+            }
+        }
+        // Unborn HEAD (empty repo): no decoration -- fall through.
+    }
+
+    // Branches, local + remote.
+    {
+        git_branch_iterator *raw_iter = nullptr;
+        if (git_branch_iterator_new(&raw_iter, repo.get(), GIT_BRANCH_ALL) != 0)
+            return std::unexpected(last_error());
+        detail::branch_iter_ptr iter(raw_iter);
+        git_reference *raw_ref = nullptr;
+        git_branch_t type;
+        int rc;
+        while ((rc = git_branch_next(&raw_ref, &type, iter.get())) == 0) {
+            detail::ref_ptr ref(raw_ref);
+            const char *sh = git_reference_shorthand(ref.get());
+            git_reference *raw_res = nullptr;
+            if (sh == nullptr || git_reference_resolve(&raw_res, ref.get()) != 0)
+                continue; // symbolic remote HEAD (origin/HEAD) etc.: skip
+            detail::ref_ptr res(raw_res);
+            const git_oid *o = git_reference_target(res.get());
+            if (o == nullptr)
+                continue;
+            char hex[GIT_OID_HEXSZ + 1] = {0};
+            git_oid_fmt(hex, o);
+            if (type == GIT_BRANCH_LOCAL && sh == head_branch)
+                by_oid[hex].head = std::string("HEAD -> ") + sh;
+            else if (type == GIT_BRANCH_LOCAL)
+                by_oid[hex].local.emplace_back(sh);
+            else
+                by_oid[hex].remote.emplace_back(sh);
+        }
+        if (rc != GIT_ITEROVER)
+            return std::unexpected(last_error());
+    }
+
+    // Tags, peeled to the commit (annotated tags decorate the tagged commit).
+    {
+        git_reference_iterator *raw_iter = nullptr;
+        if (git_reference_iterator_glob_new(&raw_iter, repo.get(),
+                                            "refs/tags/*") != 0)
+            return std::unexpected(last_error());
+        std::unique_ptr<git_reference_iterator,
+            decltype([](git_reference_iterator *i) { git_reference_iterator_free(i); })>
+            iter(raw_iter);
+        git_reference *raw_ref = nullptr;
+        int rc;
+        while ((rc = git_reference_next(&raw_ref, iter.get())) == 0) {
+            detail::ref_ptr ref(raw_ref);
+            const char *sh = git_reference_shorthand(ref.get());
+            git_object *raw_obj = nullptr;
+            if (sh == nullptr ||
+                git_reference_peel(&raw_obj, ref.get(), GIT_OBJECT_COMMIT) != 0)
+                continue; // tag of a non-commit (blob/tree): skip
+            std::unique_ptr<git_object,
+                decltype([](git_object *o) { git_object_free(o); })> obj(raw_obj);
+            char hex[GIT_OID_HEXSZ + 1] = {0};
+            git_oid_fmt(hex, git_object_id(obj.get()));
+            by_oid[hex].tag.emplace_back(std::string("tag: ") + sh);
+        }
+        if (rc != GIT_ITEROVER)
+            return std::unexpected(last_error());
+    }
+
+    // Compose: head-branch first, then locals, remotes, tags.
+    std::map<std::string, std::string> out;
+    for (auto &[oid, s] : by_oid) {
+        std::string dec = s.head;
+        for (auto *group : {&s.local, &s.remote, &s.tag})
+            for (auto &name : *group) {
+                if (!dec.empty())
+                    dec += ", ";
+                dec += name;
+            }
+        if (!dec.empty())
+            out.emplace(oid, std::move(dec));
+    }
     return out;
 }
 
