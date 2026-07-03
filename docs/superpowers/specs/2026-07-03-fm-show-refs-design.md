@@ -115,7 +115,8 @@ per-buffer — documented at both emit sites.
   starred; counts still computed vs the detached oid.
 - No remotes / no tags: those sections are omitted entirely.
 - `git_graph_ahead_behind` failure on one ref: that row lists without counts.
-- RET on a section header / blank line: "Not on a ref" message, no action.
+- RET on a section header / blank line: the reused `magit_log_visit` action
+  reports "Not on a commit" (its existing message), no action taken.
 
 ## Testing
 
