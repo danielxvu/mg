@@ -829,6 +829,24 @@ TEST_CASE("mg_magit_log_buffer emits commit lines carrying the full oid")
     fs::remove_all(dir);
 }
 
+TEST_CASE("mg_magit_log_buffer decorates the HEAD row (libgit2 path)")
+{
+    auto dir = make_repo_with_commit("c0");
+    std::string d = dir.string();
+    std::vector<std::string> lines;
+    int n = mg_magit_log_buffer(d.c_str(), 10,
+        [](void *c, const char *l, int kind, const char *, int) {
+            if (kind == MG_LINE_COMMIT)
+                static_cast<std::vector<std::string>*>(c)->push_back(l);
+        }, &lines);
+    REQUIRE(n >= 1);
+    REQUIRE(!lines.empty());
+    // The tip row is decorated by the branch ref via the decorations() map --
+    // this is the DEFAULT log path (libgit2), not the CLI %d path.
+    CHECK(lines.front().find("(HEAD -> ") != std::string::npos);
+    fs::remove_all(dir);
+}
+
 TEST_CASE("mg_magit_log_file_buffer emits only commits that touched the file")
 {
     auto dir = make_temp_dir();
