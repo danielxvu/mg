@@ -3215,6 +3215,13 @@ magit_section_move(int dir)
 {
 	int	cur, i;
 
+	/* magit_meta is filled only for *magit-status*; from any other buffer
+	 * (e.g. the refs or reflog buffer, reached via the shared metamap
+	 * ESC-prefix) its section offsets index the wrong buffer's rows -- the
+	 * same stale-meta hazard magit_at_point() guards. Nav is inert there
+	 * rather than jumping to a bogus line. */
+	if (curbp != magit_meta_bp)
+		return (FALSE);
 	if ((cur = magit_line_index()) < 0)
 		return (FALSE);
 	for (i = cur + dir; i >= 0 && i < magit_meta_count; i += dir) {
