@@ -12,6 +12,7 @@
  *
  * This file is in the public domain.
  */
+#include <ctype.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -206,13 +207,14 @@ static struct {
 static int	magit_commit_meta_count;
 
 /*
- * The two syntax-colored buffers, cached so display.c's per-cell hook can gate
+ * The syntax-colored buffers, cached so display.c's per-cell hook can gate
  * on a pointer compare instead of a bfind() linked-list walk per cell. Set when
- * each buffer is (re)built (status build path / magit_show_rev); a NULL means
- * "not built yet" and never matches a real buffer.
+ * each buffer is (re)built (status build path / magit_show_rev / log build); a
+ * NULL means "not built yet" and never matches a real buffer.
  */
 static struct buffer	*magit_status_bp;
 static struct buffer	*magit_commit_bp;
+static struct buffer	*magit_log_bp;		/* *magit-log*: decoration coloring */
 
 /* Paths whose diffs are currently expanded inline. */
 static char	magit_expanded[MAGIT_MAX_EXPANDED][PATH_MAX];
@@ -1440,6 +1442,10 @@ magit_async_apply(void)
 		if (kind == MG_ASYNC_LOG_FILE) {
 			magit_log_count = 0;	/* magit_log_emit rebuilds the oid map */
 			magit_log_oid_bp = bp;	/* record the owning buffer */
+			magit_cell_color_reset(); /* *magit-log* is a color buffer:
+						   * the bclear above freed lines
+						   * whose addresses may be reused;
+						   * drop the per-line memo */
 			(void)mg_magit_async_take(magit_log_emit, bp);
 		} else {
 			(void)mg_magit_async_take(magit_plain_emit, bp);
@@ -1565,6 +1571,8 @@ magit_log_build(struct buffer *bp)
 	bp->b_flag |= BFIGNDIRTY;
 	if (bclear(bp) != TRUE)
 		return (FALSE);
+	magit_log_bp = bp;		/* gate display.c's color hook on this */
+	magit_cell_color_reset();	/* freed lines may be reused; drop memo */
 	bp->b_flag |= BFREADONLY;
 
 	magit_log_count = 0;
@@ -1682,14 +1690,101 @@ magit_cell_color_reset(void)
 	magit_color_cached_is_diff = 0;
 }
 
-/* True for the syntax-colored buffers (status / commit / ediff panes). Lets
- * display.c's per-cell hook gate on pointer compares instead of bfind(). */
+/* True for the syntax-colored buffers (status / commit / log / ediff panes).
+ * Lets display.c's per-cell hook gate on pointer compares instead of bfind(). */
 int
 magit_is_color_buffer(struct buffer *bp)
 {
 	return (bp != NULL && (bp == magit_status_bp || bp == magit_commit_bp ||
+	    bp == magit_log_bp ||
 	    bp == magit_ediff_merged_bp || bp == magit_ediff_ours_bp ||
 	    bp == magit_ediff_theirs_bp));
+}
+
+/* Ref-decoration classifier for a *magit-log* row: find the "(refs)" group
+ * that immediately follows the short-oid token, validate every comma-separated
+ * segment against the ref grammar, and fill kindcol[start..end) with palette
+ * kinds (HEAD/-> = 4 cyan, tag = 5 yellow, remote = 1 blue, local = 2 green).
+ * Returns 1 if the line got colors, 0 to leave it uncolored. Any grammar
+ * violation aborts coloring entirely -- cosmetic-only, so never color a
+ * summary that merely looks paren-ish. */
+static int
+magit_log_decor_fill(const char *text, int len)
+{
+	int	i = 0, tok, oidlen, start, end, j;
+
+	/* Skip graph art: scan to the first token of 7-12 hex chars. Graph
+	 * glyphs (*, |, /, \) never parse as hex. */
+	while (i < len) {
+		while (i < len && text[i] == ' ')
+			i++;
+		tok = i;
+		while (i < len && text[i] != ' ')
+			i++;
+		oidlen = i - tok;
+		if (oidlen >= 7 && oidlen <= 12) {
+			for (j = tok; j < i; j++)
+				if (!isxdigit((unsigned char)text[j]))
+					break;
+			if (j == i)
+				break;			/* the oid token */
+		}
+		if (oidlen == 1 && (text[tok] == '*' || text[tok] == '|' ||
+		    text[tok] == '/' || text[tok] == '\\'))
+			continue;			/* graph art: keep scanning */
+		return (0);				/* connector/odd line */
+	}
+	if (i + 1 >= len || text[i] != ' ' || text[i + 1] != '(')
+		return (0);				/* no decoration group */
+	start = i + 1;					/* the '(' */
+	end = start + 1;
+	while (end < len && text[end] != ')')
+		end++;
+	if (end >= len)
+		return (0);				/* unterminated */
+
+	/* Validate + classify the comma-separated segments inside the parens. */
+	i = start + 1;
+	while (i < end) {
+		int	seg = i, segend = i, k, kind;
+
+		while (segend < end && text[segend] != ',')
+			segend++;
+		if (segend - seg >= 8 && strncmp(text + seg, "HEAD -> ", 8) == 0) {
+			for (k = seg; k < seg + 7 && k < 1024; k++)
+				magit_color_kindcol[k] = 4;	/* "HEAD ->" cyan */
+			seg += 8;				/* target classified below */
+			kind = memchr(text + seg, '/',
+			    (size_t)(segend - seg)) != NULL ? 1 : 2;
+		} else if (segend - seg == 4 &&
+		    strncmp(text + seg, "HEAD", 4) == 0) {
+			kind = 4;				/* detached HEAD */
+		} else if (segend - seg > 5 &&
+		    strncmp(text + seg, "tag: ", 5) == 0) {
+			kind = 5;				/* whole "tag: name" yellow */
+		} else {
+			kind = memchr(text + seg, '/',
+			    (size_t)(segend - seg)) != NULL ? 1 : 2;
+		}
+		for (k = seg; k < segend; k++) {
+			unsigned char c = (unsigned char)text[k];
+
+			if (!(isalnum(c) || c == '_' || c == '-' || c == '/' ||
+			    c == '.' || c == ':' || c == ' '))
+				goto reject;		/* not a ref char */
+		}
+		for (k = seg; k < segend && k < 1024; k++)
+			magit_color_kindcol[k] = (uint8_t)kind;
+		i = segend;
+		if (i < end && text[i] == ',')
+			i++;
+		if (i < end && text[i] == ' ')
+			i++;
+	}
+	return (1);
+reject:
+	memset(magit_color_kindcol, 0, sizeof(magit_color_kindcol));
+	return (0);
 }
 
 /*
@@ -1717,6 +1812,25 @@ magit_cell_color(struct buffer *bp, struct line *lp, int ci)
 		 * All per-line work (including any list walk) lives inside this block;
 		 * subsequent cells return directly from kindcol without entering here.
 		 */
+		if (bp == magit_log_bp) {
+			/* *magit-log*: color the ref decoration, not diff
+			 * syntax. Same memo pattern as the diff path: parse
+			 * once on the first cell, O(1) lookups after.
+			 * cached_is_diff doubles as "kindcol valid". */
+			text = ltext(lp);
+			len = llength(lp);
+			memset(magit_color_kindcol, 0,
+			    sizeof(magit_color_kindcol));
+			magit_color_cached_lp = lp;
+			magit_color_cached_path = NULL;
+			magit_color_cached_is_diff =
+			    magit_log_decor_fill(text, len);
+			if (!magit_color_cached_is_diff)
+				return (0);
+			return (ci >= 0 && ci < 1024) ?
+			    magit_color_kindcol[ci] : 0;
+		}
+
 		path = NULL;
 		is_diff = 0;
 

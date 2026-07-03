@@ -989,9 +989,17 @@ extern "C" int mg_magit_log_buffer(const char *repo_path, int n_commits,
     auto commits = mg::git::recent_commits(repo_path, n_commits);
     if (!commits)
         return 0;
+    // FM-LOG-RICH: same "(refs)" decoration the CLI %d path shows.
+    auto decs = mg::git::decorations(repo_path);
     for (const auto &c : *commits) {
-        emit(ctx, (c.short_oid + " " + c.summary).c_str(), MG_LINE_COMMIT,
-             c.oid.c_str(), -1);
+        std::string text = c.short_oid + " ";
+        if (decs) {
+            auto it = decs->find(c.oid);
+            if (it != decs->end())
+                text += "(" + it->second + ") ";
+        }
+        text += c.summary;
+        emit(ctx, text.c_str(), MG_LINE_COMMIT, c.oid.c_str(), -1);
         ++n;
     }
     return n;
@@ -1069,9 +1077,17 @@ extern "C" int mg_magit_log_file_buffer(const char *repo_path, const char *file,
     auto commits = mg::git::log_file(repo_path, file, n_commits);
     if (!commits)
         return 0;
+    // FM-LOG-RICH: same "(refs)" decoration the CLI %d path shows.
+    auto decs = mg::git::decorations(repo_path);
     for (const auto &c : *commits) {
-        emit(ctx, (c.short_oid + " " + c.summary).c_str(), MG_LINE_COMMIT,
-             c.oid.c_str(), -1);
+        std::string text = c.short_oid + " ";
+        if (decs) {
+            auto it = decs->find(c.oid);
+            if (it != decs->end())
+                text += "(" + it->second + ") ";
+        }
+        text += c.summary;
+        emit(ctx, text.c_str(), MG_LINE_COMMIT, c.oid.c_str(), -1);
         ++n;
     }
     return n;

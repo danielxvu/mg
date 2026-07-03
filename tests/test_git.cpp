@@ -2374,6 +2374,54 @@ TEST_CASE("log_query --since/--until/--reverse/--no-merges/--merges")
     fs::remove_all(dir);
 }
 
+TEST_CASE("log_query decorates ref-pointed rows and leaves others byte-identical")
+{
+    auto dir = make_repo_with_commit("first");
+    std::string d = dir.string();
+    auto run = [&](const std::string &c) {
+        return std::system(("git -C '" + d + "' " + c + " >/dev/null 2>&1").c_str());
+    };
+    REQUIRE(run("-c user.name=T -c user.email=t@e commit --allow-empty -m second") == 0);
+    REQUIRE(run("tag v1") == 0); // lightweight tag at HEAD
+
+    auto r = mg::git::log_query(d, mg::git::log_options{});
+    REQUIRE(r.has_value());
+    REQUIRE(r->size() >= 2);
+    const std::string &head = (*r)[0].text;
+    CHECK(head.find("(HEAD -> ") != std::string::npos);
+    CHECK(head.find("tag: v1") != std::string::npos);
+    CHECK(head.find(") second") != std::string::npos); // decoration precedes summary
+    const std::string &plain = (*r)[1].text; // no refs point at "first"
+    CHECK(plain.find('(') == std::string::npos);
+    CHECK(plain.find("first") != std::string::npos);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("decorations maps tip oid to HEAD/branch/tag; peels annotated tags")
+{
+    auto dir = make_repo_with_commit("base");
+    std::string d = dir.string();
+    auto run = [&](const std::string &c) {
+        return std::system(("git -C '" + d + "' " + c + " >/dev/null 2>&1").c_str());
+    };
+    REQUIRE(run("-c user.name=T -c user.email=t@e tag -a v2 -m annotated") == 0);
+
+    auto rows = mg::git::log_query(d, mg::git::log_options{}); // fetch the tip oid
+    REQUIRE(rows.has_value());
+    REQUIRE(!rows->empty());
+    const std::string tip = (*rows)[0].oid;
+
+    auto m = mg::git::decorations(d);
+    REQUIRE(m.has_value());
+    auto it = m->find(tip);
+    REQUIRE(it != m->end());
+    CHECK(it->second.find("HEAD -> ") != std::string::npos);
+    CHECK(it->second.find("tag: v2") != std::string::npos); // annotated tag PEELED to the commit
+    // A fabricated oid is absent.
+    CHECK(m->find(std::string(40, '0')) == m->end());
+    fs::remove_all(dir);
+}
+
 TEST_CASE("submodules lists each registered submodule's name and path")
 {
     auto parent = make_repo_with_commit("base");
