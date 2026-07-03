@@ -1442,6 +1442,10 @@ magit_async_apply(void)
 		if (kind == MG_ASYNC_LOG_FILE) {
 			magit_log_count = 0;	/* magit_log_emit rebuilds the oid map */
 			magit_log_oid_bp = bp;	/* record the owning buffer */
+			magit_cell_color_reset(); /* *magit-log* is a color buffer:
+						   * the bclear above freed lines
+						   * whose addresses may be reused;
+						   * drop the per-line memo */
 			(void)mg_magit_async_take(magit_log_emit, bp);
 		} else {
 			(void)mg_magit_async_take(magit_plain_emit, bp);
