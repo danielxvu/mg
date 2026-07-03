@@ -201,6 +201,11 @@ static struct {
 	char	path[PATH_MAX];
 } magit_meta[MAGIT_MAX_LINES];
 static int	magit_meta_count;
+/*
+ * Buffer the meta array was last built for; magit_at_point returns nothing
+ * when curbp differs, so stale meta can never target the wrong buffer's rows.
+ */
+static struct buffer	*magit_meta_bp;
 
 /* Per-line kind/path for the most recent *magit-commit* render. */
 static struct {
@@ -1328,6 +1333,7 @@ magit_build(struct buffer *bp)
 	bp->b_flag |= BFREADONLY;
 
 	magit_status_bp = bp;		/* gate display.c's color hook on this */
+	magit_meta_bp = bp;		/* gate magit_at_point() on this */
 	magit_cell_color_reset();	/* freed lines may be reused; drop memo */
 	magit_meta_count = 0;
 	magit_skip = 0;
@@ -2715,9 +2721,10 @@ magit_log_oid_at_point(void)
 	struct line	*lp;
 	int		 idx = 0;
 
-	/* Guard: the oid map is shared by *magit-log* and *magit-reflog*.  If
-	 * the user switched buffers (C-x b / C-x o) without rebuilding, the
-	 * map belongs to a different buffer and must not be used. */
+	/* Guard: the oid map is shared by *magit-log*, *magit-reflog*, and
+	 * *magit-refs*.  If the user switched buffers (C-x b / C-x o) without
+	 * rebuilding, the map belongs to a different buffer and must not be
+	 * used. */
 	if (curbp != magit_log_oid_bp)
 		return (NULL);
 	for (lp = bfirstlp(curbp);
@@ -2869,6 +2876,15 @@ magit_at_point(char **path_out, int *hunk_out)
 	struct line	*lp;
 	int		 idx = 0;
 
+	/* Guard: magit_meta is filled only by magit_build() for *magit-status*.
+	 * If curbp is some other buffer (e.g. *magit-refs*, which has its own
+	 * per-line layout), the map belongs to a different buffer and must not
+	 * be used -- otherwise a branch-menu action there could resolve against
+	 * a stale status-buffer row and act on the wrong ref. */
+	if (curbp != magit_meta_bp) {
+		*hunk_out = -1;
+		return (MG_LINE_OTHER);
+	}
 	for (lp = bfirstlp(curbp);
 	    lp != curwp->w_dotp && lp != curbp->b_headp; lp = lforw(lp))
 		idx++;
