@@ -356,9 +356,25 @@ absent). Keep this in sync with the README's "What it doesn't do (vs Magit)".
   - [ ] **FM-PROCLOG-CAP (deferred from FM-GIT-CMD)** — truncate a captured
     entry's output at N KB with a "… (truncated)" marker so a `git log` or
     `git diff` over a large repo doesn't blow up the `*magit-process*` buffer.
-- [ ] **FM-SHOW-REFS — `y` refs overview** (`magit-show-refs`): a `*magit-refs*`
-  buffer of local branches, remotes, and tags with ahead/behind vs HEAD
-  (`git_branch_iterator` + `git_graph_ahead_behind`).
+- [x] **FM-SHOW-REFS — `y` refs overview** ✅ DONE (branch `fm-show-refs`): a
+  `*magit-refs*` buffer of local branches, remotes, and tags with ahead/behind
+  vs HEAD. `RET` shows a ref's tip commit (reuses the log's oid-map machinery),
+  `b` opens the branch menu, `g`/`q` refresh/close. Engine `refs_overview()`
+  (branch iterator + peel + `git_graph_ahead_behind`); bridge
+  `mg_magit_refs_buffer`; editor as the 3rd shared-oid-map user. A whole-branch
+  review caught + fixed a stale-cross-buffer-meta hazard: `magit_at_point` AND
+  `magit_section_move` are now owner-gated (`magit_meta_bp`).
+  Spec: `docs/superpowers/specs/2026-07-03-fm-show-refs-design.md`.
+  - [ ] **FM-REFS-CHECKOUT (deferred)** — checkout-at-point from `*magit-refs*`
+    rows (`b b` is inert there today: rows carry the tip oid, not a name, and
+    the meta gate blocks status-buffer resolution). Needs name-carrying refs
+    meta or a refs-local at-point lookup.
+  - [ ] **FM-REFS-SECTIONS (deferred)** — refs-local M-n/M-p section nav (it is
+    inert from `*magit-refs*` today, since `magit_meta` is status-only).
+  - [ ] **FM-REFS-COLOR (deferred)** — color the refs buffer (local green /
+    remote blue / tag yellow), reusing the FM-LOG-RICH palette.
+  - [ ] **FM-REFS-MORE (deferred)** — per-remote sub-sections; `k` delete-branch
+    from the refs buffer; comparison-ref selection; `y` as a transient.
 - [ ] **FM-PROCLOG-2 — log hunk/region staging** (FM-PROCESS-LOG follow-up).
   `stage_hunk`/`unstage_hunk`/`stage_region`/`unstage_region`/`discard_region`
   log nothing today; the engine knows the path + hunk, so log them as

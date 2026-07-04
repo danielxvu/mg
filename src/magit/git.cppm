@@ -373,6 +373,25 @@ struct branch_entry {
     bool is_head;            // true for the currently checked-out branch
 };
 
+// FM-SHOW-REFS: one row of the `y` refs overview -- a local/remote branch or
+// a tag.
+struct ref_row {
+    std::string name;     // shorthand: "master", "origin/master", "v1.0"
+    std::string oid;      // full tip oid (tags: peeled to the commit)
+    bool        is_head = false; // locals only
+    long        ahead  = -1; // commits on this ref not on HEAD (-1 = unknown)
+    long        behind = -1; // commits on HEAD not on this ref (-1 = unknown)
+};
+
+// The full refs overview: HEAD's identity + upstream, then locals, remotes,
+// tags. An unborn HEAD (fresh `git init`) yields an empty, successful result.
+struct refs_overview_result {
+    std::string head_name;   // "master"; "" when detached/unborn
+    std::string head_oid;    // "" when unborn
+    std::string upstream;    // HEAD's upstream shorthand, "" if none
+    std::vector<ref_row> locals, remotes, tags;
+};
+
 struct worktree_entry {
     std::string name;
     std::string path;
@@ -558,6 +577,10 @@ std::expected<std::vector<stash_entry>, error> stashes(std::string path);
 
 // The repository's local branches; one entry has is_head == true.
 std::expected<std::vector<branch_entry>, error> branches(std::string path);
+
+// FM-SHOW-REFS: all local/remote branches (ahead/behind vs HEAD) and tags
+// (peeled to commits), for the `y` refs overview buffer.
+std::expected<refs_overview_result, error> refs_overview(std::string path);
 
 // FM-LOG-RICH: full oid -> composed ref decoration (no parens), e.g.
 // "HEAD -> master, origin/main, tag: v1". Segment order: the checked-out
@@ -1716,6 +1739,115 @@ std::expected<std::vector<branch_entry>, error> branches(std::string path)
     }
     if (rc != GIT_ITEROVER)
         return std::unexpected(last_error());
+    return out;
+}
+
+std::expected<refs_overview_result, error> refs_overview(std::string path)
+{
+    detail::init_guard guard;
+    git_repository *raw_repo = nullptr;
+    if (git_repository_open_ext(&raw_repo, path.c_str(), 0, nullptr) != 0)
+        return std::unexpected(last_error());
+    detail::repo_ptr repo(raw_repo);
+
+    refs_overview_result out;
+
+    // HEAD: unborn -> empty result (a valid state, not an error).
+    const git_oid *head_oid = nullptr;
+    git_reference *raw_head = nullptr;
+    int hrc = git_repository_head(&raw_head, repo.get());
+    if (hrc == GIT_EUNBORNBRANCH || hrc == GIT_ENOTFOUND)
+        return out;
+    if (hrc != 0)
+        return std::unexpected(last_error());
+    detail::ref_ptr head(raw_head);
+    head_oid = git_reference_target(head.get());
+    if (head_oid != nullptr)
+        out.head_oid = detail::full_oid(head_oid);
+    if (git_repository_head_detached(repo.get()) != 1)
+        if (const char *sh = git_reference_shorthand(head.get()))
+            out.head_name = sh;
+
+    // HEAD's upstream shorthand (for the starred row's annotation).
+    if (!out.head_name.empty()) {
+        git_reference *raw_up = nullptr;
+        if (git_branch_upstream(&raw_up, head.get()) == 0) {
+            detail::ref_ptr up(raw_up);
+            if (const char *sh = git_reference_shorthand(up.get()))
+                out.upstream = sh;
+        }
+    }
+
+    // Branches, local + remote. Symbolic refs (origin/HEAD) are noise in this
+    // listing -- skip by TYPE (resolve would succeed for them; see FM-LOG-RICH).
+    {
+        git_branch_iterator *raw_iter = nullptr;
+        if (git_branch_iterator_new(&raw_iter, repo.get(), GIT_BRANCH_ALL) != 0)
+            return std::unexpected(last_error());
+        detail::branch_iter_ptr iter(raw_iter);
+        git_reference *raw_ref = nullptr;
+        git_branch_t type;
+        int rc;
+        while ((rc = git_branch_next(&raw_ref, &type, iter.get())) == 0) {
+            detail::ref_ptr ref(raw_ref);
+            if (git_reference_type(ref.get()) == GIT_REFERENCE_SYMBOLIC)
+                continue;
+            const char *sh = git_reference_shorthand(ref.get());
+            const git_oid *o = git_reference_target(ref.get());
+            if (sh == nullptr || o == nullptr)
+                continue;
+            ref_row row;
+            row.name = sh;
+            row.oid = detail::full_oid(o);
+            row.is_head = (type == GIT_BRANCH_LOCAL &&
+                           git_branch_is_head(ref.get()) == 1);
+            // Counts vs HEAD (ahead = on ref, not HEAD). Skip for HEAD's own
+            // row (0/0 by definition) and when HEAD is unborn-oid.
+            if (!row.is_head && head_oid != nullptr) {
+                std::size_t a = 0, b = 0;
+                if (git_graph_ahead_behind(&a, &b, repo.get(), o,
+                                           head_oid) == 0) {
+                    row.ahead = static_cast<long>(a);
+                    row.behind = static_cast<long>(b);
+                }
+            } else if (row.is_head) {
+                row.ahead = 0;
+                row.behind = 0;
+            }
+            (type == GIT_BRANCH_LOCAL ? out.locals : out.remotes)
+                .push_back(std::move(row));
+        }
+        if (rc != GIT_ITEROVER)
+            return std::unexpected(last_error());
+    }
+
+    // Tags, peeled to commits (the decorations() idiom); no counts.
+    {
+        git_reference_iterator *raw_iter = nullptr;
+        if (git_reference_iterator_glob_new(&raw_iter, repo.get(),
+                                            "refs/tags/*") != 0)
+            return std::unexpected(last_error());
+        std::unique_ptr<git_reference_iterator,
+            decltype([](git_reference_iterator *i) { git_reference_iterator_free(i); })>
+            iter(raw_iter);
+        git_reference *raw_ref = nullptr;
+        int rc;
+        while ((rc = git_reference_next(&raw_ref, iter.get())) == 0) {
+            detail::ref_ptr ref(raw_ref);
+            const char *sh = git_reference_shorthand(ref.get());
+            git_object *raw_obj = nullptr;
+            if (sh == nullptr ||
+                git_reference_peel(&raw_obj, ref.get(), GIT_OBJECT_COMMIT) != 0)
+                continue; // tag of a non-commit: skip
+            detail::object_ptr obj(raw_obj);
+            ref_row row;
+            row.name = sh;
+            row.oid = detail::full_oid(git_object_id(obj.get()));
+            out.tags.push_back(std::move(row));
+        }
+        if (rc != GIT_ITEROVER)
+            return std::unexpected(last_error());
+    }
     return out;
 }
 

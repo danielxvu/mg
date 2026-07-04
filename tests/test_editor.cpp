@@ -240,6 +240,92 @@ TEST_CASE("l h opens the *magit-reflog* buffer from magit-status")
     CHECK(ok);
 }
 
+TEST_CASE("y opens the *magit-refs* overview")
+{
+    auto repo = make_repo();
+    const std::string repofile = (repo / "tracked.txt").string();
+    winsize ws{}; ws.ws_row = 40; ws.ws_col = 100;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) { ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", repofile.c_str(), (char *)nullptr); _exit(127); }
+    bool opened = false;
+    if (wait_for(master, "tracked.txt", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x1bxmagit-status\r", 15);
+        if (wait_for(master, "On branch", std::chrono::seconds(8))) {
+            (void)!::write(master, "\x18" "1", 2); // C-x 1
+            (void)!::write(master, "y", 1);        // open the refs overview
+            opened = wait_for(master, "Branches (", std::chrono::seconds(8));
+        }
+    }
+    quit_neomg(master, pid);
+    fs::remove_all(repo);
+    CHECK(opened); // y rendered *magit-refs* with the Branches section
+}
+
+/*
+ * Regression test for the magit_meta owner-gate (review of FM-SHOW-REFS):
+ * magit_at_point() resolves the row under point via the *magit-status*-only
+ * magit_meta[] array, with no owner-buffer check. Invoked from *magit-refs*
+ * (whose own per-line layout is unrelated), it used to index that STALE
+ * array at the refs buffer's line position -- so `b b` (checkout) or `b k`
+ * (delete) could act on the wrong branch entirely.
+ *
+ * The repo has exactly 8 local branches (the default + 7 extras) and no
+ * other branch/upstream/stash state, so *magit-status*'s line layout is
+ * pinned: 0 On branch, 1 Head:, 2 blank, 3 Untracked files (1), 4
+ * untracked.txt, 5 blank, 6 Recent commits, 7 <commit summary>, 8 blank, 9
+ * Branches (8), 10.. the 8 branch rows. magit_meta[10] is therefore always
+ * a real MG_LINE_BRANCH row -- the stale target this bug would resolve to.
+ *
+ * *magit-refs* for the same repo has only 11 lines (0..10): 0 the "Refs
+ * (HEAD: ...)" header, 1 blank, 2 "Branches (8)", 3..10 the 8 branch rows.
+ * Moving point to the LAST line (10 C-n presses from the top) makes
+ * magit_at_point's line-index walk over *magit-refs* produce idx == 10 --
+ * the same index that, pre-fix, hits a real branch row in the stale status
+ * meta, so `b b` would silently check out that (wrong) branch with no
+ * echoed message at all. Post-fix, the owner gate (curbp != magit_meta_bp)
+ * fires unconditionally and `b b` reports "Not on a branch".
+ */
+TEST_CASE("b b in *magit-refs* does not act on stale status meta")
+{
+    auto repo = make_repo(); // git repo, 1 commit "init", untracked.txt present
+    for (int i = 0; i < 7; ++i)
+        sh(repo.string(), "git branch extra" + std::to_string(i)); // 8 branches total
+    const std::string repofile = (repo / "tracked.txt").string();
+
+    winsize ws{}; ws.ws_row = 40; ws.ws_col = 100;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) {
+        ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", repofile.c_str(), (char *)nullptr);
+        _exit(127);
+    }
+    bool ok = false;
+    if (wait_for(master, "tracked.txt", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x1bxmagit-status\r", 15);
+        // Confirm the 8-branch layout rendered (pins magit_meta[10] to a
+        // real branch row) before switching to *magit-refs*.
+        if (wait_for(master, "Branches (8)", std::chrono::seconds(8))) {
+            (void)!::write(master, "\x18" "1", 2); // C-x 1
+            (void)!::write(master, "y", 1);        // open *magit-refs*
+            if (wait_for(master, "Branches (", std::chrono::seconds(8))) {
+                for (int i = 0; i < 10; ++i)
+                    (void)!::write(master, "\x0e", 1); // C-n x10: to row 10
+                (void)!::write(master, "bb", 2); // b (branch menu) b (checkout)
+                ok = wait_for(master, "Not on a branch",
+                    std::chrono::seconds(8));
+            }
+        }
+    }
+    quit_neomg(master, pid);
+    fs::remove_all(repo);
+    CHECK(ok);
+}
+
 /*
  * Regression test for the shared oid-map wrong-oid hazard (FM-REFLOG review):
  * open *magit-log* (builds oid map for that buffer), then open *magit-reflog*

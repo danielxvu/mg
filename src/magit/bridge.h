@@ -53,7 +53,8 @@ int mg_magit_modeline(char *buf, size_t buflen);
 #define MG_LINE_BRANCH    7   /* a local branch */
 #define MG_LINE_SECTION   8   /* a section header line (for M-n/M-p nav) */
 #define MG_LINE_COMMIT    9   /* a commit line in the log (path = full oid) */
-#define MG_LINE_TAG       10  /* a tag entry (path = tag name) */
+#define MG_LINE_TAG       10  /* a tag entry (path = name in status; peeled
+                                 * tip oid in *magit-refs* -- per-buffer) */
 #define MG_LINE_WORKTREE  11  /* a worktree entry (path = worktree name) */
 #define MG_LINE_SUBMODULE 12  /* a submodule entry (path = submodule path) */
 #define MG_LINE_CONFLICT  13  /* an unmerged path (path = file path) */
@@ -92,6 +93,14 @@ int mg_magit_log_file_buffer(const char *repo_path, const char *file, int n,
  * "<short_oid> HEAD@{i} <message>", full oid in `path`. Returns the line count. */
 int mg_magit_reflog_buffer(const char *repo, int n, mg_magit_emit_fn emit,
                            void *ctx);
+
+/* Compose the *magit-refs* overview: Branches/Remotes (MG_LINE_BRANCH) and
+ * Tags (MG_LINE_TAG) sections with ahead/behind vs HEAD. NOTE: here `path` is
+ * the ref's full TIP OID (tags peeled) so RET can show the commit -- unlike
+ * the status buffer's branch rows, whose `path` is the branch NAME (their RET
+ * checks out). Returns the line count, 0 when the repo can't be read. */
+int mg_magit_refs_buffer(const char *repo_path, mg_magit_emit_fn emit,
+                         void *ctx);
 
 /* FM-LP: CLI-backed log configured by mg_log_query (per-field semantics are
  * documented inline below; NULL/"" string fields and 0/false ints mean "unset",

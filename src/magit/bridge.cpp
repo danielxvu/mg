@@ -852,6 +852,8 @@ int compose_status_view(const status_view &v, const char *repo_path,
         for (const auto &b : v.branches) {
             if (shown++ >= kMaxRefsShown)
                 break;
+            // NOTE: path = the branch NAME here (RET checks it out) -- unlike
+            // *magit-refs* rows (mg_magit_refs_buffer), whose path is the tip OID.
             out(std::string(b.is_head ? "* " : "  ") + b.name, MG_LINE_BRANCH,
                 b.name.c_str());
         }
@@ -1018,6 +1020,72 @@ extern "C" int mg_magit_reflog_buffer(const char *repo, int n,
         ++count;
     }
     return count;
+}
+
+extern "C" int mg_magit_refs_buffer(const char *repo_path,
+                                    mg_magit_emit_fn emit, void *ctx)
+{
+    if (repo_path == nullptr || emit == nullptr)
+        return 0;
+    auto r = mg::git::refs_overview(repo_path);
+    if (!r)
+        return 0;
+    int n = 0;
+    auto out = [&](const std::string &line, int kind, const char *path) {
+        emit(ctx, line.c_str(), kind, path, -1);
+        ++n;
+    };
+    // Header: named / detached / unborn.
+    if (!r->head_name.empty())
+        out("Refs (HEAD: " + r->head_name + ")", MG_LINE_SECTION, nullptr);
+    else if (!r->head_oid.empty())
+        out("Refs (HEAD detached at " + r->head_oid.substr(0, 8) + ")",
+            MG_LINE_SECTION, nullptr);
+    else
+        out("Refs (no commits yet)", MG_LINE_SECTION, nullptr);
+
+    // "ahead A, behind B" phrase; empty when 0/0 or unknown (-1).
+    auto counts = [](const mg::git::ref_row &b) -> std::string {
+        std::string s;
+        if (b.ahead > 0)
+            s += "ahead " + std::to_string(b.ahead);
+        if (b.behind > 0)
+            s += (s.empty() ? "" : ", ") + std::string("behind ") +
+                 std::to_string(b.behind);
+        return s;
+    };
+    auto ref_line = [&](const mg::git::ref_row &b) {
+        std::string line = (b.is_head ? "* " : "  ") + b.name;
+        // The starred row shows its upstream; others show counts vs HEAD.
+        std::string ann = b.is_head ? r->upstream : counts(b);
+        if (!ann.empty())
+            line += "  " + ann;
+        // NOTE: path = the tip OID (see bridge.h) -- RET shows the commit.
+        out(line, MG_LINE_BRANCH, b.oid.c_str());
+    };
+
+    if (!r->locals.empty()) {
+        out("", MG_LINE_OTHER, nullptr);
+        out("Branches (" + std::to_string(r->locals.size()) + ")",
+            MG_LINE_SECTION, nullptr);
+        for (const auto &b : r->locals)
+            ref_line(b);
+    }
+    if (!r->remotes.empty()) {
+        out("", MG_LINE_OTHER, nullptr);
+        out("Remotes (" + std::to_string(r->remotes.size()) + ")",
+            MG_LINE_SECTION, nullptr);
+        for (const auto &b : r->remotes)
+            ref_line(b);
+    }
+    if (!r->tags.empty()) {
+        out("", MG_LINE_OTHER, nullptr);
+        out("Tags (" + std::to_string(r->tags.size()) + ")",
+            MG_LINE_SECTION, nullptr);
+        for (const auto &t : r->tags)
+            out("  " + t.name, MG_LINE_TAG, t.oid.c_str());
+    }
+    return n;
 }
 
 extern "C" int mg_magit_process_log(mg_magit_emit_fn emit, void *ctx)
