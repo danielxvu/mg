@@ -143,6 +143,8 @@ static void	magit_log_query_reset(void);
 static int	magit_blame(int, int);
 static int	magit_cherrypick(int, int);
 static int	magit_log_visit(int, int);
+static int	magit_commit_build(struct buffer *, const char *);
+static int	magit_diff_view_refresh(struct buffer *, int, int);
 static int	magit_log_refresh(int, int);
 static int	magit_log_revert(int, int);
 static int	magit_log_note(int, int);
@@ -222,6 +224,7 @@ static int	magit_commit_meta_count;
  */
 static struct buffer	*magit_status_bp;
 static struct buffer	*magit_commit_bp;
+static char	magit_commit_rev[256];	/* rev shown in *magit-commit* (for refresh) */
 static struct buffer	*magit_log_bp;		/* *magit-log*: decoration coloring */
 
 /* Paths whose diffs are currently expanded inline. */
@@ -556,15 +559,20 @@ static struct KEYMAPE (10) magediffmap = {
 	}
 };
 
-/* *magit-commit* view keymap: q closes (the diff is read-only). */
+/* *magit-commit* view keymap: q closes (the diff is read-only); +/-/w/d drive
+ * the diff-view config, rebuilding this view in place (magit_diff_view_refresh). */
 static PF magcommit_q[] = { delwind };
 
-static struct KEYMAPE (1) magcommitmap = {
-	1,
-	1,
+static struct KEYMAPE (5) magcommitmap = {
+	5,
+	5,
 	rescan,
 	{
-		{ 'q', 'q', magcommit_q, NULL }			/* q: close */
+		{ '+', '+', magit_plus, NULL },		/* +: more diff context */
+		{ '-', '-', magit_minus, NULL },	/* -: less diff context */
+		{ 'd', 'd', magit_d, NULL },		/* d: diff-view popup */
+		{ 'q', 'q', magcommit_q, NULL },	/* q: close */
+		{ 'w', 'w', magit_w, NULL }		/* w: toggle -w */
 	}
 };
 
@@ -2735,20 +2743,24 @@ magit_log_oid_at_point(void)
 	return (magit_log_oid[idx]);
 }
 
-/* Pop a read-only *magit-commit* buffer showing `rev`'s diff (a commit oid or a
- * stash rev like "stash@{0}"). */
+/* Rebuild *magit-commit* `bp` to show `rev`'s diff (honoring the diff-view
+ * config). Stores `rev` so magit_diff_view_refresh can re-render in place. */
 static int
-magit_show_rev(const char *rev)
+magit_commit_build(struct buffer *bp, const char *rev)
 {
-	struct buffer	*bp;
-	struct mgwin	*wp;
-	char		 cwd[PATH_MAX];
+	char	cwd[PATH_MAX];
 
 	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
-	if ((bp = bfind("*magit-commit*", TRUE)) == NULL)
-		return (FALSE);
-	(void)strlcpy(bp->b_cwd, cwd, sizeof(bp->b_cwd)); /* repo for in-buffer cmds */
+	(void)strlcpy(bp->b_cwd, cwd, sizeof(bp->b_cwd));
+	/*
+	 * magit_diff_view_refresh calls us with rev == magit_commit_rev (the
+	 * remembered rev, refreshed in place): skip the self-copy. A hardened
+	 * strlcpy(dst, dst, n) traps on Apple libc even though the copy would
+	 * be a harmless no-op.
+	 */
+	if (rev != magit_commit_rev)
+		(void)strlcpy(magit_commit_rev, rev, sizeof(magit_commit_rev));
 	bp->b_flag |= BFIGNDIRTY;
 	if (bclear(bp) != TRUE)
 		return (FALSE);
@@ -2762,6 +2774,21 @@ magit_show_rev(const char *rev)
 	}
 	bp->b_dotp = bfirstlp(bp);
 	bp->b_doto = 0;
+	return (TRUE);
+}
+
+/* Pop a read-only *magit-commit* buffer showing `rev`'s diff (a commit oid or a
+ * stash rev like "stash@{0}"). */
+static int
+magit_show_rev(const char *rev)
+{
+	struct buffer	*bp;
+	struct mgwin	*wp;
+
+	if ((bp = bfind("*magit-commit*", TRUE)) == NULL)
+		return (FALSE);
+	if (magit_commit_build(bp, rev) != TRUE)
+		return (FALSE);
 	if ((wp = popbuf(bp, WNONE)) == NULL)
 		return (FALSE);
 	curwp = wp;
@@ -4695,6 +4722,33 @@ magit_todo_abort(int f, int n)
 	return (TRUE);
 }
 
+/* Refresh whichever diff view `target` is: the commit view rebuilds from its
+ * remembered rev (redrawing its windows); anything else refreshes *magit-status*
+ * (byte-identical to the old magit_refresh path). */
+static int
+magit_diff_view_refresh(struct buffer *target, int f, int n)
+{
+	struct buffer	*bp;
+	struct mgwin	*wp;
+
+	if (target == magit_commit_bp && magit_commit_rev[0] != '\0') {
+		if ((bp = bfind("*magit-commit*", FALSE)) == NULL)
+			return (FALSE);
+		if (magit_commit_build(bp, magit_commit_rev) != TRUE)
+			return (FALSE);
+		for (wp = wheadp; wp != NULL; wp = wp->w_wndp)
+			if (wp->w_bufp == bp) {
+				wp->w_dotp = bp->b_dotp;
+				wp->w_doto = 0;
+				wp->w_markp = NULL;
+				wp->w_marko = 0;
+				wp->w_rflag |= WFFULL;
+			}
+		return (TRUE);
+	}
+	return (magit_refresh(f, n));
+}
+
 /* +: grow diff context by 1 (max 32), refresh the status diff. */
 static int
 magit_diff_more(int f, int n)
@@ -4702,7 +4756,7 @@ magit_diff_more(int f, int n)
 	if (magit_diff_context < 32)
 		magit_diff_context++;
 	mg_magit_set_diff_view(magit_diff_context, magit_diff_ignore_ws);
-	return (magit_refresh(f, n));
+	return (magit_diff_view_refresh(curbp, f, n));
 }
 
 /* -: shrink diff context by 1 (min 0), refresh the status diff. */
@@ -4712,7 +4766,7 @@ magit_diff_less(int f, int n)
 	if (magit_diff_context > 0)
 		magit_diff_context--;
 	mg_magit_set_diff_view(magit_diff_context, magit_diff_ignore_ws);
-	return (magit_refresh(f, n));
+	return (magit_diff_view_refresh(curbp, f, n));
 }
 
 /* w: toggle ignore-whitespace (-w) for status diffs. */
@@ -4721,7 +4775,7 @@ magit_diff_ws(int f, int n)
 {
 	magit_diff_ignore_ws = !magit_diff_ignore_ws;
 	mg_magit_set_diff_view(magit_diff_context, magit_diff_ignore_ws);
-	return (magit_refresh(f, n));
+	return (magit_diff_view_refresh(curbp, f, n));
 }
 
 /* Render the live diff-view popup: current context + whitespace + keys. */
@@ -4771,8 +4825,8 @@ magit_diff_transient(int f, int n)
 				magit_diff_ignore_ws = !magit_diff_ignore_ws;
 			mg_magit_set_diff_view(magit_diff_context,
 			    magit_diff_ignore_ws);
-			(void)magit_refresh(f, n); /* rebuilds *magit-status* by name */
-			stwp->w_rflag |= WFFULL;   /* force the status window redraw */
+			(void)magit_diff_view_refresh(stbp, f, n); /* rebuilds status or commit view */
+			stwp->w_rflag |= WFFULL;   /* force the underlying window redraw */
 		}
 		/* any other key: ignored; loop re-renders */
 	}
