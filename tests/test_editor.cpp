@@ -1375,3 +1375,46 @@ TEST_CASE("the active region renders in standout, and deactivates on edit")
     CHECK(shown);           // the active region painted REGIONWORD in standout
     CHECK(gone_after_edit); // editing deactivated it (no standout on the word)
 }
+
+TEST_CASE("region highlight covers whole middle lines (multi-line)")
+{
+    auto dir = make_temp_dir();
+    std::ofstream(dir / "t.txt") << "AAAA\nBBBB\nCCCC\n";
+    const std::string p = (dir / "t.txt").string();
+    winsize ws{}; ws.ws_row = 24; ws.ws_col = 40;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) { ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", p.c_str(), (char *)nullptr); _exit(127); }
+    bool mid = false;
+    if (wait_for(master, "AAAA", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x01\x00\x0e\x0e", 4); // C-a C-SPC C-n C-n (region L1..L3)
+        mid = wait_for(master, "\x1b[7mBBBB", std::chrono::seconds(8)); // middle line whole
+    }
+    quit_neomg(master, pid);
+    fs::remove_all(dir);
+    CHECK(mid);   // a fully-inside middle line renders in standout
+}
+
+TEST_CASE("M-h (mark-paragraph) activates the region highlight")
+{
+    auto dir = make_temp_dir();
+    std::ofstream(dir / "t.txt") << "PARA words here\nmore para text\n";
+    const std::string p = (dir / "t.txt").string();
+    winsize ws{}; ws.ws_row = 24; ws.ws_col = 40;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) { ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", p.c_str(), (char *)nullptr); _exit(127); }
+    bool mh = false;
+    if (wait_for(master, "PARA", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x1bh", 2);   // M-h : mark-paragraph
+        (void)!::write(master, "\x0c", 1);    // C-l : force a repaint
+        mh = wait_for(master, "\x1b[7mPARA", std::chrono::seconds(8));
+    }
+    quit_neomg(master, pid);
+    fs::remove_all(dir);
+    CHECK(mh);   // M-h set a *visible* region (regression: it skipped WMARKED)
+}

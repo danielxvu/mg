@@ -679,8 +679,9 @@ update(int modelinecolor)
 	hflag = FALSE;			/* Not hard. */
 	for (wp = wheadp; wp != NULL; wp = wp->w_wndp) {
 #ifdef ENABLE_NATIVE_MAGIT
-		/* An active region repaints fully so the standout tracks point. */
-		if (wp->w_flag & WMARKED)
+		/* The current window's active region repaints fully so the
+		 * standout tracks point (only curwp's region is drawn). */
+		if (wp == curwp && (wp->w_flag & WMARKED))
 			wp->w_rflag |= WFFULL;
 #endif
 		/*
@@ -828,6 +829,16 @@ update(int modelinecolor)
 	 * Make sure no lines need to be de-extended because the cursor is no
 	 * longer on them.
 	 */
+#ifdef ENABLE_NATIVE_MAGIT
+	/*
+	 * The de-extend pass re-renders individual VFEXT rows out of the
+	 * top-to-bottom order region_hl_line() depends on, so disable region
+	 * standout here (an extended/scrolled line is left un-highlighted --
+	 * see the extended-line gap). This also avoids painting from stale
+	 * reg_* span state left by the main render loop.
+	 */
+	reg_on = 0;
+#endif
 	wp = wheadp;
 	while (wp != NULL) {
 		lp = wp->w_linep;
