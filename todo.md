@@ -440,8 +440,14 @@ absent). Keep this in sync with the README's "What it doesn't do (vs Magit)".
     pressing them prints `Quit`. At least add `C-h k` (describe-key).
 
   _Fidelity gaps (missing/inert; ranked by daily impact):_
-  - [ ] **FM-REGION-HIGHLIGHT** — active region invisible (no transient-mark);
-    `display.c` standouts only under `magit_ediff_active`. HIGHEST daily impact.
+  - [x] **FM-REGION-HIGHLIGHT** — ✅ DONE (`fm-region-highlight`): the active
+    region renders in reverse video (per-window `WMARKED` w_flag bit; set by the
+    mark commands incl. M-h, cleared by edit/`C-g`/`M-w`; `display.c` standouts
+    the ordered mark..point span via the ediff `MG_HL_BIT` path, neomg-build
+    only). A whole-branch review caught + fixed 2 bugs (M-h didn't activate; the
+    de-extend pass used stale span state). Deferred minor: a horizontally
+    *scrolled* (extended) line doesn't show its region standout (same gap as the
+    ediff highlight) — `FM-REGION-EXTLINE`.
   - [ ] **FM-KILL-RING** — single kill buffer, `M-y` unbound; non-consecutive
     kills silently destroy the earlier one (data loss). Add a ring + `M-y`.
   - [ ] **FM-MINIBUFFER-HISTORY** — `M-p`/`M-n` dead in the minibuffer (`echo.c`
