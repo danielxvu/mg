@@ -372,5 +372,7 @@ quit(int f, int n)
 int
 ctrlg(int f, int n)
 {
+	if (curwp != NULL)
+		curwp->w_flag &= ~WMARKED;	/* C-g deactivates the region */
 	return (ABORT);
 }

@@ -332,6 +332,7 @@ SLIST_HEAD(vhead, varentry);
  */
 #define WNONE  0x00 			/* No special window options.	*/
 #define WEPHEM 0x01 			/* Window is ephemeral.	 	*/
+#define WMARKED 0x02			/* Window has an active (shown) region.	*/
 
 struct undo_rec;
 TAILQ_HEAD(undoq, undo_rec);
