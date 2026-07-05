@@ -1257,3 +1257,30 @@ TEST_CASE("dired visits a symlink's target, not a garbled 'name -> target' strin
     fs::remove_all(dir);
     CHECK(visited); // f on a symlink row opened its target, not a (New file)
 }
+
+TEST_CASE("M-t (transpose-words) honors a numeric prefix argument")
+{
+    auto dir = make_temp_dir();
+    std::ofstream(dir / "t.txt") << "one two three four\n";
+    const std::string p = (dir / "t.txt").string();
+    winsize ws{}; ws.ws_row = 24; ws.ws_col = 80;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) { ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", p.c_str(), (char *)nullptr); _exit(127); }
+    if (wait_for(master, "one two", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x06\x06\x06", 3); // C-f x3 : point after "one"
+        drain(master, 300);
+        (void)!::write(master, "\x1b" "2", 2);      // M-2 : prefix arg 2
+        (void)!::write(master, "\x1b" "t", 2);      // M-t : transpose-words
+        (void)!::write(master, "\x18\x13", 2);      // C-x C-s
+        (void)wait_for(master, "Wrote", std::chrono::seconds(8));
+    }
+    quit_neomg(master, pid);
+    std::ifstream in(p); std::stringstream ss; ss << in.rdbuf();
+    const std::string content = ss.str();
+    fs::remove_all(dir);
+    // Emacs: C-u 2 M-t drags "one" past two words -> "two three one four".
+    CHECK(content == "two three one four\n");
+}

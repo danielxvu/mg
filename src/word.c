@@ -168,8 +168,18 @@ transposeword(int f, int n)
 
 	if (n == 0)
 		return (TRUE);
-
-	n = 1; /* remove this line to allow muliple-iterations */
+	if (n < 0) {
+		/*
+		 * The transpose loop below only advances forward and relies on
+		 * running at least once to initialize the tmp2 dot state. Honor
+		 * a positive count (Emacs drags the word before point past n
+		 * words); reject a negative count rather than dereference the
+		 * never-set tmp2 state. (mg historically forced n = 1.)
+		 */
+		dobeep();
+		ewprintf("Negative argument not supported for transpose-words");
+		return (FALSE);
+	}
 
 	if ((s = checkdirty(curbp)) != TRUE)
 		return (s);
