@@ -412,28 +412,59 @@ absent). Keep this in sync with the README's "What it doesn't do (vs Magit)".
   to save (`writeout`). Core `src/file.c` only. Spec:
   `docs/superpowers/specs/2026-07-05-fm-findfile-newfile-design.md`.
 
-  **Queued Emacs-fidelity divergences** (audited 2026-07-05; each verified against
-  neomg's source AND real GNU Emacs 30.2, not asserted). Ranked by daily impact:
-  - [ ] **FM-REGION-HIGHLIGHT** — the active region is invisible (no
-    transient-mark-mode). Emacs highlights mark..point (verified: grey-bg SGR on
-    set-mark+move; default `(not noninteractive)`); neomg's `display.c` only
-    standouts under `magit_ediff_active`. Highlight the region for normal buffers.
-    HIGHEST daily impact.
-  - [ ] **FM-KILL-RING** — single kill buffer, `M-y` unbound. Emacs cycles up to
-    `kill-ring-max`=120 past kills (`M-y` yank-pop). Add a real kill ring + `M-y`.
-  - [ ] **FM-AUTOSAVE** — no auto-save / crash recovery. Emacs auto-saves to
-    `#file#` (`auto-save-default`=t) + `recover-file`. neomg loses everything since
-    the last `C-x C-s` on a crash/kill.
-  - [ ] **FM-DABBREV** — `M-/` (dabbrev-expand) is unbound; Emacs binds it. A
-    constant power-user reflex that no-ops today.
-  - [ ] **FM-RECENTER-CYCLE** — `C-l` recenters to center only; Emacs `C-l` is
-    `recenter-top-bottom` (center→top→bottom on repeats). Minor.
-  - _(3 deeper source surveys — file/buffer, editing/mark/kill, keys/minibuffer —
-    were running at audit time; fold any additional verified divergences in here.)_
+  **Emacs-fidelity audit (2026-07-05)** — 3 source surveys, each divergence
+  verified against neomg's source AND live behavior / real GNU Emacs 30.2 (not
+  asserted). Split into real BUGS (correctness — do first), systemic UX, and
+  fidelity gaps.
+
+  _Bugs (correctness — data-corrupting or misleading):_
+  - [x] **FM-TRANSPOSE-EOL** — ✅ DONE (branch `fm-transpose-eol`): `C-t` at
+    end-of-line moved a char onto the NEXT line (`twiddle` did backdel+forwchar,
+    crossing the line) — `ab⏎cd` + `C-e C-t` gave `a⏎bcd`. Now transposes the
+    last two chars in place (`ba⏎cd`), like Emacs.
+  - [ ] **FM-DIRED-SYMLINK** — dired `d_makename` (`dired.c:841`) copies to
+    end-of-line, so a symlink row's "filename" includes ` -> target`; `f`/RET
+    opens an empty `(New file)`, and `x` delete fails ("Could not delete …") and
+    leaves the symlink. Data-loss-adjacent. Compute the name up to ` -> `.
+  - [ ] **FM-TRANSPOSE-WORDS-ARG** — `M-t` hardcodes `n=1` (`word.c:151`), silently
+    ignoring a numeric prefix (`C-u 2 M-t` does one). Honor the count.
+  - [ ] **FM-QUERY-REPLACE-Q** — `query-replace` has no `case 'q'` (`search.c`);
+    `q` falls to default and reprints the prompt (looks hung). Accept `q` to quit.
+
+  _Systemic UX:_
+  - [ ] **FM-UNBOUND-UNDEFINED** — every unbound key prints `Quit` (== `C-g`;
+    `kbd.c` ABORT → `main.c`), so a fat-fingered prefix looks canceled, not
+    undefined. Emit "<key> is undefined" instead.
+  - [ ] **FM-HELP-KEYS** — `C-h k`/`f`/`v`/`m`/`w` missing (`keymap.c cHa[]`);
+    pressing them prints `Quit`. At least add `C-h k` (describe-key).
+
+  _Fidelity gaps (missing/inert; ranked by daily impact):_
+  - [ ] **FM-REGION-HIGHLIGHT** — active region invisible (no transient-mark);
+    `display.c` standouts only under `magit_ediff_active`. HIGHEST daily impact.
+  - [ ] **FM-KILL-RING** — single kill buffer, `M-y` unbound; non-consecutive
+    kills silently destroy the earlier one (data loss). Add a ring + `M-y`.
+  - [ ] **FM-MINIBUFFER-HISTORY** — `M-p`/`M-n` dead in the minibuffer (`echo.c`
+    has no history ring); Emacs cycles per-prompt input history.
+  - [ ] **FM-FILENAME-EXPAND** — no `$VAR`/`${VAR}` expansion in typed filenames
+    (`fileio.c expandtilde` does only `~`); `$HOME/x` → "Missing directory".
+  - [ ] **FM-SYMLINK-VISIT** — `adjustname` always `realpath()`s (`fileio.c:358`),
+    so a symlink's buffer is renamed to its target and two links to one file
+    collapse to one buffer (no uniquify). Emacs keeps the typed path.
+  - [ ] **FM-DABBREV** — `M-/` (dabbrev-expand) unbound.
+  - [ ] **FM-RECENTER-CYCLE** — `C-l` only centers; Emacs cycles center/top/bottom.
+  - [ ] **FM-GOTO-PREFIX** — `M-g` dead (no goto-line/next-error prefix map).
+  - [ ] **FM-AUTOSAVE** — no auto-save (`#file#`) / `recover-file`; crash loses work.
+  - [ ] **FM-WINDOW-VSPLIT** — no `C-x 3` side-by-side split (window model is
+    stack-only), no `C-x +` balance-windows. (Bigger — needs a column window model.)
+  - [ ] **FM-REPEAT** — no `C-x z` / repeat-last-command.
+  - [ ] **FM-RECTANGLES** — no `C-x r` (rectangles/registers/bookmarks) at all.
+  - [ ] **FM-COMMENT-DWIM** — `M-;` inert (no comment-region/comment-dwim).
 
   Verified as NON-divergences (mg matches Emacs; do NOT "fix"): backup `~` files,
-  `C-h`=help prefix, undo present, `C-x C-c` per-buffer `Save file <name>?`,
-  incremental+regex search (`C-s`/`C-r`), "file changed on disk" warning, `M-.` ctags.
+  `C-h` prefix itself, undo (incl. redo-via-replay), `C-x C-c` per-buffer
+  `Save file <name>?`, isearch (`C-s`/`C-r`), "file changed on disk" supersession
+  warning, `M-.` ctags, `C-z` suspend, `C-u C-u` quadruple, `M-x` TAB completion,
+  buffer-name uniquify (`name<2>`).
 
 ### Out of scope by design (NOT gaps to close — documented stance)
 - **`forge`** (GitHub/GitLab issues & PRs, Gerrit) — a separate Magit package,

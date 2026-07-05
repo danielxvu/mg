@@ -17,6 +17,7 @@
 #include <fstream>
 #include <functional>
 #include <string>
+#include <sstream>
 
 #include <csignal>
 #include <sys/ioctl.h>
@@ -1203,4 +1204,31 @@ TEST_CASE("find-file opens a missing-directory path without prompting; save crea
     CHECK(save_prompt);    // prompt now appears at save time
     CHECK(wrote);          // save wrote the file after creating the directory
     CHECK(on_disk);        // directory + file actually created on disk
+}
+
+TEST_CASE("C-t at end of line transposes in place (does not cross to the next line)")
+{
+    auto dir = make_temp_dir();
+    std::ofstream(dir / "t.txt") << "ab\ncd\n";
+    const std::string p = (dir / "t.txt").string();
+    winsize ws{}; ws.ws_row = 24; ws.ws_col = 80;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) { ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", p.c_str(), (char *)nullptr); _exit(127); }
+    if (wait_for(master, "ab", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x05", 1);      // C-e : end of line 1 (after 'b')
+        drain(master, 300);                     // let it settle
+        (void)!::write(master, "\x14", 1);      // C-t : transpose-chars
+        (void)!::write(master, "\x18\x13", 2);  // C-x C-s : save
+        (void)wait_for(master, "Wrote", std::chrono::seconds(8));
+    }
+    quit_neomg(master, pid);
+    std::ifstream in(p); std::stringstream ss; ss << in.rdbuf();
+    const std::string content = ss.str();
+    fs::remove_all(dir);
+    // Emacs transposes the last two chars of the line in place; it must NOT
+    // move 'b' onto the next line ("a\nbcd\n" was the corruption bug).
+    CHECK(content == "ba\ncd\n");
 }
