@@ -1318,3 +1318,27 @@ TEST_CASE("query-replace quits on q (not just RET/ESC)")
     CHECK(quit_ok);                       // q exited query-replace
     CHECK(content == "foo foo foo\n");    // nothing replaced (quit at first match)
 }
+
+TEST_CASE("an unbound key reports 'is undefined', not 'Quit'")
+{
+    auto dir = make_temp_dir();
+    std::ofstream(dir / "seed.txt") << "hello\n";
+    const std::string p = (dir / "seed.txt").string();
+    winsize ws{}; ws.ws_row = 24; ws.ws_col = 80;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) { ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", p.c_str(), (char *)nullptr); _exit(127); }
+    bool undef = false, said_quit = false;
+    if (wait_for(master, "hello", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x18r", 2);   // C-x r : unbound (rescan default)
+        std::string acc = drain_str(master, std::chrono::seconds(2));
+        undef = acc.find("is undefined") != std::string::npos;
+        said_quit = acc.find("Quit") != std::string::npos;
+    }
+    quit_neomg(master, pid);
+    fs::remove_all(dir);
+    CHECK(undef);            // "<key> is undefined" shown (Emacs behavior)
+    CHECK_FALSE(said_quit);  // not conflated with C-g's "Quit"
+}

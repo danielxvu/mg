@@ -229,8 +229,20 @@ rescan(int f, int n)
 			}
 		}
 		/* try previous mode */
-		if (--md < 0)
-			return (ABORT);
+		if (--md < 0) {
+			/*
+			 * No binding in any mode. While defining or replaying a
+			 * keyboard macro keep the historical abort; interactively
+			 * report the key as undefined (like Emacs) rather than
+			 * conflating it with C-g's "Quit" (which main.c prints
+			 * for any ABORT).
+			 */
+			if (macrodef || inmacro)
+				return (ABORT);
+			dobeep();
+			ewprintf("%k is undefined");
+			return (FALSE);
+		}
 		curmap = curbp->b_modes[md]->p_map;
 		for (i = 0; i < key.k_count; i++) {
 			if ((fp = doscan(curmap, (key.k_chars[i]), &curmap)) != NULL)
