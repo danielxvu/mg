@@ -197,7 +197,6 @@ int
 readin(char *fname)
 {
 	struct mgwin	*wp;
-	struct stat	 statbuf;
 	int	 status, ro = FALSE;
 #ifdef ENABLE_AUTOEXEC
 	PF	*ael;
@@ -255,11 +254,15 @@ readin(char *fname)
 			(void)xdirname(dp, fname, sizeof(dp));
 			(void)strlcat(dp, "/", sizeof(dp));
 
-			/* Missing directory; keep buffer rw, like emacs */
-			if (stat(dp, &statbuf) == -1 && errno == ENOENT) {
-				if (eyorn("Missing directory, create") == TRUE)
-					(void)do_makedir(dp);
-			} else if (access(dp, W_OK) == -1 && errno == EACCES) {
+			/*
+			 * File doesn't exist. Open the buffer read-write like
+			 * Emacs -- no create-directory prompt here; that moves
+			 * to save time (writeout). A missing directory leaves
+			 * the buffer writable (access() sets ENOENT, not
+			 * EACCES); only a present-but-write-protected directory
+			 * forces READONLY.
+			 */
+			if (access(dp, W_OK) == -1 && errno == EACCES) {
 				ewprintf("File not found and directory"
 				    " write-protected");
 				ro = TRUE;
@@ -717,9 +720,22 @@ writeout(FILE ** ffp, struct buffer *bp, char *fn)
 			ewprintf("Directory %s write-protected", dp);
 			return (FIOERR);
 		} else if (errno == ENOENT) {
-   			dobeep();
-			ewprintf("%s: no such directory", dp);
-			return (FIOERR);
+			/*
+			 * Missing directory: Emacs defers the create-directory
+			 * prompt to save time (find-file opened the buffer
+			 * without asking). Create the tree on yes and fall
+			 * through to the write; abort otherwise.
+			 */
+			if (eyorn("Missing directory, create") != TRUE) {
+				dobeep();
+				ewprintf("%s: no such directory", dp);
+				return (FIOERR);
+			}
+			if (do_makedir(dp) != TRUE) {
+				dobeep();
+				ewprintf("Unable to create directory %s", dp);
+				return (FIOERR);
+			}
 		}
         }
 	lpend = bp->b_headp;
