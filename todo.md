@@ -299,9 +299,15 @@ absent). Keep this in sync with the README's "What it doesn't do (vs Magit)".
     intra-line diff highlighting. The ediff cell-highlight *display* infra
     (`magit_cell_highlighted` / `magit_ediff_ref`) is reusable, but the per-hunk
     word-diff *computation* is new — its own slice.
-  - [ ] **FM-DIFF-CTL-VIEWS (deferred from FM-DIFF-CTL)** — apply the context /
-    whitespace controls to the commit-view (`commit_diff`) and log diffs too;
-    v1 is the status buffer's expanded diffs (the shared `file_diff` path only).
+  - [x] **FM-DIFF-CTL-VIEWS** — ✅ DONE (branch `fm-diff-ctl-views`): the `d`
+    diff-view controls (`+`/`-` context, `w` whitespace) now drive `*magit-commit*`
+    too. Engine `commit_diff` honors the config; the commit view shows its active
+    `Diff: -U<n> [-w]` header; a view-aware `magit_diff_view_refresh()` router
+    rebuilds whichever diff buffer is current so the bare keys + the `d` popup work
+    in both. ("Log diffs" ARE the commit view — the log buffer has no inline
+    diff.) The config stays global (one knob, all views, like Magit). A
+    whole-branch review caught + fixed a use-after-free in the in-place refresh
+    (bclear→refill→window-fixup is now atomic on every path).
 - [x] **FM-TRANSIENT-DEPTH — deepen the argument menus.** ✅ **log slice DONE**
   (PR #98): adds `--author=` / `--grep=` / `--all` infixes to the `l` transient on
   top of `-n`. Sticky (persist like `-n`) and clearable (empty input unsets a VALUE
