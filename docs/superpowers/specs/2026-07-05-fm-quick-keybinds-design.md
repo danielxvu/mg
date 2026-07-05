@@ -79,7 +79,7 @@ unbound. neomg has no doc strings, so "briefly" is as verbose as it gets — bin
 
 ## Architecture / files
 
-- `src/def.h` — `CFRECT` flag; `repeat` prototype.
+- `src/def.h` — `CFRECT` flag.
 - `src/window.c` — `reposition` cycling.
 - `src/keymap.c` — new `gotomap`/`metagmap` (+ their PF arrays); split the
   metamap `'['..'h'` element into three (`KEYMAPE(8)`→`(10)`);
