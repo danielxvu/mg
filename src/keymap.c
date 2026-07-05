@@ -44,7 +44,7 @@ static PF cHa[] = {
 	rescan,			/* h */
 	rescan,			/* i */
 	rescan,			/* j */
-	rescan,			/* k */
+	desckey,		/* k */
 	rescan,			/* l */
 	rescan,			/* m */
 	rescan,			/* n */
@@ -365,9 +365,55 @@ struct KEYMAPE (1) metasqlmap = {
 	}
 };
 
-struct KEYMAPE (8) metamap = {
-	8,
-	8,
+/*
+ * M-g prefix (Emacs goto-map): g -> goto-line; M-g (ESC g) also -> goto-line
+ * via metagmap, so both `M-g g` and `M-g M-g` work. NOT self-referential --
+ * fixmap() walks prefix maps recursively at startup, so a cycle overflows the
+ * stack. (Deeper `M-g M-g M-g...` is not supported; rare.)
+ */
+static PF metagmap_g[] = {
+	gotoline		/* g (after the second M-) */
+};
+static struct KEYMAPE (1) metagmap = {
+	1,
+	1,
+	rescan,
+	{
+		{
+			'g', 'g', metagmap_g, NULL
+		}
+	}
+};
+static PF gotomap_esc[] = {
+	NULL			/* ESC -> metagmap (the M-g M-g form) */
+};
+static PF gotomap_g[] = {
+	gotoline		/* g */
+};
+static struct KEYMAPE (2) gotomap = {
+	2,
+	2,
+	rescan,
+	{
+		{
+			CCHR('['), CCHR('['), gotomap_esc, (KEYMAP *) &metagmap
+		},
+		{
+			'g', 'g', gotomap_g, NULL
+		}
+	}
+};
+
+static PF metag[] = {
+	NULL			/* g -> gotomap prefix */
+};
+static PF metah[] = {
+	markpara		/* h */
+};
+
+struct KEYMAPE (10) metamap = {
+	10,
+	10,
 	rescan,
 	{
 		{
@@ -386,7 +432,13 @@ struct KEYMAPE (8) metamap = {
 			'*', '>', metami, NULL
 		},
 		{
-			'[', 'h', metasqf, (KEYMAP *) &metasqlmap
+			'[', 'f', metasqf, (KEYMAP *) &metasqlmap
+		},
+		{
+			'g', 'g', metag, (KEYMAP *) &gotomap
+		},
+		{
+			'h', 'h', metah, NULL
 		},
 		{
 			'l', '}', metal, NULL

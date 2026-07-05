@@ -144,6 +144,7 @@ typedef int	(*PF)(int, int);	/* generally useful type */
 #define CFKILL	0x0002		/* Last command was a kill	 */
 #define CFINS	0x0004		/* Last command was self-insert	 */
 #define CFYANK	0x0008		/* Last command was a yank/yank-pop */
+#define CFRECT	0x0010		/* Last command was a recenter (C-l) */
 
 /*
  * File I/O.

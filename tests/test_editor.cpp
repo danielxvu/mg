@@ -1531,3 +1531,97 @@ TEST_CASE("kill ring: C-u 0 C-y does not arm M-y (no spurious region delete)")
     fs::remove_all(dir);
     CHECK(content.find("alpha beta") != std::string::npos);  // region NOT deleted
 }
+
+TEST_CASE("C-h k describes a key (like C-h c)")
+{
+    auto dir = make_temp_dir();
+    std::ofstream(dir / "t.txt") << "hi\n";
+    const std::string p = (dir / "t.txt").string();
+    winsize ws{}; ws.ws_row = 24; ws.ws_col = 80;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) { ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", p.c_str(), (char *)nullptr); _exit(127); }
+    bool ok = false;
+    if (wait_for(master, "hi", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x08k", 2);   // C-h k
+        (void)!::write(master, "\x06", 1);    // C-f -> forward-char
+        ok = wait_for(master, "forward-char", std::chrono::seconds(8));
+    }
+    quit_neomg(master, pid);
+    fs::remove_all(dir);
+    CHECK(ok);
+}
+
+TEST_CASE("M-g g and M-g M-g both goto-line")
+{
+    winsize ws{}; ws.ws_row = 24; ws.ws_col = 80;
+    auto goto_kill = [&](const char *keys, size_t klen, const char *line) {
+        auto dir = make_temp_dir();
+        std::ofstream(dir / "t.txt") << "L1\nL2\nL3\nL4\nL5\n";
+        const std::string p = (dir / "t.txt").string();
+        int master = -1;
+        pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+        REQUIRE(pid >= 0);
+        if (pid == 0) { ::setenv("TERM", "xterm", 1);
+            ::execl(NEOMG_BINARY, "neomg", p.c_str(), (char *)nullptr); _exit(127); }
+        if (wait_for(master, "L1", std::chrono::seconds(8))) {
+            (void)!::write(master, keys, klen);     // M-g g  or  M-g M-g
+            (void)!::write(master, line, 2);        // "3\r" etc
+            (void)!::write(master, "\x0b", 1);      // C-k : kill target line text
+            (void)!::write(master, "\x18\x13", 2);  // C-x C-s
+            (void)wait_for(master, "Wrote", std::chrono::seconds(8));
+        }
+        quit_neomg(master, pid);
+        std::ifstream in(p); std::stringstream ss; ss << in.rdbuf();
+        std::string c = ss.str();
+        fs::remove_all(dir);
+        return c;
+    };
+    std::string a = goto_kill("\x1bg" "g", 3, "3\r");   // M-g g 3
+    CHECK(a.find("L3") == std::string::npos);           // line 3 killed -> worked
+    CHECK(a.find("L2") != std::string::npos);
+    std::string b = goto_kill("\x1bg" "\x1bg", 4, "2\r"); // M-g M-g 2
+    CHECK(b.find("L2") == std::string::npos);           // M-g M-g worked
+}
+
+TEST_CASE("C-l cycles recenter middle/top/bottom")
+{
+    auto dir = make_temp_dir();
+    std::ofstream f(dir / "t.txt");
+    for (int i = 1; i <= 40; i++) f << "line" << i << "\n";
+    f.close();
+    const std::string p = (dir / "t.txt").string();
+    winsize ws{}; ws.ws_row = 24; ws.ws_col = 80;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) { ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", p.c_str(), (char *)nullptr); _exit(127); }
+    auto last_row = [](const std::string &s) {
+        int row = -1; size_t i = 0;
+        while ((i = s.find("\x1b[", i)) != std::string::npos) {
+            int r = 0, c = 0; char t = 0;
+            if (std::sscanf(s.c_str() + i, "\x1b[%d;%d%c", &r, &c, &t) == 3
+                && (t == 'H' || t == 'f')) row = r;
+            i += 2;
+        }
+        return row;
+    };
+    int r1 = -1, r2 = -1, r3 = -1;
+    if (wait_for(master, "line1", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x1b>", 2);   // M-> end of buffer
+        (void)!::write(master, "\x10\x10\x10\x10\x10", 5); // C-p x5
+        drain(master, 300);
+        (void)!::write(master, "\x0c", 1); r1 = last_row(drain_str(master, std::chrono::seconds(1)));
+        (void)!::write(master, "\x0c", 1); r2 = last_row(drain_str(master, std::chrono::seconds(1)));
+        (void)!::write(master, "\x0c", 1); r3 = last_row(drain_str(master, std::chrono::seconds(1)));
+    }
+    quit_neomg(master, pid);
+    fs::remove_all(dir);
+    CHECK(r1 > 0); CHECK(r2 >= 0); CHECK(r3 > 0);
+    CHECK(r2 < r1);   // top above middle
+    CHECK(r3 > r2);   // bottom below top
+}
+
