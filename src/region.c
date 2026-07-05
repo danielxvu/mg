@@ -26,7 +26,6 @@
 
 #define TIMEOUT 10000
 
-int	getregion(struct region *);
 static	int	iomux(int, char * const, int);
 static	int	preadin(int);
 static	void	pwriteout(int, char **, int *);

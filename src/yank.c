@@ -31,9 +31,10 @@ static int	 kgrow(int);
 static int	 do_yank(int);
 
 /*
- * Delete all of the text saved in the kill buffer.  Called by commands when
- * a new kill context is created. The kill buffer array is released, just in
- * case the buffer has grown to an immense size.  No errors.
+ * Start a new kill context.  Called by commands when a new (non-consecutive)
+ * kill begins: rotate to the next ring slot so the previous kill is retained
+ * for M-y, reclaiming (freeing) the oldest slot when the ring is full.  The
+ * name is historical -- this no longer discards the saved text.  No errors.
  */
 void
 kdelete(void)
@@ -139,6 +140,8 @@ kchunk(char *cp1, RSIZE chunk, int kflag)
 {
 	struct kill	*k = &kr[kr_head];
 
+	if (kflag == KNONE)
+		return (TRUE);		/* never write the ring on a KNONE delete */
 	/*
 	 * HACK - doesn't matter, and fixes back-over-nl bug for empty
 	 *	kill buffers.
@@ -294,6 +297,8 @@ yank(int f, int n)
 {
 	if (n < 0)
 		return (FALSE);
+	if (n == 0)
+		return (TRUE);		/* nothing yanked -> no mark, no CFYANK */
 	kr_yptr = kr_head;		/* yank the newest entry */
 	if (do_yank(n) == FALSE)
 		return (FALSE);
