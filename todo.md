@@ -436,8 +436,8 @@ absent). Keep this in sync with the README's "What it doesn't do (vs Magit)".
   - [x] **FM-UNBOUND-UNDEFINED** — ✅ DONE (`fm-unbound-undefined`): unbound keys
     report "<key> is undefined" (via the %k formatter) instead of `Quit`; C-g
     still shows `Quit`. Macro define/replay keep the abort.
-  - [ ] **FM-HELP-KEYS** — `C-h k`/`f`/`v`/`m`/`w` missing (`keymap.c cHa[]`);
-    pressing them prints `Quit`. At least add `C-h k` (describe-key).
+  - [~] **FM-HELP-KEYS** — `C-h k` DONE (#117, bound to describe-key-briefly);
+    `C-h f`/`v`/`m`/`w` still missing (mg has no doc strings; low priority).
 
   _Fidelity gaps (missing/inert; ranked by daily impact):_
   - [x] **FM-REGION-HIGHLIGHT** — ✅ DONE (`fm-region-highlight`): the active
@@ -463,12 +463,16 @@ absent). Keep this in sync with the README's "What it doesn't do (vs Magit)".
     so a symlink's buffer is renamed to its target and two links to one file
     collapse to one buffer (no uniquify). Emacs keeps the typed path.
   - [ ] **FM-DABBREV** — `M-/` (dabbrev-expand) unbound.
-  - [ ] **FM-RECENTER-CYCLE** — `C-l` only centers; Emacs cycles center/top/bottom.
-  - [ ] **FM-GOTO-PREFIX** — `M-g` dead (no goto-line/next-error prefix map).
+  - [x] **FM-RECENTER-CYCLE** — ✅ DONE (#117): `C-l` cycles middle/top/bottom.
+  - [x] **FM-GOTO-PREFIX** — ✅ DONE (#117): `M-g` prefix map -> goto-line
+    (`M-g g`/`M-g M-g`). Deferred: `M-g n`/`p`/`c`, deep `M-g M-g M-g`.
   - [ ] **FM-AUTOSAVE** — no auto-save (`#file#`) / `recover-file`; crash loses work.
   - [ ] **FM-WINDOW-VSPLIT** — no `C-x 3` side-by-side split (window model is
     stack-only), no `C-x +` balance-windows. (Bigger — needs a column window model.)
-  - [ ] **FM-REPEAT** — no `C-x z` / repeat-last-command.
+  - [ ] **FM-REPEAT** — `C-x z` repeat. Attempted in #117 but DROPPED: a direct
+    last-command re-invoke bypasses mgwrap/doin -> `selfinsert` reinserts the
+    `z` (data corruption) and `undo` reverses (frozen rptcount). Needs
+    dispatch-context capture (key seq + f/n + rptcount + ABORT via mgwrap).
   - [ ] **FM-RECTANGLES** — no `C-x r` (rectangles/registers/bookmarks) at all.
   - [ ] **FM-COMMENT-DWIM** — `M-;` inert (no comment-region/comment-dwim).
 
