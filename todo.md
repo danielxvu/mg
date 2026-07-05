@@ -426,8 +426,9 @@ absent). Keep this in sync with the README's "What it doesn't do (vs Magit)".
     now truncates a symlink row's name at ` -> ` (type char 'l' at index 2), so
     `f`/RET opens the target and `d`/`x` deletes the symlink (was: empty
     `(New file)`, and delete failed leaving the symlink). Data-loss fixed.
-  - [ ] **FM-TRANSPOSE-WORDS-ARG** — `M-t` hardcodes `n=1` (`word.c:151`), silently
-    ignoring a numeric prefix (`C-u 2 M-t` does one). Honor the count.
+  - [x] **FM-TRANSPOSE-WORDS-ARG** — ✅ DONE (`fm-transpose-words`): removed the
+    `n=1` override so `C-u N M-t` drags the word past N words (== Emacs; undo
+    reverts). Negative prefix rejected (was a NULL-deref crash).
   - [ ] **FM-QUERY-REPLACE-Q** — `query-replace` has no `case 'q'` (`search.c`);
     `q` falls to default and reprints the prompt (looks hung). Accept `q` to quit.
 
