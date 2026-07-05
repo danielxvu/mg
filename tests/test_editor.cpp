@@ -1163,3 +1163,44 @@ TEST_CASE("+ inside the d popup rebuilds *magit-commit*'s diff")
     CHECK(popup);    // d opened the diff-view popup
     CHECK(applied);  // + (inside the popup) rebuilt *magit-commit*'s Diff: header
 }
+
+TEST_CASE("find-file opens a missing-directory path without prompting; save creates it")
+{
+    auto dir = make_temp_dir();               // a plain temp dir (no repo needed)
+    std::ofstream(dir / "seed.txt") << "seed\n"; // seed file -> default-dir = this dir
+    const std::string seed = (dir / "seed.txt").string();
+    winsize ws{}; ws.ws_row = 40; ws.ws_col = 100;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) { ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", seed.c_str(), (char *)nullptr); _exit(127); }
+
+    bool opened = false, no_open_prompt = false, save_prompt = false, wrote = false;
+    if (wait_for(master, "seed.txt", std::chrono::seconds(8))) {
+        // C-x C-f  nd/f.txt  RET  -- the directory "nd/" does not exist
+        (void)!::write(master, "\x18\x06", 2);           // C-x C-f
+        (void)!::write(master, "nd/f.txt\r", 9);
+        // The buffer must open with NO open-time prompt (Emacs behavior).
+        std::string acc = drain_str(master, std::chrono::seconds(2));
+        no_open_prompt = acc.find("Missing directory") == std::string::npos;
+        opened = acc.find("f.txt") != std::string::npos;  // new file in the modeline
+        // Edit + save -> the prompt appears NOW.
+        (void)!::write(master, "x", 1);
+        (void)!::write(master, "\x18\x13", 2);            // C-x C-s
+        save_prompt = wait_for(master, "Missing directory, create",
+                               std::chrono::seconds(8));
+        if (save_prompt) {
+            (void)!::write(master, "y", 1);               // create the directory
+            wrote = wait_for(master, "Wrote", std::chrono::seconds(8));
+        }
+    }
+    quit_neomg(master, pid);
+    bool on_disk = fs::exists(dir / "nd" / "f.txt");
+    fs::remove_all(dir);
+    CHECK(opened);         // buffer opened for the missing-dir path
+    CHECK(no_open_prompt); // NO prompt at open (was a blocking prompt before)
+    CHECK(save_prompt);    // prompt now appears at save time
+    CHECK(wrote);          // save wrote the file after creating the directory
+    CHECK(on_disk);        // directory + file actually created on disk
+}
