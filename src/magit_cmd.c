@@ -1215,17 +1215,24 @@ static struct KEYMAPE (1) commitmap = {
  * dead key. Data-driven, so it covers whatever entries the table grows.
  */
 static void
-magit_assert_keymap_sorted(void)
+magit_assert_keymap_sorted(KEYMAP *km, const char *name)
 {
+	char	buf[128];
 	int	i;
 
-	for (i = 0; i < magitmap.map_num; i++) {
-		struct map_element *e = &magitmap.map_element[i];
+	for (i = 0; i < km->map_num; i++) {
+		struct map_element *e = &km->map_element[i];
 
-		if (e->k_base > e->k_num)
-			panic("magit keymap: element has k_base > k_num");
-		if (i > 0 && magitmap.map_element[i - 1].k_num >= e->k_base)
-			panic("magit keymap: elements out of ascending order");
+		if (e->k_base > e->k_num) {
+			(void)snprintf(buf, sizeof(buf),
+			    "%s keymap: element has k_base > k_num", name);
+			panic(buf);
+		}
+		if (i > 0 && km->map_element[i - 1].k_num >= e->k_base) {
+			(void)snprintf(buf, sizeof(buf),
+			    "%s keymap: elements out of ascending order", name);
+			panic(buf);
+		}
 	}
 }
 
@@ -1389,7 +1396,8 @@ magit_status(int f, int n)
 	char		 repo[NFILEN];
 
 	if (!initialized) {
-		magit_assert_keymap_sorted();
+		magit_assert_keymap_sorted((KEYMAP *)&magitmap, "magit");
+		magit_assert_keymap_sorted((KEYMAP *)&magcommitmap, "magit-commit");
 		magit_assert_menus_consistent();
 		maps_add((KEYMAP *)&magitmap, "magit-status-mode");
 		/* Register the log/commit-view modes here too: RET on a stash opens
@@ -2748,7 +2756,9 @@ magit_log_oid_at_point(void)
 static int
 magit_commit_build(struct buffer *bp, const char *rev)
 {
-	char	cwd[PATH_MAX];
+	struct mgwin	*wp;
+	char		 cwd[PATH_MAX];
+	int		 ok;
 
 	if (getbufcwd(cwd, sizeof(cwd)) != TRUE)
 		return (FALSE);
@@ -2768,13 +2778,30 @@ magit_commit_build(struct buffer *bp, const char *rev)
 	magit_commit_bp = bp;		/* gate display.c's color hook on this */
 	magit_cell_color_reset();	/* freed lines may be reused; drop memo */
 	magit_commit_meta_count = 0;
-	if (mg_magit_commit_diff(cwd, rev, magit_diff_emit, bp) == 0) {
+	ok = mg_magit_commit_diff(cwd, rev, magit_diff_emit, bp);
+	if (!ok)
 		ewprintf("No diff for %s", rev);
-		return (FALSE);
-	}
+	/*
+	 * bclear() above freed every line bp used to hold, including whatever
+	 * b_dotp/w_dotp/w_markp pointed into it. That repointing MUST happen
+	 * here on every path -- success or "No diff" -- not just on success:
+	 * an early return before this leaves any window still showing bp with
+	 * a stale w_dotp/w_markp dangling into freed memory, a use-after-free
+	 * on the next redraw. Reachable e.g. by viewing a stash's commit view
+	 * and then dropping that stash (or otherwise making `rev` stop
+	 * resolving) while the buffer is still on screen.
+	 */
 	bp->b_dotp = bfirstlp(bp);
 	bp->b_doto = 0;
-	return (TRUE);
+	for (wp = wheadp; wp != NULL; wp = wp->w_wndp)
+		if (wp->w_bufp == bp) {
+			wp->w_dotp = bp->b_dotp;
+			wp->w_doto = 0;
+			wp->w_markp = NULL;
+			wp->w_marko = 0;
+			wp->w_rflag |= WFFULL;
+		}
+	return (ok ? TRUE : FALSE);
 }
 
 /* Pop a read-only *magit-commit* buffer showing `rev`'s diff (a commit oid or a
@@ -4729,22 +4756,13 @@ static int
 magit_diff_view_refresh(struct buffer *target, int f, int n)
 {
 	struct buffer	*bp;
-	struct mgwin	*wp;
 
 	if (target == magit_commit_bp && magit_commit_rev[0] != '\0') {
 		if ((bp = bfind("*magit-commit*", FALSE)) == NULL)
 			return (FALSE);
-		if (magit_commit_build(bp, magit_commit_rev) != TRUE)
-			return (FALSE);
-		for (wp = wheadp; wp != NULL; wp = wp->w_wndp)
-			if (wp->w_bufp == bp) {
-				wp->w_dotp = bp->b_dotp;
-				wp->w_doto = 0;
-				wp->w_markp = NULL;
-				wp->w_marko = 0;
-				wp->w_rflag |= WFFULL;
-			}
-		return (TRUE);
+		/* magit_commit_build now does the window fixup itself (on every
+		 * path, including "No diff for <rev>") -- see its comment. */
+		return (magit_commit_build(bp, magit_commit_rev));
 	}
 	return (magit_refresh(f, n));
 }
