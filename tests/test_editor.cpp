@@ -1418,3 +1418,61 @@ TEST_CASE("M-h (mark-paragraph) activates the region highlight")
     fs::remove_all(dir);
     CHECK(mh);   // M-h set a *visible* region (regression: it skipped WMARKED)
 }
+
+TEST_CASE("kill ring: M-y (yank-pop) cycles through non-consecutive kills")
+{
+    auto dir = make_temp_dir();
+    std::ofstream(dir / "t.txt") << "AAA\nBBB\nCCC\nsink\n";
+    const std::string p = (dir / "t.txt").string();
+    winsize ws{}; ws.ws_row = 24; ws.ws_col = 80;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) { ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", p.c_str(), (char *)nullptr); _exit(127); }
+    std::string content;
+    if (wait_for(master, "AAA", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x01\x0b\x0b", 3);   // line "AAA": C-a kill line + NL
+        drain(master, 200);
+        (void)!::write(master, "\x01\x0b\x0b", 3);   // now "BBB": new entry
+        drain(master, 200);
+        (void)!::write(master, "\x01\x0b\x0b", 3);   // now "CCC": new entry
+        drain(master, 200);
+        (void)!::write(master, "\x1b>", 2);          // M-> end of buffer
+        (void)!::write(master, "\r", 1);             // newline
+        (void)!::write(master, "\x19", 1);           // C-y  -> newest kill "CCC"
+        (void)!::write(master, "\x1by", 2);          // M-y  -> "BBB"
+        (void)!::write(master, "\x1by", 2);          // M-y  -> "AAA"
+        (void)!::write(master, "\x18\x13", 2);       // C-x C-s
+        (void)wait_for(master, "Wrote", std::chrono::seconds(8));
+    }
+    quit_neomg(master, pid);
+    std::ifstream in(p); std::stringstream ss; ss << in.rdbuf();
+    content = ss.str();
+    fs::remove_all(dir);
+    // After C-y + two M-y the yank is the OLDEST kill "AAA"; its survival
+    // proves the ring kept all three (the single-buffer version lost them).
+    CHECK(content.find("AAA") != std::string::npos);
+}
+
+TEST_CASE("kill ring: M-y without a preceding yank is refused")
+{
+    auto dir = make_temp_dir();
+    std::ofstream(dir / "t.txt") << "hello\n";
+    const std::string p = (dir / "t.txt").string();
+    winsize ws{}; ws.ws_row = 24; ws.ws_col = 80;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) { ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", p.c_str(), (char *)nullptr); _exit(127); }
+    bool refused = false;
+    if (wait_for(master, "hello", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x1by", 2);          // M-y with no prior yank
+        refused = wait_for(master, "Previous command was not a yank",
+                           std::chrono::seconds(8));
+    }
+    quit_neomg(master, pid);
+    fs::remove_all(dir);
+    CHECK(refused);
+}

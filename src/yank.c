@@ -14,13 +14,21 @@
 #include "def.h"
 
 #define KBLOCK	 8192		/* Kill grow.                    */
+#define NKILL	 60		/* Kill-ring size (Emacs kill-ring-max=120). */
 
-static char	*kbufp = NULL;	/* Kill buffer data.		 */
-static RSIZE	 kused = 0;	/* # of bytes used in KB.	 */
-static RSIZE	 ksize = 0;	/* # of bytes allocated in KB.	 */
-static RSIZE	 kstart = 0;	/* # of first used byte in KB.	 */
+struct kill {
+	char	*buf;		/* entry data			 */
+	RSIZE	 used;		/* # bytes used			 */
+	RSIZE	 size;		/* # bytes allocated		 */
+	RSIZE	 start;		/* # first used byte (front insert) */
+};
+static struct kill kr[NKILL];	/* the kill ring		 */
+static int	 kr_head;	/* newest entry (kills append/rotate here) */
+static int	 kr_n;		/* # entries in use (<= NKILL)	 */
+static int	 kr_yptr;	/* yank pointer (entry a yank reads) */
 
 static int	 kgrow(int);
+static int	 do_yank(int);
 
 /*
  * Delete all of the text saved in the kill buffer.  Called by commands when
@@ -30,11 +38,21 @@ static int	 kgrow(int);
 void
 kdelete(void)
 {
-	if (kbufp != NULL) {
-		free(kbufp);
-		kbufp = NULL;
-		kstart = kused = ksize = 0;
+	/*
+	 * Called when a new kill context starts. Rotate to the next ring slot
+	 * (reclaiming the oldest when full) so the PREVIOUS kill survives for
+	 * M-y -- the old behavior freed it, silently losing it.
+	 */
+	if (kr_n > 0)
+		kr_head = (kr_head + 1) % NKILL;
+	if (kr[kr_head].buf != NULL) {
+		free(kr[kr_head].buf);
+		kr[kr_head].buf = NULL;
 	}
+	kr[kr_head].used = kr[kr_head].size = kr[kr_head].start = 0;
+	if (kr_n < NKILL)
+		kr_n++;
+	kr_yptr = kr_head;
 }
 
 /*
@@ -48,16 +66,18 @@ kdelete(void)
 int
 kinsert(int c, int dir)
 {
+	struct kill	*k = &kr[kr_head];
+
 	if (dir == KNONE)
 		return (TRUE);
-	if (kused == ksize && dir == KFORW && kgrow(dir) == FALSE)
+	if (k->used == k->size && dir == KFORW && kgrow(dir) == FALSE)
 		return (FALSE);
-	if (kstart == 0 && dir == KBACK && kgrow(dir) == FALSE)
+	if (k->start == 0 && dir == KBACK && kgrow(dir) == FALSE)
 		return (FALSE);
 	if (dir == KFORW)
-		kbufp[kused++] = c;
+		k->buf[k->used++] = c;
 	else if (dir == KBACK)
-		kbufp[--kstart] = c;
+		k->buf[--k->start] = c;
 	else
 		panic("broken kinsert call");	/* Oh shit! */
 	return (TRUE);
@@ -70,27 +90,28 @@ kinsert(int c, int dir)
 static int
 kgrow(int dir)
 {
-	int	 nstart;
-	char	*nbufp;
+	struct kill	*k = &kr[kr_head];
+	int		 nstart;
+	char		*nbufp;
 
-	if ((unsigned)(ksize + KBLOCK) <= (unsigned)ksize) {
+	if ((unsigned)(k->size + KBLOCK) <= (unsigned)k->size) {
 		/* probably 16 bit unsigned */
 		dobeep();
 		ewprintf("Kill buffer size at maximum");
 		return (FALSE);
 	}
-	if ((nbufp = malloc((unsigned)(ksize + KBLOCK))) == NULL) {
+	if ((nbufp = malloc((unsigned)(k->size + KBLOCK))) == NULL) {
 		dobeep();
-		ewprintf("Can't get %ld bytes", (long)(ksize + KBLOCK));
+		ewprintf("Can't get %ld bytes", (long)(k->size + KBLOCK));
 		return (FALSE);
 	}
-	nstart = (dir == KBACK) ? (kstart + KBLOCK) : (KBLOCK / 4);
-	bcopy(&(kbufp[kstart]), &(nbufp[nstart]), (int)(kused - kstart));
-	free(kbufp);
-	kbufp = nbufp;
-	ksize += KBLOCK;
-	kused = kused - kstart + nstart;
-	kstart = nstart;
+	nstart = (dir == KBACK) ? (k->start + KBLOCK) : (KBLOCK / 4);
+	bcopy(&(k->buf[k->start]), &(nbufp[nstart]), (int)(k->used - k->start));
+	free(k->buf);
+	k->buf = nbufp;
+	k->size += KBLOCK;
+	k->used = k->used - k->start + nstart;
+	k->start = nstart;
 	return (TRUE);
 }
 
@@ -102,9 +123,11 @@ kgrow(int dir)
 int
 kremove(int n)
 {
-	if (n < 0 || n + kstart >= kused)
+	struct kill	*k = &kr[kr_yptr];
+
+	if (n < 0 || n + k->start >= k->used)
 		return (-1);
-	return (CHARMASK(kbufp[n + kstart]));
+	return (CHARMASK(k->buf[n + k->start]));
 }
 
 /*
@@ -114,25 +137,27 @@ kremove(int n)
 int
 kchunk(char *cp1, RSIZE chunk, int kflag)
 {
+	struct kill	*k = &kr[kr_head];
+
 	/*
 	 * HACK - doesn't matter, and fixes back-over-nl bug for empty
 	 *	kill buffers.
 	 */
-	if (kused == kstart)
+	if (k->used == k->start)
 		kflag = KFORW;
 
 	if (kflag & KFORW) {
-		while (ksize - kused < chunk)
+		while (k->size - k->used < chunk)
 			if (kgrow(kflag) == FALSE)
 				return (FALSE);
-		bcopy(cp1, &(kbufp[kused]), (int)chunk);
-		kused += chunk;
+		bcopy(cp1, &(k->buf[k->used]), (int)chunk);
+		k->used += chunk;
 	} else if (kflag & KBACK) {
-		while (kstart < chunk)
+		while (k->start < chunk)
 			if (kgrow(kflag) == FALSE)
 				return (FALSE);
-		bcopy(cp1, &(kbufp[kstart - chunk]), (int)chunk);
-		kstart -= chunk;
+		bcopy(cp1, &(k->buf[k->start - chunk]), (int)chunk);
+		k->start -= chunk;
 	}
 
 	return (TRUE);
@@ -218,14 +243,16 @@ done:
  * bug associated with a yank when dot is on the top line of the window
  * (nothing moves, because all of the new text landed off screen).
  */
-int
-yank(int f, int n)
+/*
+ * Insert the yank-pointer entry n times at point, leaving the mark at the
+ * start of the last insert and point at its end (so M-y can replace it).
+ * Shared by yank (C-y) and yank_pop (M-y).
+ */
+static int
+do_yank(int n)
 {
 	struct line	*lp;
 	int	 c, i, nline;
-
-	if (n < 0)
-		return (FALSE);
 
 	/* newline counting */
 	nline = 0;
@@ -259,6 +286,53 @@ yank(int f, int n)
 		curwp->w_rflag |= WFFULL;
 	}
 	undo_boundary_enable(FFRAND, 1);
+	return (TRUE);
+}
+
+int
+yank(int f, int n)
+{
+	if (n < 0)
+		return (FALSE);
+	kr_yptr = kr_head;		/* yank the newest entry */
+	if (do_yank(n) == FALSE)
+		return (FALSE);
+	thisflag |= CFYANK;
+	return (TRUE);
+}
+
+/*
+ * M-y: replace the text just yanked with the previous kill-ring entry,
+ * cycling one step older each press. Only valid right after a yank/yank-pop.
+ */
+int
+yank_pop(int f, int n)
+{
+	struct region	 reg;
+	int		 oldest;
+
+	if ((lastflag & CFYANK) == 0) {
+		dobeep();
+		ewprintf("Previous command was not a yank");
+		return (FALSE);
+	}
+	/* Delete the last-yanked text (mark..point) without touching the ring. */
+	if (getregion(&reg) != TRUE)
+		return (FALSE);
+	curwp->w_dotp = reg.r_linep;
+	curwp->w_doto = reg.r_offset;
+	curwp->w_dotline = reg.r_lineno;
+	if (ldelete(reg.r_size, KNONE) == FALSE)
+		return (FALSE);
+	/* Cycle one entry older, wrapping within the used entries. */
+	oldest = (kr_head - (kr_n - 1) + NKILL) % NKILL;
+	if (kr_yptr == oldest)
+		kr_yptr = kr_head;
+	else
+		kr_yptr = (kr_yptr - 1 + NKILL) % NKILL;
+	if (do_yank(1) == FALSE)
+		return (FALSE);
+	thisflag |= CFYANK;
 	return (TRUE);
 }
 

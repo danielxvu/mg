@@ -338,7 +338,7 @@ static PF metal[] = {
 	backpage,		/* v */
 	copyregion,		/* w */
 	extend,			/* x */
-	rescan,			/* y */
+	yank_pop,		/* y */
 	zaptochar,		/* z */
 	gotobop,		/* { */
 	piperegion,		/* | */
