@@ -428,6 +428,53 @@ vtputuc(unsigned int cp, int width, struct mgwin *wp)
  * vtputc (mg_utf8_decode returns 1 byte for them, so their handling is
  * unchanged); only bytes >= 0x80 take the codepoint path.
  */
+#ifdef ENABLE_NATIVE_MAGIT
+/*
+ * Active-region standout (transient-mark). update() calls region_hl_setup()
+ * once per WMARKED window, ordering the mark/point endpoints by buffer
+ * position; the render loop then walks lines top-to-bottom and region_hl_line()
+ * yields each line's [from,to) column range, which vt_render_line paints with
+ * MG_HL_BIT (reverse video, same as ediff).
+ */
+static struct line	*reg_sp, *reg_ep;
+static int		 reg_so, reg_eo, reg_on, reg_inside;
+
+static void
+region_hl_setup(struct mgwin *wp)
+{
+	reg_on = reg_inside = 0;
+	if (!(wp->w_flag & WMARKED) || wp->w_markp == NULL || wp != curwp)
+		return;
+	if (wp->w_markline < wp->w_dotline ||
+	    (wp->w_markline == wp->w_dotline && wp->w_marko < wp->w_doto)) {
+		reg_sp = wp->w_markp; reg_so = wp->w_marko;
+		reg_ep = wp->w_dotp;  reg_eo = wp->w_doto;
+	} else {
+		reg_sp = wp->w_dotp;  reg_so = wp->w_doto;
+		reg_ep = wp->w_markp; reg_eo = wp->w_marko;
+	}
+	if (reg_sp == reg_ep && reg_so == reg_eo)	/* empty region */
+		return;
+	reg_on = 1;
+}
+
+/* [*from,*to) cols to standout on `lp`; advances the top-to-bottom span state. */
+static void
+region_hl_line(struct line *lp, int *from, int *to)
+{
+	*from = *to = 0;
+	if (!reg_on)
+		return;
+	if (reg_sp == reg_ep) {			/* single-line region */
+		if (lp == reg_sp) { *from = reg_so; *to = reg_eo; }
+		return;
+	}
+	if (lp == reg_sp) { *from = reg_so; *to = llength(lp); reg_inside = 1; }
+	else if (lp == reg_ep) { *from = 0; *to = reg_eo; reg_inside = 0; }
+	else if (reg_inside) { *from = 0; *to = llength(lp); }
+}
+#endif
+
 static void
 vt_render_line(struct line *lp, struct mgwin *wp)
 {
@@ -437,9 +484,12 @@ vt_render_line(struct line *lp, struct mgwin *wp)
 #ifdef ENABLE_NATIVE_MAGIT
 	struct video	*vp = vscreen[vtrow];
 	int		 ci = 0, k, start;
+	int		 rfrom, rto;	/* active-region standout column range */
 	/* Once per line: is this a syntax-colored buffer? Non-magit buffers skip
 	 * the per-cell color lookup entirely (no metadata walk per cell). */
 	int		 color_buf = magit_is_color_buffer(wp->w_bufp);
+
+	region_hl_line(lp, &rfrom, &rto);
 #endif
 
 	while (j < len) {
@@ -456,6 +506,11 @@ vt_render_line(struct line *lp, struct mgwin *wp)
 #ifdef ENABLE_NATIVE_MAGIT
 		/* Word-level refinement: mark this char's cell(s) for standout. */
 		if (magit_ediff_active && magit_cell_highlighted(wp->w_bufp, lp, ci))
+			for (k = start; k < vtcol && k < ncol; k++)
+				if (vp->v_text[k] != VT_CONT)
+					vp->v_text[k] |= MG_HL_BIT;
+		/* Active region: standout the cells between mark and point. */
+		if (ci >= rfrom && ci < rto)
 			for (k = start; k < vtcol && k < ncol; k++)
 				if (vp->v_text[k] != VT_CONT)
 					vp->v_text[k] |= MG_HL_BIT;
@@ -623,11 +678,19 @@ update(int modelinecolor)
 	}
 	hflag = FALSE;			/* Not hard. */
 	for (wp = wheadp; wp != NULL; wp = wp->w_wndp) {
+#ifdef ENABLE_NATIVE_MAGIT
+		/* An active region repaints fully so the standout tracks point. */
+		if (wp->w_flag & WMARKED)
+			wp->w_rflag |= WFFULL;
+#endif
 		/*
 		 * Nothing to be done.
 		 */
 		if (wp->w_rflag == 0)
 			continue;
+#ifdef ENABLE_NATIVE_MAGIT
+		region_hl_setup(wp);	/* order the mark/point span for this window */
+#endif
 
 		if ((wp->w_rflag & WFFRAME) == 0) {
 			lp = wp->w_linep;

@@ -184,6 +184,7 @@ lchange(int flag)
 				wp->w_rflag |= WFFULL;
 		}
 	}
+	curwp->w_flag &= ~WMARKED;	/* an edit deactivates the region (Emacs) */
 }
 
 /*

@@ -1342,3 +1342,36 @@ TEST_CASE("an unbound key reports 'is undefined', not 'Quit'")
     CHECK(undef);            // "<key> is undefined" shown (Emacs behavior)
     CHECK_FALSE(said_quit);  // not conflated with C-g's "Quit"
 }
+
+TEST_CASE("the active region renders in standout, and deactivates on edit")
+{
+    auto dir = make_temp_dir();
+    std::ofstream(dir / "t.txt") << "REGIONWORD tail\n";
+    const std::string p = (dir / "t.txt").string();
+    winsize ws{}; ws.ws_row = 24; ws.ws_col = 80;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) { ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", p.c_str(), (char *)nullptr); _exit(127); }
+    bool shown = false, gone_after_edit = false;
+    if (wait_for(master, "REGIONWORD", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x01", 1);   // C-a : beginning of line (col 0)
+        drain(master, 300);
+        (void)!::write(master, "\x00", 1);   // C-SPC (C-@) : set mark
+        for (int i = 0; i < 10; i++)         // C-f x10 : extend over REGIONWORD
+            (void)!::write(master, "\x06", 1);
+        // Region cols [0,10) = REGIONWORD -> standout starts at col 0, so the
+        // render emits ESC[7m immediately before the word (the modeline
+        // standout never precedes "REGIONWORD").
+        shown = wait_for(master, "\x1b[7mREGIONWORD", std::chrono::seconds(8));
+        (void)!::write(master, "x", 1);      // self-insert -> deactivates the region
+        (void)!::write(master, "\x0c", 1);   // C-l : force a repaint
+        std::string after = drain_str(master, std::chrono::seconds(2));
+        gone_after_edit = after.find("\x1b[7mREGIONWORD") == std::string::npos;
+    }
+    quit_neomg(master, pid);
+    fs::remove_all(dir);
+    CHECK(shown);           // the active region painted REGIONWORD in standout
+    CHECK(gone_after_edit); // editing deactivated it (no standout on the word)
+}

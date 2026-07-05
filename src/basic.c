@@ -462,6 +462,7 @@ isetmark(void)
 	curwp->w_markp = curwp->w_dotp;
 	curwp->w_marko = curwp->w_doto;
 	curwp->w_markline = curwp->w_dotline;
+	curwp->w_flag |= WMARKED;	/* activate the region highlight */
 }
 
 /*
@@ -487,6 +488,7 @@ clearmark(int f, int n)
 	curwp->w_markp = NULL;
 	curwp->w_marko = 0;
 	curwp->w_markline = 0;
+	curwp->w_flag &= ~WMARKED;	/* no mark -> no region highlight */
 
 	return (TRUE);
 }
@@ -517,6 +519,7 @@ swapmark(int f, int n)
 	curwp->w_marko = odoto;
 	curwp->w_markline = odotline;
 	curwp->w_rflag |= WFMOVE;
+	curwp->w_flag |= WMARKED;	/* C-x C-x reactivates the region */
 	return (TRUE);
 }
 
