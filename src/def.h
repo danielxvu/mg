@@ -143,6 +143,7 @@ typedef int	(*PF)(int, int);	/* generally useful type */
 #define CFCPCN	0x0001		/* Last command was C-p or C-n	 */
 #define CFKILL	0x0002		/* Last command was a kill	 */
 #define CFINS	0x0004		/* Last command was self-insert	 */
+#define CFYANK	0x0008		/* Last command was a yank/yank-pop */
 
 /*
  * File I/O.
@@ -513,6 +514,7 @@ int		 kremove(int);
 int		 kchunk(char *, RSIZE, int);
 int		 killline(int, int);
 int		 yank(int, int);
+int		 yank_pop(int, int);
 
 /* window.c X */
 struct mgwin	*new_window(struct buffer *);
@@ -746,6 +748,7 @@ int		 upperregion(int, int);
 int		 prefixregion(int, int);
 int		 setprefix(int, int);
 int		 region_get_data(struct region *, char *, int);
+int		 getregion(struct region *);
 void		 region_put_data(const char *, int);
 int		 markbuffer(int, int);
 int		 piperegion(int, int);

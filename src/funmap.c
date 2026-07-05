@@ -266,6 +266,7 @@ static struct funmap functnames[] = {
 	{showcpos, "what-cursor-position", 0, NULL},
 	{filewrite, "write-file", 1, NULL},
 	{yank, "yank", 1, NULL},
+	{yank_pop, "yank-pop", 1, NULL},
 	{NULL, NULL, 0, NULL}
 };
 

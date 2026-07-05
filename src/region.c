@@ -26,7 +26,6 @@
 
 #define TIMEOUT 10000
 
-static	int	getregion(struct region *);
 static	int	iomux(int, char * const, int);
 static	int	preadin(int);
 static	void	pwriteout(int, char **, int *);
@@ -199,7 +198,7 @@ upperregion(int f, int n)
  * of the callers of this routine should be ready to get an ABORT status,
  * because I might add a "if regions is big, ask before clobbering" flag.
  */
-static int
+int
 getregion(struct region *rp)
 {
 	struct line	*flp, *blp;
