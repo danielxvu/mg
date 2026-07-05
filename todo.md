@@ -433,9 +433,9 @@ absent). Keep this in sync with the README's "What it doesn't do (vs Magit)".
     query-replace (added to the RET/ESC quit cases), matching Emacs.
 
   _Systemic UX:_
-  - [ ] **FM-UNBOUND-UNDEFINED** — every unbound key prints `Quit` (== `C-g`;
-    `kbd.c` ABORT → `main.c`), so a fat-fingered prefix looks canceled, not
-    undefined. Emit "<key> is undefined" instead.
+  - [x] **FM-UNBOUND-UNDEFINED** — ✅ DONE (`fm-unbound-undefined`): unbound keys
+    report "<key> is undefined" (via the %k formatter) instead of `Quit`; C-g
+    still shows `Quit`. Macro define/replay keep the abort.
   - [ ] **FM-HELP-KEYS** — `C-h k`/`f`/`v`/`m`/`w` missing (`keymap.c cHa[]`);
     pressing them prints `Quit`. At least add `C-h k` (describe-key).
 
