@@ -829,6 +829,34 @@ TEST_CASE("mg_magit_log_buffer emits commit lines carrying the full oid")
     fs::remove_all(dir);
 }
 
+TEST_CASE("mg_magit_commit_diff emits the Diff config header when non-default")
+{
+    auto dir = make_repo_with_commit("c0");
+    std::string d = dir.string();
+    auto lines = [&]() {
+        std::vector<std::string> v;
+        mg_magit_commit_diff(d.c_str(), "HEAD",
+            [](void *c, const char *l, int, const char *, int) {
+                static_cast<std::vector<std::string>*>(c)->push_back(l);
+            }, &v);
+        return v;
+    };
+    auto has_diff = [](const std::vector<std::string> &v) {
+        for (auto &l : v) if (l.rfind("Diff:", 0) == 0) return true;
+        return false;
+    };
+    mg::git::set_diff_view(3, false);
+    CHECK_FALSE(has_diff(lines()));         // default -> no header
+    mg::git::set_diff_view(5, false);
+    auto v5 = lines();
+    bool u5 = false;
+    for (auto &l : v5) if (l.find("-U5") != std::string::npos) u5 = true;
+    CHECK(has_diff(v5));                     // non-default -> header
+    CHECK(u5);                               // shows -U5
+    mg::git::set_diff_view(3, false);        // reset
+    fs::remove_all(dir);
+}
+
 TEST_CASE("mg_magit_log_buffer decorates the HEAD row (libgit2 path)")
 {
     auto dir = make_repo_with_commit("c0");

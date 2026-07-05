@@ -1221,6 +1221,13 @@ extern "C" int mg_magit_commit_diff(const char *repo_path, const char *rev,
     };
 
     out_no_path(std::string("commit ") + rev, MG_LINE_SECTION, -1);
+    if (mg::git::diff_view_context() != 3 || mg::git::diff_view_ignore_ws()) {
+        std::string dv = "Diff:     -U" +
+            std::to_string(mg::git::diff_view_context());
+        if (mg::git::diff_view_ignore_ws())
+            dv += " -w";
+        out_no_path(dv, MG_LINE_OTHER, -1);
+    }
     if (auto note = mg::git::read_note(repo_path, rev); note && !note->empty()) {
         std::string nb = *note;
         if (!nb.empty() && nb.back() == '\n')
