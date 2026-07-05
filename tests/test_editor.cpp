@@ -1625,30 +1625,3 @@ TEST_CASE("C-l cycles recenter middle/top/bottom")
     CHECK(r3 > r2);   // bottom below top
 }
 
-TEST_CASE("C-x z repeats the last command")
-{
-    auto dir = make_temp_dir();
-    std::ofstream(dir / "t.txt") << "a\nb\nc\nd\ne\nf\n";
-    const std::string p = (dir / "t.txt").string();
-    winsize ws{}; ws.ws_row = 24; ws.ws_col = 80;
-    int master = -1;
-    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
-    REQUIRE(pid >= 0);
-    if (pid == 0) { ::setenv("TERM", "xterm", 1);
-        ::execl(NEOMG_BINARY, "neomg", p.c_str(), (char *)nullptr); _exit(127); }
-    if (wait_for(master, "a", std::chrono::seconds(8))) {
-        (void)!::write(master, "\x01", 1);   // C-a (line 1 "a")
-        (void)!::write(master, "\x0e", 1);   // C-n -> line 2
-        (void)!::write(master, "\x18z", 2);  // C-x z : repeat C-n -> line 3
-        (void)!::write(master, "z", 1);      // z -> line 4 ("d")
-        (void)!::write(master, "\x0b", 1);   // C-k kill "d"
-        (void)!::write(master, "\x18\x13", 2);
-        (void)wait_for(master, "Wrote", std::chrono::seconds(8));
-    }
-    quit_neomg(master, pid);
-    std::ifstream in(p); std::stringstream ss; ss << in.rdbuf();
-    std::string c = ss.str();
-    fs::remove_all(dir);
-    CHECK(c.find("d") == std::string::npos);   // landed on line 4 and killed it
-    CHECK(c.find("c") != std::string::npos);
-}

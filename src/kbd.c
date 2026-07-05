@@ -33,7 +33,6 @@ static int		 pushedc;
 struct map_element	*ele;
 struct key 		 key;
 int			 rptcount;
-PF			 last_command;	/* last real command, for repeat (C-x z) */
 
 /*
  * Toggle the value of use_metakey
@@ -486,43 +485,18 @@ quote(int f, int n)
 static int
 mgwrap(PF funct, int f, int n)
 {
+	static	 PF ofp;
+
 	if (funct != rescan &&
 	    funct != negative_argument &&
 	    funct != digit_argument &&
-	    funct != universal_argument &&
-	    funct != repeat) {
-		if (funct == last_command)
+	    funct != universal_argument) {
+		if (funct == ofp)
 			rptcount++;
 		else
 			rptcount = 0;
-		last_command = funct;
+		ofp = funct;
 	}
 
 	return ((*funct)(f, n));
-}
-
-/*
- * C-x z: repeat the last command; press z (or the last key) again to repeat
- * more, matching Emacs's `repeat'.
- */
-int
-repeat(int f, int n)
-{
-	int	 c;
-
-	if (last_command == NULL) {
-		dobeep();
-		ewprintf("No last command to repeat");
-		return (FALSE);
-	}
-	for (;;) {
-		if ((*last_command)(f, n) == FALSE)
-			return (FALSE);
-		update(CMODE);
-		c = getkey(FALSE);
-		if (c != 'z')	/* Emacs repeats while the last key is held */
-			break;
-	}
-	ungetkey(c);		/* the non-z key resumes normal dispatch */
-	return (TRUE);
 }

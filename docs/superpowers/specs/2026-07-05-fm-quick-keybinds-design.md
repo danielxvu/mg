@@ -34,10 +34,13 @@ Emacs `M-g` is a prefix; `M-g g` and `M-g M-g` (and further repeated `M-g`s) →
 though it has `gotoline`. Implement a real prefix map (full faithfulness):
 
 - **New `gotomap` (`KEYMAPE (2)`, default `rescan`), two sorted elements:**
-  - `{ CCHR('['), CCHR('['), gotomap_esc, (KEYMAP *)&gotomap }` where
-    `gotomap_esc[] = { NULL }` — a following `ESC` (the second `M-`) re-enters
-    `gotomap` **itself** (a legal self-referential static-address initializer),
-    so `M-g M-g`, `M-g M-g M-g`, … all resolve (Emacs's meta-repeat).
+  - `{ CCHR('['), CCHR('['), gotomap_esc, (KEYMAP *)&metagmap }` where
+    `gotomap_esc[] = { NULL }` — a following `ESC` (the second `M-`) descends
+    into a separate `metagmap` (`KEYMAPE (1)`: `g` → `gotoline`), so `M-g M-g`
+    resolves. **Not** self-referential: `fixmap()` walks prefix maps recursively
+    at startup, so a cycle (`gotomap`→`gotomap`) overflows the stack (a
+    self-referential first attempt SIGSEGV'd). Deeper `M-g M-g M-g…` is
+    unsupported (rare).
   - `{ 'g', 'g', gotomap_g, NULL }` where `gotomap_g[] = { gotoline }` — the
     plain `g` runs `goto-line`.
 - **Split the metamap `'['..'h'` element.** It currently shares one
@@ -55,18 +58,17 @@ though it has `gotoline`. Implement a real prefix map (full faithfulness):
   ascending key order between the existing `'%'`/`'*'..'>'` and `'l'..'}'`
   elements.
 
-### 3. `C-x z` → repeat
+### 3. `C-x z` → repeat — DEFERRED to `FM-REPEAT`
 
-Emacs `C-x z` is `repeat` (re-run the last command; press `z` again to repeat
-more; verified). neomg stores no last command. Add:
-- A module global `PF last_command` in `kbd.c`, set in `mgwrap` (the single
-  dispatch point, `kbd.c:501`, `return ((*funct)(f,n))`) to `funct` — **except**
-  when `funct` is `repeat` itself (so repeat re-runs the command before it, not
-  itself).
-- A new `repeat(int f, int n)` command: if `last_command` is NULL → beep; else
-  call it, then loop reading keys while the user keeps pressing `z`, re-invoking
-  each time (Emacs's "keep pressing the last key" behavior). Bind `C-x z`
-  (`cXmap['z']`).
+Emacs `C-x z` is `repeat` (re-run the last command; verified). A first attempt
+re-invoked the last function pointer directly, bypassing `mgwrap`/`doin()` — but
+`selfinsert` reads the char from the global `key.k_chars` (which still holds the
+`C-x z` keystroke → typing `x` then `C-x z` inserted `xz`, silent corruption),
+and `undo` keys off the `rptcount` that only `mgwrap` maintains (so `C-x z`
+after `C-x u` reversed the undo). A correct `repeat` must capture and restore
+the dispatch context (the `key` sequence, the numeric arg `f`/`n`) and route
+through `mgwrap` so `rptcount` and ABORT are handled. That is a separate feature,
+**not a quick keybind** — split to `FM-REPEAT` (todo.md).
 
 ### 4. `C-h k` → describe-key
 
@@ -79,13 +81,10 @@ unbound. neomg has no doc strings, so "briefly" is as verbose as it gets — bin
 
 - `src/def.h` — `CFRECT` flag; `repeat` prototype.
 - `src/window.c` — `reposition` cycling.
-- `src/kbd.c` — `last_command` global + `mgwrap` hook; `repeat` command (or a
-  small `extend.c`/`window.c` home — plan picks; `kbd.c` is natural since the
-  dispatch lives there).
-- `src/keymap.c` — new `gotomap` (+ `gotomap_esc`/`gotomap_g`/`metag`/`metah`
-  arrays); split the metamap `'['..'h'` element into three (`KEYMAPE(8)`→`(10)`);
-  `cXmap['z'] = repeat`; `helpmap['k'] = desckey`.
-- `src/funmap.c` — `repeat` funmap entry (`{repeat, "repeat", 1, NULL}`).
+- `src/keymap.c` — new `gotomap`/`metagmap` (+ their PF arrays); split the
+  metamap `'['..'h'` element into three (`KEYMAPE(8)`→`(10)`);
+  `helpmap['k'] = desckey`.
+- (`C-x z` repeat deferred to `FM-REPEAT` — no `kbd.c`/`funmap.c` change here.)
 
 All plain C, both builds (no `ENABLE_*` gating).
 
@@ -100,9 +99,6 @@ All plain C, both builds (no `ENABLE_*` gating).
 - **M-g:** `M-g g` then `3 RET` → point on line 3; and separately `M-g M-g`
   then `2 RET` → point on line 2 (assert both prefix forms reach `goto-line`,
   e.g. the `Goto line` prompt appears, then confirm the resulting line).
-- **C-x z:** self-insert nothing; run a repeatable command (e.g. `C-n` moves
-  down), then `C-x z` → the command runs again (point moved another line);
-  assert. And `C-x z` with no prior command beeps (no crash).
 - **C-h k:** `C-h k C-f` → assert the echo line shows `forward-char` (or the
   key-is-bound-to message), same as `C-h c`.
 
@@ -113,4 +109,4 @@ Verify macOS + Alpine/musl + the `c-legacy` build (all plain C, ships in both).
 - `M-/` dabbrev-expand → its own spec (`FM-DABBREV`).
 - `M-g` other sub-bindings (`M-g n`/`M-g p` next/prev-error, `M-g c` goto-char) —
   only `goto-line` is wired; the rest stay unbound in `gotomap`.
-- `C-u N C-x z` repeat-count; `repeat-mode`.
+- `C-x z` repeat entirely → `FM-REPEAT` (needs dispatch-context capture).

@@ -228,13 +228,9 @@ static PF cXcar[] = {
 	undo			/* u */
 };
 
-static PF cXz[] = {
-	repeat			/* z */
-};
-
-struct KEYMAPE (7) cXmap = {
-	7,
-	7,
+struct KEYMAPE (6) cXmap = {
+	6,
+	6,
 	rescan,
 	{
 		{
@@ -254,9 +250,6 @@ struct KEYMAPE (7) cXmap = {
 		},
 		{
 			'^', 'u', cXcar, NULL
-		},
-		{
-			'z', 'z', cXz, NULL
 		}
 	}
 };
