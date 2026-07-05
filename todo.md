@@ -412,6 +412,29 @@ absent). Keep this in sync with the README's "What it doesn't do (vs Magit)".
   to save (`writeout`). Core `src/file.c` only. Spec:
   `docs/superpowers/specs/2026-07-05-fm-findfile-newfile-design.md`.
 
+  **Queued Emacs-fidelity divergences** (audited 2026-07-05; each verified against
+  neomg's source AND real GNU Emacs 30.2, not asserted). Ranked by daily impact:
+  - [ ] **FM-REGION-HIGHLIGHT** — the active region is invisible (no
+    transient-mark-mode). Emacs highlights mark..point (verified: grey-bg SGR on
+    set-mark+move; default `(not noninteractive)`); neomg's `display.c` only
+    standouts under `magit_ediff_active`. Highlight the region for normal buffers.
+    HIGHEST daily impact.
+  - [ ] **FM-KILL-RING** — single kill buffer, `M-y` unbound. Emacs cycles up to
+    `kill-ring-max`=120 past kills (`M-y` yank-pop). Add a real kill ring + `M-y`.
+  - [ ] **FM-AUTOSAVE** — no auto-save / crash recovery. Emacs auto-saves to
+    `#file#` (`auto-save-default`=t) + `recover-file`. neomg loses everything since
+    the last `C-x C-s` on a crash/kill.
+  - [ ] **FM-DABBREV** — `M-/` (dabbrev-expand) is unbound; Emacs binds it. A
+    constant power-user reflex that no-ops today.
+  - [ ] **FM-RECENTER-CYCLE** — `C-l` recenters to center only; Emacs `C-l` is
+    `recenter-top-bottom` (center→top→bottom on repeats). Minor.
+  - _(3 deeper source surveys — file/buffer, editing/mark/kill, keys/minibuffer —
+    were running at audit time; fold any additional verified divergences in here.)_
+
+  Verified as NON-divergences (mg matches Emacs; do NOT "fix"): backup `~` files,
+  `C-h`=help prefix, undo present, `C-x C-c` per-buffer `Save file <name>?`,
+  incremental+regex search (`C-s`/`C-r`), "file changed on disk" warning, `M-.` ctags.
+
 ### Out of scope by design (NOT gaps to close — documented stance)
 - **`forge`** (GitHub/GitLab issues & PRs, Gerrit) — a separate Magit package,
   not core porcelain. neomg targets local git, not host integrations.
