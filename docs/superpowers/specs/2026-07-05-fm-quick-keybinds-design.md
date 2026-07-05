@@ -27,16 +27,33 @@ only centers (`w_frame = 0`). Add cycling:
   (position at line n) and does not cycle.
 - `reposition` sets `thisflag |= CFRECT`.
 
-### 2. `M-g` → goto-line
+### 2. `M-g` → goto-line (faithful prefix map)
 
-Emacs `M-g` is a prefix map (`M-g g` / `M-g M-g` → `goto-line`, verified).
-neomg leaves `M-g` unbound (`metasqf['g'] == rescan`) though it has `gotoline`.
-mg's keymap model allows only one prefix key per `map_element`, and `'g'` sits
-in the shared `'['..'h'`/`metasqf` element whose prefix slot is already used by
-`M-[` — so a faithful `M-g` *prefix* would require splitting that element,
-disproportionate for one binding. **Bind `M-g` directly to `gotoline`**
-(`metasqf['g'] = gotoline`): `M-g` prompts for a line immediately, which covers
-the reflex. The `M-g g` prefix form is deferred (`FM-MG-PREFIX`, todo.md).
+Emacs `M-g` is a prefix; `M-g g` and `M-g M-g` (and further repeated `M-g`s) →
+`goto-line` (verified). neomg leaves `M-g` unbound (`metasqf['g'] == rescan`)
+though it has `gotoline`. Implement a real prefix map (full faithfulness):
+
+- **New `gotomap` (`KEYMAPE (2)`, default `rescan`), two sorted elements:**
+  - `{ CCHR('['), CCHR('['), gotomap_esc, (KEYMAP *)&gotomap }` where
+    `gotomap_esc[] = { NULL }` — a following `ESC` (the second `M-`) re-enters
+    `gotomap` **itself** (a legal self-referential static-address initializer),
+    so `M-g M-g`, `M-g M-g M-g`, … all resolve (Emacs's meta-repeat).
+  - `{ 'g', 'g', gotomap_g, NULL }` where `gotomap_g[] = { gotoline }` — the
+    plain `g` runs `goto-line`.
+- **Split the metamap `'['..'h'` element.** It currently shares one
+  `metasqf` array + the `M-[` prefix slot (`metasqlmap`); mg allows one prefix
+  key per `map_element`, so `'g'` needs its own element. `doscan` scans elements
+  by ascending `k_num` (`kbd.c:160`) and descends into `k_prefmap` when the
+  `k_funcp` entry is `NULL` — so replace `{ '[', 'h', metasqf, &metasqlmap }`
+  with three sorted elements:
+  - `{ '[', 'f', metasqf, (KEYMAP *)&metasqlmap }` (unchanged behavior; `metasqf`
+    indices 0–11 still map `'['`..`'f'`; keeps the `M-[` escape-sequence prefix),
+  - `{ 'g', 'g', metag, (KEYMAP *)&gotomap }` with `metag[] = { NULL }` (the `'g'`
+    prefix key → `gotomap`),
+  - `{ 'h', 'h', metah, NULL }` with `metah[] = { markpara }` (`M-h` unchanged).
+  `metamap` grows `KEYMAPE (8)` → `KEYMAPE (10)`; the new elements stay in
+  ascending key order between the existing `'%'`/`'*'..'>'` and `'l'..'}'`
+  elements.
 
 ### 3. `C-x z` → repeat
 
@@ -65,8 +82,9 @@ unbound. neomg has no doc strings, so "briefly" is as verbose as it gets — bin
 - `src/kbd.c` — `last_command` global + `mgwrap` hook; `repeat` command (or a
   small `extend.c`/`window.c` home — plan picks; `kbd.c` is natural since the
   dispatch lives there).
-- `src/keymap.c` — `metasqf['g'] = gotoline`; `cXmap['z'] = repeat`;
-  `helpmap['k'] = desckey`.
+- `src/keymap.c` — new `gotomap` (+ `gotomap_esc`/`gotomap_g`/`metag`/`metah`
+  arrays); split the metamap `'['..'h'` element into three (`KEYMAPE(8)`→`(10)`);
+  `cXmap['z'] = repeat`; `helpmap['k'] = desckey`.
 - `src/funmap.c` — `repeat` funmap entry (`{repeat, "repeat", 1, NULL}`).
 
 All plain C, both builds (no `ENABLE_*` gating).
@@ -79,8 +97,9 @@ All plain C, both builds (no `ENABLE_*` gating).
   via the cursor-position escape row, or the set of visible lines). If asserting
   exact rows is brittle, assert that three consecutive `C-l` produce three
   *different* framings (not all identical, which is the bug).
-- **M-g:** `M-g` then `5 RET` → point on line 5 (assert the line's content is
-  current, e.g. via `C-a C-k` then check, or the `Goto line` prompt appears).
+- **M-g:** `M-g g` then `3 RET` → point on line 3; and separately `M-g M-g`
+  then `2 RET` → point on line 2 (assert both prefix forms reach `goto-line`,
+  e.g. the `Goto line` prompt appears, then confirm the resulting line).
 - **C-x z:** self-insert nothing; run a repeatable command (e.g. `C-n` moves
   down), then `C-x z` → the command runs again (point moved another line);
   assert. And `C-x z` with no prior command beeps (no crash).
@@ -92,5 +111,6 @@ Verify macOS + Alpine/musl + the `c-legacy` build (all plain C, ships in both).
 ## Out of scope (todo.md)
 
 - `M-/` dabbrev-expand → its own spec (`FM-DABBREV`).
-- Faithful `M-g` prefix map (`M-g g`) → `FM-MG-PREFIX`.
+- `M-g` other sub-bindings (`M-g n`/`M-g p` next/prev-error, `M-g c` goto-char) —
+  only `goto-line` is wired; the rest stay unbound in `gotomap`.
 - `C-u N C-x z` repeat-count; `repeat-mode`.
