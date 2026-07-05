@@ -429,8 +429,8 @@ absent). Keep this in sync with the README's "What it doesn't do (vs Magit)".
   - [x] **FM-TRANSPOSE-WORDS-ARG** — ✅ DONE (`fm-transpose-words`): removed the
     `n=1` override so `C-u N M-t` drags the word past N words (== Emacs; undo
     reverts). Negative prefix rejected (was a NULL-deref crash).
-  - [ ] **FM-QUERY-REPLACE-Q** — `query-replace` has no `case 'q'` (`search.c`);
-    `q` falls to default and reprints the prompt (looks hung). Accept `q` to quit.
+  - [x] **FM-QUERY-REPLACE-Q** — ✅ DONE (`fm-query-replace-q`): `q` now quits
+    query-replace (added to the RET/ESC quit cases), matching Emacs.
 
   _Systemic UX:_
   - [ ] **FM-UNBOUND-UNDEFINED** — every unbound key prints `Quit` (== `C-g`;
