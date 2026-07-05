@@ -1284,3 +1284,37 @@ TEST_CASE("M-t (transpose-words) honors a numeric prefix argument")
     // Emacs: C-u 2 M-t drags "one" past two words -> "two three one four".
     CHECK(content == "two three one four\n");
 }
+
+TEST_CASE("query-replace quits on q (not just RET/ESC)")
+{
+    auto dir = make_temp_dir();
+    std::ofstream(dir / "t.txt") << "foo foo foo\n";
+    const std::string p = (dir / "t.txt").string();
+    winsize ws{}; ws.ws_row = 24; ws.ws_col = 80;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) { ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", p.c_str(), (char *)nullptr); _exit(127); }
+    bool quit_ok = false;
+    if (wait_for(master, "foo foo", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x1b%", 2);                 // M-% : query-replace
+        if (wait_for(master, "Query replace", std::chrono::seconds(8))) {
+            (void)!::write(master, "foo\r", 4);             // search pattern
+            (void)!::write(master, "bar\r", 4);             // replacement
+            if (wait_for(master, "Query replacing", std::chrono::seconds(8))) {
+                (void)!::write(master, "q", 1);             // quit
+                // Fixed: q ends query-replace ("Replaced 0 occurrences").
+                // Bug: q reprinted the "y/n or ..." help and looped.
+                quit_ok = wait_for(master, "Replaced 0 occurrences",
+                                   std::chrono::seconds(8));
+            }
+        }
+    }
+    quit_neomg(master, pid);
+    std::ifstream in(p); std::stringstream ss; ss << in.rdbuf();
+    const std::string content = ss.str();
+    fs::remove_all(dir);
+    CHECK(quit_ok);                       // q exited query-replace
+    CHECK(content == "foo foo foo\n");    // nothing replaced (quit at first match)
+}
