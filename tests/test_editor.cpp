@@ -1232,3 +1232,28 @@ TEST_CASE("C-t at end of line transposes in place (does not cross to the next li
     // move 'b' onto the next line ("a\nbcd\n" was the corruption bug).
     CHECK(content == "ba\ncd\n");
 }
+
+TEST_CASE("dired visits a symlink's target, not a garbled 'name -> target' string")
+{
+    auto dir = make_temp_dir();
+    std::ofstream(dir / "zzztarget.txt") << "TARGETBODY_UNIQUE\n";
+    fs::create_symlink(dir / "zzztarget.txt", dir / "aaalink"); // aaalink -> zzztarget.txt
+    const std::string d = dir.string();
+    winsize ws{}; ws.ws_row = 24; ws.ws_col = 100;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) { ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", d.c_str(), (char *)nullptr); _exit(127); }
+    bool visited = false;
+    if (wait_for(master, "aaalink", std::chrono::seconds(8))) { // dired rendered
+        // point starts on the first entry (the symlink). Visit it.
+        (void)!::write(master, "f", 1);
+        // A correct name resolves the symlink and opens the target's content;
+        // the bug opened an empty "(New file)" named after garbage.
+        visited = wait_for(master, "TARGETBODY_UNIQUE", std::chrono::seconds(8));
+    }
+    quit_neomg(master, pid);
+    fs::remove_all(dir);
+    CHECK(visited); // f on a symlink row opened its target, not a (New file)
+}

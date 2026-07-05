@@ -422,10 +422,10 @@ absent). Keep this in sync with the README's "What it doesn't do (vs Magit)".
     end-of-line moved a char onto the NEXT line (`twiddle` did backdel+forwchar,
     crossing the line) — `ab⏎cd` + `C-e C-t` gave `a⏎bcd`. Now transposes the
     last two chars in place (`ba⏎cd`), like Emacs.
-  - [ ] **FM-DIRED-SYMLINK** — dired `d_makename` (`dired.c:841`) copies to
-    end-of-line, so a symlink row's "filename" includes ` -> target`; `f`/RET
-    opens an empty `(New file)`, and `x` delete fails ("Could not delete …") and
-    leaves the symlink. Data-loss-adjacent. Compute the name up to ` -> `.
+  - [x] **FM-DIRED-SYMLINK** — ✅ DONE (branch `fm-dired-symlink`): `d_makename`
+    now truncates a symlink row's name at ` -> ` (type char 'l' at index 2), so
+    `f`/RET opens the target and `d`/`x` deletes the symlink (was: empty
+    `(New file)`, and delete failed leaving the symlink). Data-loss fixed.
   - [ ] **FM-TRANSPOSE-WORDS-ARG** — `M-t` hardcodes `n=1` (`word.c:151`), silently
     ignoring a numeric prefix (`C-u 2 M-t` does one). Honor the count.
   - [ ] **FM-QUERY-REPLACE-Q** — `query-replace` has no `case 'q'` (`search.c`);

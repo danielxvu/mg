@@ -848,6 +848,25 @@ d_makename(struct line *lp, char *fn, size_t len)
 	namep = &ltext(lp)[start];
 	nlen = llength(lp) - start;
 
+	/*
+	 * ls -l renders a symlink as "name -> target"; the filename ends at
+	 * the " -> " marker. Without truncating here d_makename returns the
+	 * whole "name -> target" string, breaking visit/delete/rename/copy on
+	 * symlinks. The type char is at index 2 (after dired's 2-column flag),
+	 * matching the directory check below.
+	 */
+	if (lgetc(lp, 2) == 'l') {
+		int	i;
+
+		for (i = 0; i + 4 <= nlen; i++) {
+			if (namep[i] == ' ' && namep[i + 1] == '-' &&
+			    namep[i + 2] == '>' && namep[i + 3] == ' ') {
+				nlen = i;
+				break;
+			}
+		}
+	}
+
 	ret = snprintf(fn, len, "%s%.*s", curbp->b_fname, nlen, namep);
 	if (ret < 0 || ret >= (int)len)
 		return (ABORT); /* Name is too long. */
