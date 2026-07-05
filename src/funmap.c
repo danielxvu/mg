@@ -267,6 +267,7 @@ static struct funmap functnames[] = {
 	{filewrite, "write-file", 1, NULL},
 	{yank, "yank", 1, NULL},
 	{yank_pop, "yank-pop", 1, NULL},
+	{repeat, "repeat", 1, NULL},
 	{NULL, NULL, 0, NULL}
 };
 

@@ -44,7 +44,22 @@ new_window(struct buffer *bp)
 int
 reposition(int f, int n)
 {
-	curwp->w_frame = (f & FFARG) ? (n >= 0 ? n + 1 : n) : 0;
+	static int	step;		/* 0 middle, 1 top, 2 bottom */
+
+	if (f & FFARG) {
+		/* explicit arg positions dot at line n; not part of the cycle */
+		curwp->w_frame = (n >= 0) ? n + 1 : n;
+	} else {
+		/* Emacs recenter-top-bottom: cycle middle -> top -> bottom. */
+		step = (lastflag & CFRECT) ? (step + 1) % 3 : 0;
+		if (step == 0)
+			curwp->w_frame = 0;			/* middle */
+		else if (step == 1)
+			curwp->w_frame = 1;			/* top */
+		else
+			curwp->w_frame = curwp->w_ntrows;	/* bottom */
+		thisflag |= CFRECT;
+	}
 	curwp->w_rflag |= WFFRAME;
 	sgarbf = TRUE;
 	return (TRUE);
