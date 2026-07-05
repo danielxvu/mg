@@ -1052,3 +1052,114 @@ TEST_CASE("*magit-log* shows colored ref decoration on the HEAD row")
     CHECK(decorated); // the log row carries (HEAD -> ...
     CHECK(colored);   // ...and the colorizer painted HEAD cyan
 }
+
+TEST_CASE("+ in *magit-commit* rebuilds the diff with more context")
+{
+    auto repo = make_repo();
+    const std::string repofile = (repo / "tracked.txt").string();
+    winsize ws{}; ws.ws_row = 40; ws.ws_col = 100;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) { ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", repofile.c_str(), (char *)nullptr); _exit(127); }
+    bool oncommit = false, applied = false;
+    if (wait_for(master, "tracked.txt", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x1bxmagit-status\r", 15);
+        if (wait_for(master, "On branch", std::chrono::seconds(8))) {
+            (void)!::write(master, "\x18" "1", 2); // C-x 1
+            (void)!::write(master, "ll", 2);       // l l: open *magit-log*
+            if (wait_for(master, "init", std::chrono::seconds(8))) {
+                (void)!::write(master, "\r", 1);   // RET: show the commit
+                oncommit = wait_for(master, "commit ", std::chrono::seconds(8));
+                if (oncommit) {
+                    (void)!::write(master, "+", 1); // more context in commit view
+                    // The Diff: header (Task 2) appears only at non-default ctx,
+                    // and only *magit-commit* re-renders it here.
+                    applied = wait_for(master, "Diff:", std::chrono::seconds(8));
+                }
+            }
+        }
+    }
+    quit_neomg(master, pid);
+    fs::remove_all(repo);
+    CHECK(oncommit); // RET opened the commit view
+    CHECK(applied);  // + rebuilt it with the new context (Diff: header rendered)
+}
+
+TEST_CASE("w in *magit-commit* toggles ignore-whitespace")
+{
+    auto repo = make_repo();
+    const std::string repofile = (repo / "tracked.txt").string();
+    winsize ws{}; ws.ws_row = 40; ws.ws_col = 100;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) { ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", repofile.c_str(), (char *)nullptr); _exit(127); }
+    bool oncommit = false, applied = false;
+    if (wait_for(master, "tracked.txt", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x1bxmagit-status\r", 15);
+        if (wait_for(master, "On branch", std::chrono::seconds(8))) {
+            (void)!::write(master, "\x18" "1", 2); // C-x 1
+            (void)!::write(master, "ll", 2);       // l l: open *magit-log*
+            if (wait_for(master, "init", std::chrono::seconds(8))) {
+                (void)!::write(master, "\r", 1);   // RET: show the commit
+                oncommit = wait_for(master, "commit ", std::chrono::seconds(8));
+                if (oncommit) {
+                    (void)!::write(master, "w", 1); // toggle ignore-whitespace
+                    // At the default context (3) the Diff: header is suppressed
+                    // unless -w is also set, so its appearance proves the toggle
+                    // reached the commit view: "Diff:     -U3 -w".
+                    applied = wait_for(master, "-w", std::chrono::seconds(8));
+                }
+            }
+        }
+    }
+    quit_neomg(master, pid);
+    fs::remove_all(repo);
+    CHECK(oncommit); // RET opened the commit view
+    CHECK(applied);  // w rebuilt it with -w (Diff:     -U3 -w rendered)
+}
+
+TEST_CASE("+ inside the d popup rebuilds *magit-commit*'s diff")
+{
+    auto repo = make_repo();
+    const std::string repofile = (repo / "tracked.txt").string();
+    winsize ws{}; ws.ws_row = 40; ws.ws_col = 100;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) { ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", repofile.c_str(), (char *)nullptr); _exit(127); }
+    bool oncommit = false, popup = false, applied = false;
+    if (wait_for(master, "tracked.txt", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x1bxmagit-status\r", 15);
+        if (wait_for(master, "On branch", std::chrono::seconds(8))) {
+            (void)!::write(master, "\x18" "1", 2); // C-x 1
+            (void)!::write(master, "ll", 2);       // l l: open *magit-log*
+            if (wait_for(master, "init", std::chrono::seconds(8))) {
+                (void)!::write(master, "\r", 1);   // RET: show the commit
+                oncommit = wait_for(master, "commit ", std::chrono::seconds(8));
+                if (oncommit) {
+                    (void)!::write(master, "d", 1); // d: open the diff-view popup
+                    popup = wait_for(master, "Diff view", std::chrono::seconds(8));
+                    if (popup) {
+                        (void)!::write(master, "+", 1); // grow context from the popup
+                        // The popup applies via magit_diff_view_refresh(stbp, ...) --
+                        // the stbp-targeted path -- which rebuilds *magit-commit*
+                        // itself (not just the popup) and forces its window to
+                        // redraw, so the Diff: header shows up on screen here.
+                        applied = wait_for(master, "Diff:", std::chrono::seconds(8));
+                        (void)!::write(master, "q", 1); // q: close the popup
+                    }
+                }
+            }
+        }
+    }
+    quit_neomg(master, pid);
+    fs::remove_all(repo);
+    CHECK(oncommit); // RET opened the commit view
+    CHECK(popup);    // d opened the diff-view popup
+    CHECK(applied);  // + (inside the popup) rebuilt *magit-commit*'s Diff: header
+}

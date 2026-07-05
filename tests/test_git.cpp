@@ -3558,6 +3558,48 @@ TEST_CASE("set_diff_view ignore-whitespace hides a whitespace-only change")
     fs::remove_all(dir);
 }
 
+TEST_CASE("set_diff_view controls context lines in commit_diff")
+{
+    auto dir = make_repo_with_commit("base");
+    set_test_config(dir);
+    commit_file(dir, "f.txt", "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n", "add f");
+    commit_file(dir, "f.txt", "1\n2\n3\n4\n5\nSIX\n7\n8\n9\n10\n", "change 6"); // HEAD
+
+    mg::git::set_diff_view(3, false); // line "10" (4 from the change) NOT in ctx 3
+    auto d3 = mg::git::commit_diff(dir.string(), "HEAD");
+    REQUIRE(d3.has_value());
+    bool has10_c3 = false;
+    for (auto &h : *d3) for (auto &l : h.lines)
+        if (l.content.find("10") != std::string::npos) has10_c3 = true;
+    CHECK_FALSE(has10_c3);
+
+    mg::git::set_diff_view(6, false); // ctx 6 widens to include "10"
+    auto d6 = mg::git::commit_diff(dir.string(), "HEAD");
+    REQUIRE(d6.has_value());
+    bool has10_c6 = false;
+    for (auto &h : *d6) for (auto &l : h.lines)
+        if (l.content.find("10") != std::string::npos) has10_c6 = true;
+    CHECK(has10_c6);
+
+    mg::git::set_diff_view(3, false); // reset for other tests
+    fs::remove_all(dir);
+}
+
+TEST_CASE("set_diff_view ignore-whitespace hides a whitespace-only commit_diff")
+{
+    auto dir = make_repo_with_commit("base");
+    set_test_config(dir);
+    commit_file(dir, "w.txt", "alpha\nbravo\n", "add w");
+    commit_file(dir, "w.txt", "alpha \nbravo\n", "trailing space"); // HEAD, ws-only
+
+    mg::git::set_diff_view(3, true);
+    auto d = mg::git::commit_diff(dir.string(), "HEAD");
+    REQUIRE(d.has_value());
+    CHECK(d->empty()); // ws-only change -> no hunks when ignoring whitespace
+    mg::git::set_diff_view(3, false);
+    fs::remove_all(dir);
+}
+
 // discover_workdir gates the status monitor: it must resolve a repo from any
 // subdirectory (search-up) but return nullopt outside a repo, so launching mg
 // outside a repository never starts a recursive watch (the fd-exhaustion bug).
