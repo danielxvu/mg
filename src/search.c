@@ -602,6 +602,7 @@ retry:
 			goto stopsearch;
 		case CCHR('['):
 		case CCHR('M'):
+		case 'q':		/* Emacs also quits query-replace on 'q' */
 			goto stopsearch;
 		case '!':
 			do {
@@ -616,7 +617,7 @@ retry:
 		case CCHR('?'):
 			break;
 		default:
-			ewprintf("y/n or <SP>/<DEL>: replace/don't, [.] repl-end, [!] repl-rest, <CR>/<ESC> quit");
+			ewprintf("y/n or <SP>/<DEL>: replace/don't, [.] repl-end, [!] repl-rest, <CR>/<ESC>/[q] quit");
 			goto retry;
 		}
 	}
