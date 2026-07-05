@@ -448,8 +448,13 @@ absent). Keep this in sync with the README's "What it doesn't do (vs Magit)".
     de-extend pass used stale span state). Deferred minor: a horizontally
     *scrolled* (extended) line doesn't show its region standout (same gap as the
     ediff highlight) — `FM-REGION-EXTLINE`.
-  - [ ] **FM-KILL-RING** — single kill buffer, `M-y` unbound; non-consecutive
-    kills silently destroy the earlier one (data loss). Add a ring + `M-y`.
+  - [x] **FM-KILL-RING** — ✅ DONE (`fm-kill-ring`, #116): bounded ring
+    (NKILL=60); `kdelete` rotates instead of freeing; `M-y` (yank-pop) cycles.
+    Review caught 2 bugs (KNONE ring pollution; `C-u 0 C-y` stale-region delete).
+    Deferred: `C-u N M-y` numeric cycling, browse-kill-ring, persistence,
+    clipboard; minor warts `FM-KR-TRANSPOSEPARA-DBLKILL` (transpose-paragraphs
+    calls kdelete twice) and `FM-KR-YANK-ARG-MARK` (`C-u N C-y` marks only the
+    last copy, so `M-y` after it replaces only that one).
   - [ ] **FM-MINIBUFFER-HISTORY** — `M-p`/`M-n` dead in the minibuffer (`echo.c`
     has no history ring); Emacs cycles per-prompt input history.
   - [ ] **FM-FILENAME-EXPAND** — no `$VAR`/`${VAR}` expansion in typed filenames
