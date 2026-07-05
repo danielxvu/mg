@@ -404,6 +404,14 @@ absent). Keep this in sync with the README's "What it doesn't do (vs Magit)".
   while reaping (SIGKILL only as fallback), used by every pty test; the omitted
   end-to-end `push --dry-run` test is restored and passes.
 
+### Core-editor Emacs fidelity (non-magit)
+- [x] **FM-FINDFILE-NEWFILE — open missing-directory paths like Emacs.** ✅ DONE
+  (branch `fm-findfile-newfile`): `C-x C-f` on a path whose directory doesn't
+  exist no longer blocks with `Missing directory, create?` at open — the buffer
+  opens read-write (Emacs-verified, 30.2), and the create-directory prompt moves
+  to save (`writeout`). Core `src/file.c` only. Spec:
+  `docs/superpowers/specs/2026-07-05-fm-findfile-newfile-design.md`.
+
 ### Out of scope by design (NOT gaps to close — documented stance)
 - **`forge`** (GitHub/GitLab issues & PRs, Gerrit) — a separate Magit package,
   not core porcelain. neomg targets local git, not host integrations.
