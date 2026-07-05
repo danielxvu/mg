@@ -4094,9 +4094,16 @@ commit_diff(std::string repo, std::string rev)
         parent_tree.reset(raw_pt);
     }
 
+    git_diff_options dopts;
+    git_diff_options_init(&dopts, GIT_DIFF_OPTIONS_VERSION);
+    dopts.context_lines =
+        static_cast<uint32_t>(g_diff_context.load(std::memory_order_relaxed));
+    if (g_diff_ignore_ws.load(std::memory_order_relaxed))
+        dopts.flags |= GIT_DIFF_IGNORE_WHITESPACE;
+
     git_diff *raw_diff = nullptr;
     if (git_diff_tree_to_tree(&raw_diff, r.get(), parent_tree.get(), tree.get(),
-                              nullptr) != 0)
+                              &dopts) != 0)
         return std::unexpected(last_error());
     detail::diff_ptr diff(raw_diff);
     return diff_to_hunks(diff.get());
