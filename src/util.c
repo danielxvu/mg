@@ -185,6 +185,20 @@ twiddle(int f, int n)
 			lnewline();
 			linsert(1, cr);
 			(void)backdel(FFRAND, 1);
+		} else if (doto == llength(dotp) && doto >= 2) {
+			/*
+			 * End of line: transpose the last two characters in
+			 * place, like Emacs. The generic branch below does
+			 * backdel then forwchar -- which at end-of-line crosses
+			 * onto the NEXT line -- and drops the char there: a
+			 * data-corruption bug ("ab\ncd" + C-e C-t gave
+			 * "a\nbcd" instead of "ba\ncd").
+			 */
+			cr = lgetc(dotp, doto - 1);
+			(void)backdel(FFRAND, 1);
+			(void)backchar(FFRAND, 1);
+			linsert(1, cr);
+			(void)forwchar(FFRAND, 1);
 		} else {	/* twiddle is elsewhere in line */
 			cr = lgetc(dotp, doto - 1);
 			(void)backdel(FFRAND, 1);
