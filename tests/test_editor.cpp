@@ -1625,3 +1625,112 @@ TEST_CASE("C-l cycles recenter middle/top/bottom")
     CHECK(r3 > r2);   // bottom below top
 }
 
+
+TEST_CASE("C-x z repeats self-insert with the right char (not 'z')")
+{
+    auto dir = make_temp_dir();
+    std::ofstream(dir / "t.txt") << "\n";
+    const std::string p = (dir / "t.txt").string();
+    winsize ws{}; ws.ws_row = 24; ws.ws_col = 80;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) { ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", p.c_str(), (char *)nullptr); _exit(127); }
+    std::string content;
+    if (wait_for(master, "t.txt", std::chrono::seconds(8))) {
+        (void)!::write(master, "x", 1);      // self-insert 'x'
+        (void)!::write(master, "\x18z", 2);  // C-x z -> repeat self-insert -> 'x'
+        (void)!::write(master, "z", 1);      // z -> another 'x'
+        (void)!::write(master, "\x18\x13", 2);
+        (void)wait_for(master, "Wrote", std::chrono::seconds(8));
+    }
+    quit_neomg(master, pid);
+    std::ifstream in(p); std::stringstream ss; ss << in.rdbuf();
+    content = ss.str();
+    fs::remove_all(dir);
+    CHECK(content.find("xxx") != std::string::npos);  // not "xz"
+    CHECK(content.find('z') == std::string::npos);
+}
+
+TEST_CASE("C-x z with no prior command is refused")
+{
+    auto dir = make_temp_dir();
+    std::ofstream(dir / "t.txt") << "hello\n";
+    const std::string p = (dir / "t.txt").string();
+    winsize ws{}; ws.ws_row = 24; ws.ws_col = 80;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) { ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", p.c_str(), (char *)nullptr); _exit(127); }
+    bool refused = false;
+    if (wait_for(master, "hello", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x18z", 2);   // C-x z, nothing run yet
+        refused = wait_for(master, "No last command to repeat",
+                           std::chrono::seconds(8));
+    }
+    quit_neomg(master, pid);
+    fs::remove_all(dir);
+    CHECK(refused);
+}
+
+TEST_CASE("C-x z repeats movement (C-n twice lands two lines down)")
+{
+    auto dir = make_temp_dir();
+    std::ofstream(dir / "t.txt") << "a\nb\nc\nd\ne\n";
+    const std::string p = (dir / "t.txt").string();
+    winsize ws{}; ws.ws_row = 24; ws.ws_col = 80;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) { ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", p.c_str(), (char *)nullptr); _exit(127); }
+    std::string content;
+    if (wait_for(master, "a", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x01", 1);    // C-a (line 1)
+        (void)!::write(master, "\x0e", 1);    // C-n -> line 2
+        (void)!::write(master, "\x18z", 2);   // C-x z repeat C-n -> line 3
+        (void)!::write(master, "\x0b", 1);    // C-k kill line 3 ("c")
+        (void)!::write(master, "\x18\x13", 2);
+        (void)wait_for(master, "Wrote", std::chrono::seconds(8));
+    }
+    quit_neomg(master, pid);
+    std::ifstream in(p); std::stringstream ss; ss << in.rdbuf();
+    content = ss.str();
+    fs::remove_all(dir);
+    CHECK(content.find("c") == std::string::npos);   // landed on line 3
+    CHECK(content.find("b") != std::string::npos);
+}
+
+TEST_CASE("C-x z after undo continues undoing (not a redo)")
+{
+    auto dir = make_temp_dir();
+    std::ofstream(dir / "t.txt") << "start\n";
+    const std::string p = (dir / "t.txt").string();
+    winsize ws{}; ws.ws_row = 24; ws.ws_col = 80;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) { ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", p.c_str(), (char *)nullptr); _exit(127); }
+    std::string content;
+    if (wait_for(master, "start", std::chrono::seconds(8))) {
+        // three separate inserts (C-f between them => separate undo records)
+        (void)!::write(master, "A\x06" "B\x06" "C", 5);
+        (void)!::write(master, "\x18u", 2);   // C-x u : undo once
+        (void)!::write(master, "\x18z", 2);   // C-x z : repeat undo
+        (void)!::write(master, "z", 1);       // z : repeat undo again
+        (void)!::write(master, "\x18\x13", 2);
+        (void)wait_for(master, "Wrote", std::chrono::seconds(8));
+    }
+    quit_neomg(master, pid);
+    std::ifstream in(p); std::stringstream ss; ss << in.rdbuf();
+    content = ss.str();
+    fs::remove_all(dir);
+    // undo + two repeats undo all three inserts -> back to "start"; A/B/C gone.
+    CHECK(content.find("start") != std::string::npos);
+    CHECK(content.find('A') == std::string::npos);
+    CHECK(content.find('B') == std::string::npos);
+    CHECK(content.find('C') == std::string::npos);
+}

@@ -516,6 +516,7 @@ int		 kchunk(char *, RSIZE, int);
 int		 killline(int, int);
 int		 yank(int, int);
 int		 yank_pop(int, int);
+int		 repeat(int, int);
 
 /* window.c X */
 struct mgwin	*new_window(struct buffer *);
