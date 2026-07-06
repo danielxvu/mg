@@ -33,6 +33,9 @@ static int		 pushedc;
 struct map_element	*ele;
 struct key 		 key;
 int			 rptcount;
+PF			 last_command;	/* last real command (for repeat) */
+static int		 last_f, last_n;
+static struct key	 last_key;	/* key sequence that invoked it */
 
 /*
  * Toggle the value of use_metakey
@@ -485,18 +488,60 @@ quote(int f, int n)
 static int
 mgwrap(PF funct, int f, int n)
 {
-	static	 PF ofp;
-
 	if (funct != rescan &&
 	    funct != negative_argument &&
 	    funct != digit_argument &&
-	    funct != universal_argument) {
-		if (funct == ofp)
+	    funct != universal_argument &&
+	    funct != repeat) {
+		if (funct == last_command)
 			rptcount++;
 		else
 			rptcount = 0;
-		ofp = funct;
+		last_command = funct;
+		last_f = f;
+		last_n = n;
+		last_key = key;		/* snapshot the invoking key sequence */
 	}
 
 	return ((*funct)(f, n));
+}
+
+/*
+ * C-x z: repeat the last command, re-running it through mgwrap with its
+ * captured key sequence and numeric arg so state-dependent commands
+ * (selfinsert, undo, ...) behave. Press z again to keep repeating.
+ */
+int
+repeat(int f, int n)
+{
+	int	 s, c;
+
+	if (inmacro) {
+		/*
+		 * During macro replay executemacro() calls each recorded step
+		 * directly (bypassing mgwrap), so last_command would still be
+		 * executemacro -- repeating it would re-run the macro and recurse
+		 * until the stack overflows. Refuse, like query-replace does.
+		 */
+		dobeep();
+		ewprintf("Can't repeat within a macro");
+		return (FALSE);
+	}
+	if (last_command == NULL) {
+		dobeep();
+		ewprintf("No last command to repeat");
+		return (FALSE);
+	}
+	for (;;) {
+		key = last_key;		/* restore the sequence the command saw */
+		s = mgwrap(last_command, last_f, last_n);
+		if (s != TRUE)		/* ABORT or FALSE -> stop */
+			return (s);
+		update(CMODE);
+		c = getkey(FALSE);
+		if (c != 'z')
+			break;
+	}
+	ungetkey(c);
+	return (TRUE);
 }

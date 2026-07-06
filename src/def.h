@@ -610,6 +610,7 @@ int		 bsmap(int, int);
 void		 ungetkey(int);
 int		 getkey(int);
 int		 doin(void);
+int		 repeat(int, int);
 int		 rescan(int, int);
 int		 universal_argument(int, int);
 int		 digit_argument(int, int);
