@@ -469,10 +469,11 @@ absent). Keep this in sync with the README's "What it doesn't do (vs Magit)".
   - [ ] **FM-AUTOSAVE** — no auto-save (`#file#`) / `recover-file`; crash loses work.
   - [ ] **FM-WINDOW-VSPLIT** — no `C-x 3` side-by-side split (window model is
     stack-only), no `C-x +` balance-windows. (Bigger — needs a column window model.)
-  - [ ] **FM-REPEAT** — `C-x z` repeat. Attempted in #117 but DROPPED: a direct
-    last-command re-invoke bypasses mgwrap/doin -> `selfinsert` reinserts the
-    `z` (data corruption) and `undo` reverses (frozen rptcount). Needs
-    dispatch-context capture (key seq + f/n + rptcount + ABORT via mgwrap).
+  - [x] **FM-REPEAT** — ✅ DONE (`fm-repeat`, #118): `C-x z` repeats the last
+    command. mgwrap captures last_command + f/n + a key snapshot; repeat restores
+    key and re-runs THROUGH mgwrap (fixes selfinsert char / undo continuation /
+    ABORT / prefix). Review caught + fixed a macro-replay stack overflow (guarded
+    with inmacro). Deferred: `C-u N C-x z`, repeat-in-macro, last-key repeat.
   - [ ] **FM-RECTANGLES** — no `C-x r` (rectangles/registers/bookmarks) at all.
   - [ ] **FM-COMMENT-DWIM** — `M-;` inert (no comment-region/comment-dwim).
 
