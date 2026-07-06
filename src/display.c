@@ -678,18 +678,24 @@ update(int modelinecolor)
 	}
 	hflag = FALSE;			/* Not hard. */
 	for (wp = wheadp; wp != NULL; wp = wp->w_wndp) {
-#ifdef ENABLE_NATIVE_MAGIT
-		/* The current window's active region repaints fully so the
-		 * standout tracks point (only curwp's region is drawn). */
-		if (wp == curwp && (wp->w_flag & WMARKED))
-			wp->w_rflag |= WFFULL;
-#endif
 		/*
 		 * Nothing to be done.
 		 */
 		if (wp->w_rflag == 0)
 			continue;
 #ifdef ENABLE_NATIVE_MAGIT
+		/*
+		 * The current window's active region must repaint enough of the
+		 * window to move the standout with point, so escalate a redraw
+		 * that is ALREADY needed to a full one. Doing this only when the
+		 * window already has redisplay flags set means an idle cycle
+		 * (e.g. a background magit refresh) or a no-op key leaves the
+		 * region as-is instead of re-rendering every row for nothing.
+		 * (uline diffs cells, so a genuine move still emits only the
+		 * boundary rows whose highlight actually changed.)
+		 */
+		if (wp == curwp && (wp->w_flag & WMARKED))
+			wp->w_rflag |= WFFULL;
 		region_hl_setup(wp);	/* order the mark/point span for this window */
 #endif
 
