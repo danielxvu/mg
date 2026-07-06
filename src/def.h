@@ -516,7 +516,6 @@ int		 kchunk(char *, RSIZE, int);
 int		 killline(int, int);
 int		 yank(int, int);
 int		 yank_pop(int, int);
-int		 repeat(int, int);
 
 /* window.c X */
 struct mgwin	*new_window(struct buffer *);
@@ -611,6 +610,7 @@ int		 bsmap(int, int);
 void		 ungetkey(int);
 int		 getkey(int);
 int		 doin(void);
+int		 repeat(int, int);
 int		 rescan(int, int);
 int		 universal_argument(int, int);
 int		 digit_argument(int, int);

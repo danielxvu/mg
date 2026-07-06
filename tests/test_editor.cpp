@@ -1734,3 +1734,67 @@ TEST_CASE("C-x z after undo continues undoing (not a redo)")
     CHECK(content.find('B') == std::string::npos);
     CHECK(content.find('C') == std::string::npos);
 }
+
+TEST_CASE("C-x z inside a macro does not crash on replay")
+{
+    auto dir = make_temp_dir();
+    std::ofstream(dir / "t.txt") << "L1\nL2\nL3\nL4\n";
+    const std::string p = (dir / "t.txt").string();
+    winsize ws{}; ws.ws_row = 24; ws.ws_col = 80;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) { ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", p.c_str(), (char *)nullptr); _exit(127); }
+    std::string content;
+    if (wait_for(master, "L1", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x18(", 2);   // C-x ( start macro
+        (void)!::write(master, "\x01\x0e", 2);// C-a C-n
+        (void)!::write(master, "\x18z", 2);   // C-x z (recorded)
+        (void)!::write(master, "\x18)", 2);   // C-x ) end macro
+        (void)!::write(master, "\x18" "e", 2);// C-x e replay (old code crashed here)
+        drain(master, 400);
+        (void)!::write(master, "MARK", 4);    // still responsive?
+        (void)!::write(master, "\x18\x13", 2);
+        (void)wait_for(master, "Wrote", std::chrono::seconds(8));
+    }
+    quit_neomg(master, pid);
+    std::ifstream in(p); std::stringstream ss; ss << in.rdbuf();
+    content = ss.str();
+    fs::remove_all(dir);
+    CHECK(content.find("MARK") != std::string::npos);  // editor survived + responsive
+}
+
+TEST_CASE("C-x z preserves the numeric prefix of the repeated command")
+{
+    auto dir = make_temp_dir();
+    std::ofstream f(dir / "t.txt");
+    for (int i = 1; i <= 9; i++) f << "L" << i << "\n";
+    f.close();
+    const std::string p = (dir / "t.txt").string();
+    winsize ws{}; ws.ws_row = 24; ws.ws_col = 80;
+    int master = -1;
+    pid_t pid = ::forkpty(&master, nullptr, nullptr, &ws);
+    REQUIRE(pid >= 0);
+    if (pid == 0) { ::setenv("TERM", "xterm", 1);
+        ::execl(NEOMG_BINARY, "neomg", p.c_str(), (char *)nullptr); _exit(127); }
+    std::string content;
+    if (wait_for(master, "L1", std::chrono::seconds(8))) {
+        (void)!::write(master, "\x01", 1);      // C-a (line 1)
+        (void)!::write(master, "\x1b" "3", 2);  // M-3 : prefix arg 3
+        (void)!::write(master, "\x0e", 1);      // C-n x3 -> line 4
+        (void)!::write(master, "\x18z", 2);     // C-x z repeats (arg 3) -> line 7
+        (void)!::write(master, "\x0b", 1);      // C-k kill line 7 ("L7")
+        (void)!::write(master, "\x18\x13", 2);
+        (void)wait_for(master, "Wrote", std::chrono::seconds(8));
+    }
+    quit_neomg(master, pid);
+    std::ifstream in(p); std::stringstream ss; ss << in.rdbuf();
+    content = ss.str();
+    fs::remove_all(dir);
+    // repeat reused n=3, so C-n moved 3 then 3 -> line 7 killed; if n were dropped
+    // to 1 it would have landed on line 5 instead.
+    CHECK(content.find("L7") == std::string::npos);
+    CHECK(content.find("L4") != std::string::npos);
+    CHECK(content.find("L5") != std::string::npos);
+}

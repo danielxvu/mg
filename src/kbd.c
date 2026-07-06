@@ -516,6 +516,17 @@ repeat(int f, int n)
 {
 	int	 s, c;
 
+	if (inmacro) {
+		/*
+		 * During macro replay executemacro() calls each recorded step
+		 * directly (bypassing mgwrap), so last_command would still be
+		 * executemacro -- repeating it would re-run the macro and recurse
+		 * until the stack overflows. Refuse, like query-replace does.
+		 */
+		dobeep();
+		ewprintf("Can't repeat within a macro");
+		return (FALSE);
+	}
 	if (last_command == NULL) {
 		dobeep();
 		ewprintf("No last command to repeat");
